@@ -1,0 +1,498 @@
+import { useEffect, useState } from "react";
+import { CalendarCheck, Loader2, RefreshCw, Save } from "lucide-react";
+
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import * as api from "@/lib/api";
+import type { CheckinConfig, CheckinLog, GithubConfig, UpdateInfo } from "@/lib/types";
+import { useAccountsStore } from "@/stores/accounts";
+
+function formatTime(ts: number): string {
+  try {
+    return new Date(ts).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return String(ts);
+  }
+}
+
+function logLabel(result: string): { text: string; tone: "success" | "warning" | "error" } {
+  switch (result) {
+    case "success":
+      return { text: "签到成功", tone: "success" };
+    case "already":
+      return { text: "已签到", tone: "warning" };
+    default:
+      return { text: "失败", tone: "error" };
+  }
+}
+
+/** 自动签到配置 + 一键签到 + 日志。 */
+function AutoCheckinCard() {
+  const [cfg, setCfg] = useState<CheckinConfig | null>(null);
+  const [logs, setLogs] = useState<CheckinLog[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function load() {
+    try {
+      const [c, l] = await Promise.all([api.getAutoCheckinConfig(), api.getCheckinLogs()]);
+      setCfg(c);
+      setLogs(l.logs);
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    }
+  }
+
+  async function save() {
+    if (!cfg) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      const saved = await api.saveAutoCheckinConfig(cfg);
+      setCfg(saved);
+      setMsg({ type: "ok", text: "配置已保存" });
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function checkinAllNow() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await api.checkinAll();
+      const ok = res.accounts.filter((a) => a.result === "success").length;
+      const already = res.accounts.filter((a) => a.result === "already").length;
+      const err = res.accounts.filter((a) => a.result === "error").length;
+      const detail = res.accounts
+        .filter((a) => a.result === "error")
+        .map((a) => `${a.email}（${a.error}）`)
+        .join("；");
+      setMsg({
+        type: err > 0 ? "err" : "ok",
+        text: `签到完成：成功 ${ok}，已签 ${already}，失败 ${err}${detail ? `。${detail}` : ""}`,
+      });
+      void load();
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setNum(key: keyof CheckinConfig, value: string) {
+    if (!cfg) return;
+    setCfg({ ...cfg, [key]: Number(value) });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CalendarCheck className="size-4" />
+          自动签到
+        </CardTitle>
+        <CardDescription>
+          在指定时间段内为全部账号自动执行每日签到；后台每 30 秒检查一次，并每天自动保活 token。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {cfg ? (
+          <>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+              <div>
+                <div className="text-sm font-medium">启用自动签到</div>
+                <div className="text-xs text-muted-foreground">
+                  开启后每天在下方时间段内随机时刻自动签到
+                </div>
+              </div>
+              <Switch
+                checked={cfg.enabled}
+                onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="ac-start">开始时段（小时 0-23）</Label>
+                <Input
+                  id="ac-start"
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={cfg.start_hour}
+                  onChange={(e) => setNum("start_hour", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ac-end">结束时段（小时 1-24）</Label>
+                <Input
+                  id="ac-end"
+                  type="number"
+                  min={1}
+                  max={24}
+                  value={cfg.end_hour}
+                  onChange={(e) => setNum("end_hour", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ac-keep">保活阈值（天）</Label>
+                <Input
+                  id="ac-keep"
+                  type="number"
+                  min={1}
+                  max={90}
+                  value={cfg.keepalive_days}
+                  onChange={(e) => setNum("keepalive_days", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ac-lazy">惰性刷新（小时）</Label>
+                <Input
+                  id="ac-lazy"
+                  type="number"
+                  min={1}
+                  max={72}
+                  value={cfg.lazy_refresh_hours}
+                  onChange={(e) => setNum("lazy_refresh_hours", e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={save} disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" /> : <Save />}
+                保存配置
+              </Button>
+              <Button variant="outline" onClick={checkinAllNow} disabled={busy}>
+                {busy ? <Loader2 className="animate-spin" /> : <CalendarCheck />}
+                全部立即签到
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">加载配置中…</p>
+        )}
+
+        {msg && (
+          <Alert variant={msg.type === "err" ? "destructive" : "default"}>
+            <AlertDescription>{msg.text}</AlertDescription>
+          </Alert>
+        )}
+
+        <div>
+          <p className="mb-2 text-sm font-medium">签到日志（最近 30 天）</p>
+          {logs.length === 0 ? (
+            <p className="py-3 text-center text-sm text-muted-foreground">暂无签到记录</p>
+          ) : (
+            <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+              {logs.map((l, i) => {
+                const tone = logLabel(l.result);
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between rounded-md border px-3 py-1.5 text-xs"
+                  >
+                    <div className="min-w-0 flex-1 truncate">
+                      <span className="font-medium">{l.email}</span>
+                      {l.error && <span className="text-destructive">（{l.error}）</span>}
+                    </div>
+                    <div className="ml-2 flex shrink-0 items-center gap-2">
+                      <span
+                        className={
+                          tone.tone === "error"
+                            ? "text-destructive"
+                            : tone.tone === "warning"
+                              ? "text-amber-600"
+                              : "text-emerald-600"
+                        }
+                      >
+                        {tone.text}
+                      </span>
+                      <span className="text-muted-foreground">{formatTime(l.ts)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 权限检测卡片：确认本 App 是否有权写入 WorkBuddy 认证文件。 */
+function PermissionCheckCard() {
+  const authFile = useAuthFile();
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<null | { ok: boolean; text: string }>(null);
+
+  async function runCheck() {
+    setChecking(true);
+    setResult(null);
+    try {
+      const res = await api.checkAuthPermission();
+      setResult({
+        ok: res.ok,
+        text: res.ok
+          ? res.message ?? "认证目录可写，权限正常"
+          : `${res.error}（${res.dir ?? ""}）`,
+      });
+    } catch (e) {
+      setResult({ ok: false, text: api.asError(e) });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>权限检测</CardTitle>
+        <CardDescription>
+          切换账号需要写入 WorkBuddy 认证文件，macOS 要求授权。此处可随时检测权限是否生效。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="break-all rounded-md bg-muted/60 px-3 py-2 font-mono text-xs text-muted-foreground">
+          {authFile || "认证文件路径未获取"}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={runCheck} disabled={checking}>
+            {checking ? "检测中…" : "检测权限"}
+          </Button>
+          <Button variant="outline" onClick={() => void api.openPermissionSettings()}>
+            打开系统设置
+          </Button>
+          <Button variant="outline" onClick={() => void api.revealAppInFinder()}>
+            在 Finder 中显示
+          </Button>
+        </div>
+
+        {result && (
+          <Alert variant={result.ok ? "default" : "destructive"}>
+            <AlertDescription>{result.text}</AlertDescription>
+          </Alert>
+        )}
+        {result && !result.ok && (
+          <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">
+            <p className="mb-1 font-medium text-foreground">如何授权：</p>
+            <ol className="list-decimal space-y-1 pl-4">
+              <li>点上方「打开系统设置」→ 隐私与安全性</li>
+              <li>
+                <b>首选「App 管理」</b>：若列表有 wb-switch，直接打开开关（范围最小）
+              </li>
+              <li>
+                若「App 管理」没有，则去「完全磁盘访问」：把 wb-switch 拖到下方带箭头的框里
+              </li>
+              <li>授权后重新打开本 App 生效</li>
+            </ol>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function useAuthFile(): string | undefined {
+  return useAccountsStore((s) => s.status?.authFile);
+}
+
+/** 自动更新：配置 GitHub Releases 源 + 检查更新。 */
+function UpdateCard() {
+  const version = useAccountsStore((s) => s.status?.version);
+  const [cfg, setCfg] = useState<GithubConfig>({});
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function load() {
+    try {
+      const c = await api.getGithubConfig();
+      setCfg(c);
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const saved = await api.saveGithubConfig(cfg);
+      setCfg(saved);
+      setMsg({ type: "ok", text: "更新源配置已保存" });
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function check() {
+    setChecking(true);
+    setMsg(null);
+    setInfo(null);
+    try {
+      const r = await api.checkUpdate();
+      setInfo(r);
+      if (!r.ok) {
+        setMsg({ type: "err", text: r.message || r.error || "检查失败" });
+      }
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function apply() {
+    setMsg(null);
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      setMsg({ type: "ok", text: "正在检查签名更新包…" });
+      const update = await check();
+      if (!update) {
+        setMsg({ type: "ok", text: "没有可用的更新包（需 GitHub Release 含签名产物）" });
+        return;
+      }
+      setMsg({ type: "ok", text: `正在下载 v${update.version}…` });
+      await update.downloadAndInstall();
+      setMsg({ type: "ok", text: "更新已安装，请重启应用" });
+    } catch (e) {
+      setMsg({ type: "err", text: `更新失败：${api.asError(e)}` });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <RefreshCw className="size-4" />
+          自动更新
+        </CardTitle>
+        <CardDescription>
+          配置 GitHub Releases 更新源，检查新版本。整包更新经签名校验后自动安装。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="text-sm">
+          当前版本：<span className="font-mono">v{version || "?"}</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="up-owner">GitHub owner</Label>
+            <Input
+              id="up-owner"
+              placeholder="例如 wb-switch"
+              value={cfg.owner ?? ""}
+              onChange={(e) => setCfg({ ...cfg, owner: e.target.value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="up-repo">仓库名 repo</Label>
+            <Input
+              id="up-repo"
+              placeholder="例如 wb-switch"
+              value={cfg.repo ?? ""}
+              onChange={(e) => setCfg({ ...cfg, repo: e.target.value })}
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="up-token">GitHub token（private 仓库需要，只读权限）</Label>
+          <Input
+            id="up-token"
+            type="password"
+            placeholder="ghp_..."
+            value={cfg.token ?? ""}
+            onChange={(e) => setCfg({ ...cfg, token: e.target.value })}
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={save} disabled={saving}>
+            {saving ? <Loader2 className="animate-spin" /> : <Save />}
+            保存配置
+          </Button>
+          <Button variant="outline" onClick={check} disabled={checking}>
+            {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            检查更新
+          </Button>
+        </div>
+
+        {info?.ok && (
+          <Alert variant="default">
+            <AlertDescription className="space-y-2">
+              <div>
+                {info.hasUpdate
+                  ? `发现新版本 v${info.latest}（当前 v${info.current}）`
+                  : `已是最新版本 v${info.current}`}
+                {info.releaseName && <span className="text-muted-foreground"> · {info.releaseName}</span>}
+              </div>
+              {info.hasUpdate && (
+                <Button size="sm" onClick={apply}>
+                  <RefreshCw />
+                  下载并安装
+                </Button>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+        {msg && (
+          <Alert variant={msg.type === "err" ? "destructive" : "default"}>
+            <AlertDescription>{msg.text}</AlertDescription>
+          </Alert>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 设置页：自动签到配置 / 权限检测 / 更新配置。 */
+export default function SettingsPage() {
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-6">
+      <header className="mb-6">
+        <h1 className="text-xl font-semibold">设置</h1>
+        <p className="mt-1 text-sm text-muted-foreground">自动签到、权限检测与自动更新配置。</p>
+      </header>
+
+      <div className="space-y-4">
+        <PermissionCheckCard />
+        <AutoCheckinCard />
+        <UpdateCard />
+      </div>
+    </div>
+  );
+}
