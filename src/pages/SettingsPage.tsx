@@ -285,8 +285,17 @@ function PermissionCheckCard() {
           <Button onClick={runCheck} disabled={checking}>
             {checking ? "检测中…" : "检测权限"}
           </Button>
-          <Button variant="outline" onClick={() => void api.openPermissionSettings()}>
-            打开系统设置
+          <Button
+            variant="outline"
+            onClick={() => void api.openPermissionSettings("all_files")}
+          >
+            打开完全磁盘访问
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void api.openPermissionSettings("app_management")}
+          >
+            打开 App 管理
           </Button>
           <Button variant="outline" onClick={() => void api.revealAppInFinder()}>
             在 Finder 中显示
@@ -300,16 +309,15 @@ function PermissionCheckCard() {
         )}
         {result && !result.ok && (
           <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">
-            <p className="mb-1 font-medium text-foreground">如何授权：</p>
+            <p className="mb-1 font-medium text-foreground">如何授权（拖拽方式）：</p>
             <ol className="list-decimal space-y-1 pl-4">
-              <li>点上方「打开系统设置」→ 隐私与安全性</li>
+              <li>点上方「打开完全磁盘访问」</li>
+              <li>再点「在 Finder 中显示」打开 wb-switch 所在位置</li>
               <li>
-                <b>首选「App 管理」</b>：若列表有 wb-switch，直接打开开关（范围最小）
+                把 <b>wb-switch.app</b> 从 Finder <b>直接拖进</b>完全磁盘访问的列表区域
+                （即使没有提示框，拖入即生效），然后打开它的开关
               </li>
-              <li>
-                若「App 管理」没有，则去「完全磁盘访问」：把 wb-switch 拖到下方带箭头的框里
-              </li>
-              <li>授权后重新打开本 App 生效</li>
+              <li>回到本页点「检测权限」，或直接重试切换</li>
             </ol>
           </div>
         )}

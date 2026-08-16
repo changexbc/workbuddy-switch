@@ -1,0 +1,26 @@
+{
+  "name": "wb-switch",
+  "version": "0.1.0",
+  "description": "WorkBuddy 账号切换工具：本地 webui（浏览器操作）+ 桌面 App",
+  "bin": {
+    "wb-switch": "bin/wb-switch.js"
+  },
+  "files": [
+    "bin",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": [
+    "workbuddy",
+    "codebuddy",
+    "account",
+    "switch",
+    "cli"
+  ],
+  "license": "MIT"
+}

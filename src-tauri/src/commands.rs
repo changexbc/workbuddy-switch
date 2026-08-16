@@ -6,7 +6,8 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::modules::{account, auth_file, checkin, oauth, process, refresh, session, switch, update};
+use tauri::Emitter;
+use wb_switch_core::modules::{account, auth_file, checkin, oauth, process, refresh, session, switch, update};
 
 #[derive(Serialize)]
 pub struct AppStatus {
@@ -125,15 +126,22 @@ pub fn manual_add(
     Ok(json!({ "ok": true, "account": account::account_meta(&acc) }))
 }
 
-/// 打开系统设置授权面板（App 管理 + 完全磁盘访问），供小白一键跳转。
+/// 打开系统设置授权面板。默认「完全磁盘访问」（该 anchor 各版本均有效）；
+/// 传 `target="app_management"` 尝试「App 管理」（macOS 15+，部分版本不支持深链）。
+///
+/// 使用 macOS 13+ 深链接格式（`com.apple.settings.PrivacySecurity.extension?Privacy_*`）。
 #[tauri::command]
-pub fn open_permission_settings() -> Result<(), String> {
-    for url in [
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_AppManagement",
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
-    ] {
-        let _ = std::process::Command::new("open").arg(url).spawn();
-    }
+pub fn open_permission_settings(target: Option<String>) -> Result<(), String> {
+    let t = target.unwrap_or_else(|| "all_files".to_string());
+    let url = match t.as_str() {
+        "app_management" => {
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppManagement"
+        }
+        _ => {
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles"
+        }
+    };
+    let _ = std::process::Command::new("open").arg(url).spawn();
     Ok(())
 }
 
@@ -182,8 +190,12 @@ pub async fn switch_account(
     let restart = restart.unwrap_or(true);
     let share_sessions = share_sessions.unwrap_or(false);
     let copy_ids = copy_session_ids.unwrap_or_default();
+    let progress: switch::ProgressFn =
+        Box::new(move |message| {
+            let _ = app.emit("switch-progress", json!({ "message": message }));
+        });
     tauri::async_runtime::spawn_blocking(move || {
-        switch::switch_account(&app, &account_id, restart, share_sessions, &copy_ids)
+        switch::switch_account(Some(&progress), &account_id, restart, share_sessions, &copy_ids)
     })
     .await
     .map_err(|e| e.to_string())?

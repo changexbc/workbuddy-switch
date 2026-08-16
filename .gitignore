@@ -12,8 +12,12 @@ dist
 dist-ssr
 *.local
 
-# Rust / Tauri 构建产物
+# Rust / Tauri 构建产物（workspace target）
+target/
 src-tauri/target/
+
+# npm 包 postinstall 下载的平台二进制
+npm/bin/wb-switch-*
 
 # 本地运行时数据
 accounts.json

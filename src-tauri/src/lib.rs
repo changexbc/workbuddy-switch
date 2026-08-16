@@ -1,8 +1,8 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod commands;
-mod modules;
 
 use std::time::Duration;
+use wb_switch_core::modules;
 
 /// 后台循环：30 秒轮询自动签到；每天一次保活刷新（对照 server.py `_background_loops`）。
 fn spawn_background_loops() {

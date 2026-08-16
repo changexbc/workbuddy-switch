@@ -39,8 +39,16 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const [currentUid, setCurrentUid] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
 
-  // 监听后端切换进度事件
+  // 监听后端切换进度：桌面端走 Tauri 事件，webui 走 HTTP 轮询
   useEffect(() => {
+    if (api.isWebui()) {
+      const timer = setInterval(() => {
+        void api.switchProgress().then((p) => {
+          if (p.progress) setProgress(p.progress);
+        });
+      }, 600);
+      return () => clearInterval(timer);
+    }
     let unlisten: (() => void) | undefined;
     listen<{ message: string }>("switch-progress", (e) => {
       setProgress(e.payload.message);
@@ -100,10 +108,10 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
     }
   }
 
-  /** 打开系统设置授权面板（App 管理 + 完全磁盘访问），供小白一键跳转。 */
+  /** 打开系统设置授权面板（默认完全磁盘访问），供小白一键跳转。 */
   async function openPermissionSettings() {
     try {
-      await api.openPermissionSettings();
+      await api.openPermissionSettings("all_files");
     } catch (e) {
       // 打开失败时退化为提示
       setError(api.asError(e));
@@ -230,17 +238,18 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
                   <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">
                     <p className="mb-1 font-medium text-foreground">如何授权（只需 3 步）：</p>
                     <ol className="list-decimal space-y-1 pl-4">
-                      <li>点击下方「打开系统设置」</li>
+                      <li>点击下方「打开完全磁盘访问」</li>
                       <li>
-                        在打开的「完全磁盘访问」面板底部，把 <b>wb-switch</b> 拖到带箭头的框里
+                        把 <b>wb-switch.app</b> 从 Finder 拖进面板列表（即使没提示框也直接拖），
+                        打开它的开关
                       </li>
-                      <li>拖入后这里会自动检测到，无需其他操作</li>
+                      <li>授权后这里会自动检测到，无需其他操作</li>
                     </ol>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" size="sm" onClick={openPermissionSettings}>
                       <ExternalLink />
-                      打开系统设置
+                      打开完全磁盘访问
                     </Button>
                     <Button
                       variant="outline"

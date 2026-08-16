@@ -1,10 +1,27 @@
-# wb-switch-rust
+# wb-switch
 
-WorkBuddy（腾讯 AI 编程助手）账号切换工具 —— Rust / Tauri 桌面版。
+WorkBuddy（腾讯 AI 编程助手）账号切换工具。两种形态：
+
+- **桌面 App**：下载 `.app` 双击运行（Tauri，推荐日常使用）
+- **npm / webui**：`npm i -g wb-switch` 后运行 `wb-switch`，浏览器打开操作界面
 
 多账号共享登录态（`workbuddy-desktop.info`），一键切换 WorkBuddy 登录账号，并支持将当前账号的会话复制给目标账号（云端归属目标）。
 
-> 与 Python 版（仓库根目录 `server.py`）功能对齐，共享同一数据目录 `~/.wb-switch/`，互不破坏数据。
+## 快速开始
+
+### npm 安装（webui）
+
+```bash
+npm i -g wb-switch
+wb-switch              # 启动本地服务 + 自动打开浏览器
+wb-switch status       # 终端查看当前账号
+```
+
+webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动签到、token 保活、更新检查。
+
+### 桌面 App
+
+从 GitHub Releases 下载对应平台 `.app`（macOS）双击运行。
 
 ## 功能
 
@@ -32,6 +49,8 @@ WorkBuddy（腾讯 AI 编程助手）账号切换工具 —— Rust / Tauri 桌�
 1. 首次切换报「无权限」时，点「打开系统设置」
 2. 优先在 **App 管理** 里打开 wb-switch 开关；若没有，则去 **完全磁盘访问** 把 wb-switch 拖进带箭头的框
 3. 授权后重启本应用生效；设置页「权限检测」可随时验证
+
+> webui 模式：由启动服务的终端进程权限决定；若终端已授权完全磁盘访问则无需额外操作。
 
 ## 开发
 
