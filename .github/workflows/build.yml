@@ -77,6 +77,9 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           PKG_DIR="npm/platform/workbuddy-switch-${{ matrix.platform_tag }}"
+          # 用 tag 版本同步 platform 包版本（git 里的可能滞后）
+          VER="${GITHUB_REF_NAME#v}"
+          perl -pi -e "s/\"version\": \"[0-9.]+\"/\"version\": \"$VER\"/" "$PKG_DIR/package.json"
           mkdir -p "$PKG_DIR/bin"
           SRC="target/${{ matrix.target }}/release/wb-switch"
           [ -f "$SRC.exe" ] && SRC="$SRC.exe"

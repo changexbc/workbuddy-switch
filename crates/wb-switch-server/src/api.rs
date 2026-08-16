@@ -4,6 +4,7 @@
 //! token 不出本机。
 
 use std::sync::Mutex;
+#[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -20,6 +21,7 @@ use wb_switch_core::modules::{
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
 /// 前端切 tab 频繁触发命令行导致卡顿/闪窗。
+#[cfg(target_os = "windows")]
 static RUNNING_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
 
 fn cached_workbuddy_running() -> bool {
