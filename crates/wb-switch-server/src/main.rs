@@ -95,9 +95,13 @@ fn open_browser(addr: &str) {
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", &url])
-            .spawn();
+        let mut c = std::process::Command::new("cmd");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW：开浏览器不闪 cmd 窗
+        }
+        let _ = c.args(["/C", "start", &url]).spawn();
     }
     #[cfg(target_os = "linux")]
     {

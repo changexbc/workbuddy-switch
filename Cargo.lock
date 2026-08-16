@@ -5084,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -5099,7 +5099,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-rust"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -5114,7 +5114,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-server"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "axum",
  "rust-embed",

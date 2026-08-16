@@ -9,11 +9,23 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+/// 创建子进程命令。Windows 上加 CREATE_NO_WINDOW，避免每次执行 tasklist/powershell
+/// 等控制台命令时闪出 cmd 黑窗口（GUI 应用卡顿/跳动的主因）。
+fn cmd_builder(program: &str) -> Command {
+    let mut c = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
+}
+
 use crate::modules::auth_file;
 
 /// 运行命令并等待退出，超时则 kill 并返回 None（对应 Python `subprocess.run(timeout=...)`）。
 fn run_cmd_timeout(program: &str, args: &[&str], timeout_secs: u64) -> Option<Output> {
-    let mut child = Command::new(program)
+    let mut child = cmd_builder(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -56,7 +68,7 @@ const PROCESS_NAME_RE: &str = "WorkBuddy|CodeBuddy";
 /// Windows：执行 PowerShell 并取首行输出（去空白）。
 #[cfg(target_os = "windows")]
 fn ps_first_line(script: &str) -> Option<String> {
-    let out = Command::new("powershell")
+    let out = cmd_builder("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .ok()?;
@@ -116,7 +128,7 @@ fn windows_workbuddy_process_name() -> Option<String> {
 pub fn is_workbuddy_running() -> bool {
     #[cfg(target_os = "macos")]
     {
-        match Command::new("pgrep").args(["-f", "WorkBuddy.app/Contents/MacOS"]).output() {
+        match cmd_builder("pgrep").args(["-f", "WorkBuddy.app/Contents/MacOS"]).output() {
             Ok(out) => out.status.success() && !out.stdout.is_empty(),
             Err(_) => false,
         }
@@ -124,7 +136,7 @@ pub fn is_workbuddy_running() -> bool {
     #[cfg(target_os = "windows")]
     {
         // 进程名不固定，动态匹配（tasklist 输出按名称片段判断）
-        match Command::new("tasklist").output() {
+        match cmd_builder("tasklist").output() {
             Ok(out) => {
                 let s = String::from_utf8_lossy(&out.stdout).to_lowercase();
                 s.contains("workbuddy") || s.contains("codebuddy")
@@ -134,7 +146,7 @@ pub fn is_workbuddy_running() -> bool {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        match Command::new("pgrep").args(["-f", "workbuddy"]).output() {
+        match cmd_builder("pgrep").args(["-f", "workbuddy"]).output() {
             Ok(out) => out.status.success() && !out.stdout.is_empty(),
             Err(_) => false,
         }
@@ -229,7 +241,7 @@ pub fn launch_workbuddy() -> Result<(), String> {
             let _ = run_cmd_timeout("pkill", &["-9", "-f", "WorkBuddy.app/Contents/MacOS"], 10);
             wait_process_gone(5.0);
         }
-        let _ = Command::new("open")
+        let _ = cmd_builder("open")
             .args(["-n", "-a"])
             .arg(&app)
             .stdout(Stdio::null())
@@ -250,7 +262,7 @@ pub fn launch_workbuddy() -> Result<(), String> {
                 exe.display()
             ));
         }
-        Command::new(&exe)
+        cmd_builder(&exe)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -259,7 +271,7 @@ pub fn launch_workbuddy() -> Result<(), String> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = Command::new(&app)
+        let _ = cmd_builder(&app)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();

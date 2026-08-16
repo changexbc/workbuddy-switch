@@ -21,6 +21,12 @@ jobs:
             cli_bin: wb-switch-darwin-arm64
             platform_tag: darwin-arm64
             bundles: app
+          - name: mac-x64
+            os: macos-14
+            target: x86_64-apple-darwin
+            cli_bin: wb-switch-darwin-x64
+            platform_tag: darwin-x64
+            bundles: app
           - name: win-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc

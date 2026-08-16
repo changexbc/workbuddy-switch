@@ -4,6 +4,7 @@
 //! token 不出本机。
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::{header, StatusCode, Uri};
@@ -16,6 +17,29 @@ use serde_json::{json, Value};
 use wb_switch_core::modules::{
     account, auth_file, checkin, config, oauth, process, refresh, session, switch, update,
 };
+
+/// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
+/// 前端切 tab 频繁触发命令行导致卡顿/闪窗。
+static RUNNING_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+
+fn cached_workbuddy_running() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cache = RUNNING_CACHE.lock().unwrap();
+        if let Some((t, v)) = cache.as_ref() {
+            if t.elapsed() < Duration::from_secs(3) {
+                return *v;
+            }
+        }
+        let v = process::is_workbuddy_running();
+        *cache = Some((Instant::now(), v));
+        v
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        process::is_workbuddy_running()
+    }
+}
 
 #[derive(RustEmbed)]
 #[folder = "../../dist/"]
@@ -72,7 +96,7 @@ async fn api_status() -> Response {
         }))
     });
     json_ok(json!({
-        "running": process::is_workbuddy_running(),
+        "running": cached_workbuddy_running(),
         "authFile": auth_file::auth_file_path().to_string_lossy(),
         "current": current,
         "appPath": auth_file::workbuddy_app_path().to_string_lossy(),
