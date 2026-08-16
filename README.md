@@ -52,47 +52,6 @@ webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动
 
 > webui 模式：由启动服务的终端进程权限决定；若终端已授权完全磁盘访问则无需额外操作。
 
-## 开发
-
-环境要求：Node.js ≥ 20、Rust stable、macOS（或 Windows/Linux）。
-
-```bash
-npm install
-npm run tauri dev        # 开发模式
-npm run build:app        # 构建 debug .app（含前端资源补丁）
-npm run build:app:release  # 构建 release .app + 签名更新包
-```
-
-签名密钥（自动更新用）存放于 `~/.wb-switch/wb-switch-updater.key`，构建脚本通过
-`TAURI_SIGNING_PRIVATE_KEY` 注入。发布新版本时：
-
-1. `npm run build:app:release` 生成 `.app.tar.gz` + `.sig`
-2. `sh scripts/gen-update-json.sh <owner> <repo>` 生成 `latest-macos-aarch64.json`
-3. 将 `.app.tar.gz`、`.sig`、`latest-*.json` 一并上传到 GitHub Release
-
-## 目录结构
-
-```
-src-tauri/
-  src/
-    commands.rs      # Tauri command 薄包装（对应 Python 版 HTTP API）
-    modules/
-      account.rs     # 账号库 ~/.wb-switch/accounts.json
-      auth_file.rs   # workbuddy-desktop.info 读写/备份
-      oauth.rs       # OAuth 登录
-      process.rs     # WorkBuddy 进程控制
-      switch.rs      # 切换流程（备份→关→复制会话→写认证→启动）
-      session.rs     # 会话列表 / 复制
-      checkin.rs     # 签到
-      refresh.rs     # token 刷新/保活
-      update.rs      # 更新检查
-      config.rs      # 常量/路径/工具
-src/
-  components/        # React 组件
-  pages/             # 账号页/设置页
-  lib/               # API 封装/类型
-```
-
 ## 许可
 
 [MIT](./LICENSE)
