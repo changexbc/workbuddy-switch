@@ -1,6 +1,4 @@
-// wb-switch postinstall：按平台下载 Rust 二进制（esbuild 模式）。
-//
-// 下载源：GitHub Releases（占位仓库），可用环境变量覆盖：
+// 下载源：GitHub Releases（changexbc/wb-switch-rust），可用环境变量覆盖：
 //   WB_SWITCH_BINARY=<本地二进制路径>  本地开发/离线安装（直接复制，不联网）
 //   WB_SWITCH_DOWNLOAD_BASE=<URL 前缀>  自定义下载源（默认 GitHub latest release）
 const fs = require("fs");
@@ -8,8 +6,8 @@ const path = require("path");
 const os = require("os");
 const https = require("https");
 
-const OWNER = "wb-switch"; // TODO: 发布时改为真实 GitHub 仓库 owner
-const REPO = "wb-switch";
+const OWNER = "changexbc"; // 发布二进制到 Release 的 GitHub 仓库
+const REPO = "wb-switch-rust";
 
 const FILE = {
   "darwin-arm64": "wb-switch-darwin-arm64",
