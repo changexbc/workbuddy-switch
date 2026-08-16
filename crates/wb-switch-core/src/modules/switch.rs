@@ -54,7 +54,7 @@ pub fn switch_account(
     auth_file::write_account_to_auth_file(&acc)?;
     if restart {
         progress("正在启动 WorkBuddy…");
-        launch_workbuddy();
+        launch_workbuddy()?;
     }
     progress("切换完成");
 

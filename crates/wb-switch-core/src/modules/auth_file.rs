@@ -34,12 +34,18 @@ pub fn workbuddy_app_path() -> PathBuf {
 
     #[cfg(target_os = "windows")]
     {
+        // 用户安装位置不固定（C/D 盘任意目录），先动态查找：
+        // 运行进程 / 注册表，找不到再回退常见默认路径。
+        if let Some(exe) = crate::modules::process::windows_workbuddy_exe_path() {
+            return exe;
+        }
         let local = std::env::var("LOCALAPPDATA")
             .unwrap_or_default()
             .to_string()
             + "\\Programs\\WorkBuddy";
         let pf = std::env::var("PROGRAMFILES").unwrap_or_default().to_string() + "\\WorkBuddy";
-        for p in [local.clone(), pf] {
+        let pf86 = std::env::var("PROGRAMFILES(X86)").unwrap_or_default().to_string() + "\\WorkBuddy";
+        for p in [local.clone(), pf, pf86] {
             let exe = std::path::Path::new(&p).join("WorkBuddy.exe");
             if exe.exists() {
                 return exe;
