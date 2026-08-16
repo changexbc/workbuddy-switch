@@ -1,7 +1,7 @@
 {
-  "name": "wb-switch",
+  "name": "workbuddy-switch",
   "version": "0.1.0",
-  "description": "WorkBuddy 账号切换工具：本地 webui（浏览器操作）+ 桌面 App",
+  "description": "WorkBuddy 账号切换工具：本地 webui（浏览器操作）+ 桌面 App（安装后运行 wb-switch）",
   "bin": {
     "wb-switch": "bin/wb-switch.js"
   },
