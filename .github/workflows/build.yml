@@ -55,6 +55,17 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
+      # cargo 缓存：依赖 + 编译产物，增量编译大幅提速（Cargo.lock 不变时命中）
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -102,8 +113,13 @@ jobs:
           npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
           find "target/${{ matrix.target }}/release/bundle" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' \
-            -o -name '*.AppImage' \) \
+            -o -name '*.AppImage' -o -name '*.app.tar.gz' -o -name '*.sig' \) \
             -exec cp {} dist-bin/ \;
+          # mac：纯命令行打 dmg（CI 无 Finder，Tauri 自带的 bundle_dmg.sh 会失败）
+          if [ "${{ matrix.bundles }}" = "app" ]; then
+            sh scripts/make-dmg.sh "${GITHUB_REF_NAME#v}" "${{ matrix.update_arch }}" "target/${{ matrix.target }}/release/bundle/macos/workbuddy-switch.app"
+            cp "workbuddy-switch_${GITHUB_REF_NAME#v}_${{ matrix.update_arch }}.dmg" dist-bin/
+          fi
 
       - name: Generate macOS updater manifest
         if: matrix.update_arch != ''
