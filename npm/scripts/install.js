@@ -1,6 +1,6 @@
-// 下载源：GitHub Releases（changexbc/wb-switch-rust），可用环境变量覆盖：
+// 下载源：GitHub Releases（changexbc/workbuddy-switch），可用环境变量覆盖：
 //   WB_SWITCH_BINARY=<本地二进制路径>  本地开发/离线安装（直接复制，不联网）
-//   WB_SWITCH_DOWNLOAD_BASE=<URL 前缀>  自定义下载源（默认 GitHub latest release）
+//   WB_SWITCH_DOWNLOAD_BASE=<URL 前缀>  自定义下载源（默认 GitHub 带版本号的 release 资产）
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -8,6 +8,11 @@ const https = require("https");
 
 const OWNER = "changexbc"; // 发布二进制到 Release 的 GitHub 仓库
 const REPO = "workbuddy-switch";
+
+// 版本号从 package.json 读，下载地址用「带 tag」而非 latest，
+// 避免 GitHub CDN 对同名资产 latest 重定向的缓存污染（曾出现下载到旧二进制）。
+const PKG = require(path.join(__dirname, "..", "package.json"));
+const VERSION = PKG.version;
 
 const FILE = {
   "darwin-arm64": "wb-switch-darwin-arm64",
@@ -60,7 +65,13 @@ function download(url) {
       file.on("finish", () => {
         file.close();
         if (process.platform !== "win32") fs.chmodSync(target, 0o755);
-        console.log(`wb-switch: 二进制就绪 → ${target}`);
+        // 校验：可执行文件应至少 1MB（防 CDN 缓存/截断导致下载到损坏或旧文件）
+        const size = fs.statSync(target).size;
+        if (size < 1 * 1024 * 1024) {
+          fs.unlinkSync(target);
+          return fail(`下载文件异常（仅 ${size} 字节），请重试或设置 WB_SWITCH_BINARY`);
+        }
+        console.log(`wb-switch: 二进制就绪 → ${target} (${(size / 1048576).toFixed(1)}MB)`);
       });
     })
     .on("error", (e) => {
@@ -84,10 +95,10 @@ async function main() {
     return;
   }
 
-  // 3) 从 GitHub Releases 下载
+  // 3) 从 GitHub Releases 下载（带版本号，避免 latest CDN 缓存）
   const base =
     process.env.WB_SWITCH_DOWNLOAD_BASE ||
-    `https://github.com/${OWNER}/${REPO}/releases/latest/download`;
+    `https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}`;
   download(`${base}/${FILE}`);
 }
 
