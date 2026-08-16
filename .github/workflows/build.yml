@@ -18,9 +18,6 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             bin: wb-switch-darwin-arm64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            bin: wb-switch-darwin-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin: wb-switch-win32-x64.exe
