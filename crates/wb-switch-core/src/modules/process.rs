@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 /// 创建子进程命令。Windows 上加 CREATE_NO_WINDOW，避免每次执行 tasklist/powershell
 /// 等控制台命令时闪出 cmd 黑窗口（GUI 应用卡顿/跳动的主因）。
-fn cmd_builder(program: &str) -> Command {
+fn cmd_builder(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
     let mut c = Command::new(program);
     #[cfg(target_os = "windows")]
     {
