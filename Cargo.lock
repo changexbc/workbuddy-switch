@@ -5084,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -5114,7 +5114,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-server"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "axum",
  "rust-embed",

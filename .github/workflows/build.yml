@@ -10,20 +10,26 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.bin }}
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - name: mac-arm64
+            os: macos-14
             target: aarch64-apple-darwin
-            bin: wb-switch-darwin-arm64
-          - os: windows-latest
+            cli_bin: wb-switch-darwin-arm64
+            bundles: app,dmg
+          - name: win-x64
+            os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: wb-switch-win32-x64.exe
-          - os: ubuntu-latest
+            cli_bin: wb-switch-win32-x64.exe
+            bundles: nsis
+          - name: linux-x64
+            os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            bin: wb-switch-linux-x64
+            cli_bin: wb-switch-linux-x64
+            bundles: deb,appimage
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -36,27 +42,42 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      # 前端构建产物被 rust-embed 嵌入 server 二进制
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      # 前端构建产物（CLI 二进制 rust-embed 嵌入 + Tauri App 使用）
       - name: Build frontend
         run: |
           npm install
           npm run build
 
+      # CLI 二进制（npm workbuddy-switch 的 postinstall 下载）
       - name: Build server binary
-        run: cargo build -p wb-switch-server --release --target ${{ matrix.target }}
-
-      - name: Prepare artifact
         shell: bash
         run: |
+          cargo build -p wb-switch-server --release --target ${{ matrix.target }}
           mkdir -p dist-bin
           SRC="target/${{ matrix.target }}/release/wb-switch"
           [ -f "$SRC.exe" ] && SRC="$SRC.exe"
-          cp "$SRC" dist-bin/${{ matrix.bin }}
+          cp "$SRC" "dist-bin/${{ matrix.cli_bin }}"
+
+      # 桌面 App（dmg / nsis exe / deb + AppImage）
+      - name: Build desktop app
+        shell: bash
+        run: |
+          npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          find "target/${{ matrix.target }}/release/bundle" -type f \
+            \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' \
+            -o -name '*.AppImage' -o -name '*.app.tar.gz' -o -name '*.sig' \) \
+            -exec cp {} dist-bin/ \;
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.bin }}
-          path: dist-bin/${{ matrix.bin }}
+          name: ${{ matrix.name }}
+          path: dist-bin/
           if-no-files-found: error
 
   release:
