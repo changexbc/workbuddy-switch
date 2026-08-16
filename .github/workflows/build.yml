@@ -21,24 +21,28 @@ jobs:
             cli_bin: wb-switch-darwin-arm64
             platform_tag: darwin-arm64
             bundles: app
+            update_arch: aarch64
           - name: mac-x64
             os: macos-14
             target: x86_64-apple-darwin
             cli_bin: wb-switch-darwin-x64
             platform_tag: darwin-x64
             bundles: app
+            update_arch: x86_64
           - name: win-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             cli_bin: wb-switch-win32-x64.exe
             platform_tag: win32-x64
             bundles: nsis
+            update_arch: ''
           - name: linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             cli_bin: wb-switch-linux-x64
             platform_tag: linux-x64
             bundles: deb,appimage
+            update_arch: ''
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -98,8 +102,27 @@ jobs:
           npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
           find "target/${{ matrix.target }}/release/bundle" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' \
-            -o -name '*.AppImage' -o -name '*.app.tar.gz' -o -name '*.sig' \) \
+            -o -name '*.AppImage' \) \
             -exec cp {} dist-bin/ \;
+
+      - name: Generate macOS updater manifest
+        if: matrix.update_arch != ''
+        shell: bash
+        env:
+          UPDATE_ARCH: ${{ matrix.update_arch }}
+          UPDATE_ARCHIVE_NAME: workbuddy-switch-macos-${{ matrix.update_arch }}.app.tar.gz
+        run: |
+          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle/macos"
+          ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)"
+          test -n "$ARCHIVE"
+          test -f "$ARCHIVE.sig"
+          cp "$ARCHIVE" "dist-bin/$UPDATE_ARCHIVE_NAME"
+          cp "$ARCHIVE.sig" "dist-bin/$UPDATE_ARCHIVE_NAME.sig"
+          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle/macos" \
+            sh scripts/gen-update-json.sh
+          MANIFEST="$BUNDLE_DIR/latest-macos-${UPDATE_ARCH}.json"
+          test -f "$MANIFEST"
+          cp "$MANIFEST" dist-bin/
 
       - uses: actions/upload-artifact@v4
         with:

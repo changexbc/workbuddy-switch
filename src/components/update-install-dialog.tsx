@@ -17,6 +17,18 @@ import type { UpdateInfo } from "@/lib/types";
 
 type UpdateStage = "checking" | "downloading" | "latest" | "success" | "error";
 
+const UPDATE_CHECK_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error("检查更新超时，请检查网络连接后重试"));
+    }, timeoutMs);
+
+    promise.then(resolve, reject).finally(() => window.clearTimeout(timer));
+  });
+}
+
 interface UpdateInstallDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -59,7 +71,7 @@ export function UpdateInstallDialog({
         }
 
         const { check } = await import("@tauri-apps/plugin-updater");
-        const candidate = await check();
+        const candidate = await withTimeout(check(), UPDATE_CHECK_TIMEOUT_MS);
         if (cancelled) return;
         if (!candidate) {
           if (update?.hasUpdate) {

@@ -19,7 +19,7 @@ npm run build:app:release  # 构建 release .app + 签名更新包
 `TAURI_SIGNING_PRIVATE_KEY` 注入。发布新版本时：
 
 1. `npm run build:app:release` 生成 `.app.tar.gz` + `.sig`
-2. `sh scripts/gen-update-json.sh <owner> <repo>` 生成 `latest-macos-aarch64.json`
+2. `UPDATE_ARCH=aarch64 sh scripts/gen-update-json.sh <owner> <repo>` 生成 `latest-macos-aarch64.json`；Intel 构建使用 `UPDATE_ARCH=x86_64`
 3. 将 `.app.tar.gz`、`.sig`、`latest-*.json` 一并上传到 GitHub Release
 
 ### npm 版（webui）发布
