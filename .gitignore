@@ -33,3 +33,4 @@ backups/
 *.njsproj
 *.sln
 *.sw?
+npm/platform/*/bin/
