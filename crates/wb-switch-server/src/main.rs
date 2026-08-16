@@ -1,10 +1,10 @@
-//! wb-switch CLI：npm 安装形态的入口。
+//! workbuddy-switch CLI：npm 安装形态的入口。
 //!
 //! ```bash
-//! wb-switch              # 启动本地服务 + 打开浏览器 webui
-//! wb-switch serve        # 只起服务不开浏览器（--port / --no-open）
-//! wb-switch status       # 终端输出当前账号
-//! wb-switch version      # 版本号
+//! workbuddy-switch              # 启动本地服务 + 打开浏览器 webui
+//! workbuddy-switch serve        # 只起服务不开浏览器（--port / --no-open）
+//! workbuddy-switch status       # 终端输出当前账号
+//! workbuddy-switch version      # 版本号
 //! ```
 
 mod api;
@@ -28,7 +28,7 @@ fn print_status() {
         }))
     });
     let running = process::is_workbuddy_running();
-    println!("wb-switch v{}", update::APP_VERSION);
+    println!("workbuddy-switch v{}", update::APP_VERSION);
     println!("WorkBuddy 运行中: {}", if running { "是" } else { "否" });
     match current {
         Some(c) => {
@@ -51,7 +51,7 @@ async fn main() {
     match cmd {
         "status" => print_status(),
         "version" | "--version" | "-V" => {
-            println!("wb-switch {}", env!("CARGO_PKG_VERSION"));
+            println!("workbuddy-switch {}", env!("CARGO_PKG_VERSION"));
         }
         "serve" | _ => serve(&args).await,
     }
@@ -75,7 +75,7 @@ async fn serve(args: &[String]) {
         }
     };
 
-    println!("wb-switch v{}", update::APP_VERSION);
+    println!("workbuddy-switch v{}", update::APP_VERSION);
     println!("webui: http://{addr}");
     println!("按 Ctrl+C 停止服务。");
 

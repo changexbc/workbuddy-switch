@@ -240,7 +240,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
                     <ol className="list-decimal space-y-1 pl-4">
                       <li>点击下方「打开完全磁盘访问」</li>
                       <li>
-                        把 <b>wb-switch.app</b> 从 Finder 拖进面板列表（即使没提示框也直接拖），
+                        把 <b>workbuddy-switch.app</b> 从 Finder 拖进面板列表（即使没提示框也直接拖），
                         打开它的开关
                       </li>
                       <li>授权后这里会自动检测到，无需其他操作</li>

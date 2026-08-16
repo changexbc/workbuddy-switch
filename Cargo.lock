@@ -5114,7 +5114,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "rust-embed",

@@ -7,7 +7,7 @@ const os = require("os");
 const https = require("https");
 
 const OWNER = "changexbc"; // 发布二进制到 Release 的 GitHub 仓库
-const REPO = "wb-switch";
+const REPO = "workbuddy-switch";
 
 const FILE = {
   "darwin-arm64": "wb-switch-darwin-arm64",

@@ -18,7 +18,7 @@ function Layout() {
             <RefreshCw className="size-4" />
           </span>
           <div className="leading-tight">
-            <div className="text-sm font-semibold">wb-switch</div>
+            <div className="text-sm font-semibold">workbuddy-switch</div>
             <div className="text-xs text-muted-foreground">WorkBuddy 账号切换</div>
           </div>
         </div>
