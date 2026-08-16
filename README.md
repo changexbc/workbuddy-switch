@@ -23,6 +23,12 @@ webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动
 
 从 GitHub Releases 下载对应平台 `.app`（macOS）双击运行。
 
+> **macOS 提示「已损坏，无法打开」？** 未签名应用会触发隔离机制，在终端执行一次即可：
+>
+> ```bash
+> xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
+> ```
+
 ## 功能
 
 | 模块 | 说明 |
