@@ -1,15 +1,15 @@
 {
   "name": "wb-switch-rust",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:app": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build -- --debug; sh scripts/fix-app.sh",
-    "build:app:release": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build; sh scripts/fix-app.sh"
+    "build:app": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build -- --debug --bundles app; sh scripts/fix-app.sh",
+    "build:app:release": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build -- --bundles app; sh scripts/fix-app.sh"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.23",

@@ -102,7 +102,6 @@ export interface CheckinResult {
 export interface GithubConfig {
   owner?: string;
   repo?: string;
-  token?: string;
 }
 
 export interface UpdateInfo {
@@ -112,6 +111,7 @@ export interface UpdateInfo {
   latestTag?: string;
   hasUpdate?: boolean;
   releaseName?: string;
+  releaseUrl?: string;
   publishedAt?: string;
   error?: string;
   message?: string;

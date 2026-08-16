@@ -1,4 +1,4 @@
-//! 自动更新：检查 GitHub Releases 版本 + 更新源配置。
+//! 自动更新：检查公开 GitHub Releases 版本 + 更新源配置。
 //!
 //! 对照 server.py `load_github_config` / `save_github_config` /
 //! `compare_versions` / `update_check`。下载安装走 tauri-plugin-updater（整包更新）。
@@ -11,36 +11,64 @@ use crate::modules::config::{atomic_write, http_request, now_secs, store_dir};
 
 /// 应用当前版本（来自 Cargo.toml package.version）。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const GITHUB_OWNER: &str = "changexbc";
+pub const GITHUB_REPO: &str = "workbuddy-switch";
 
 pub fn github_config_file() -> PathBuf {
     store_dir().join("github_config.json")
 }
 
-/// 读取更新源配置（owner/repo/token）。
+/// 读取更新源配置（兼容旧配置文件，但永不返回 token）。
 pub fn load_github_config() -> Value {
+    let mut owner = GITHUB_OWNER.to_string();
+    let mut repo = GITHUB_REPO.to_string();
     let f = github_config_file();
+    let mut should_normalize = false;
     if f.exists() {
         if let Ok(text) = std::fs::read_to_string(&f) {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                if v.is_object() {
-                    return v;
+                if let Some(value) = v.get("owner").and_then(|v| v.as_str()) {
+                    if !value.trim().is_empty() {
+                        owner = value.to_string();
+                    }
                 }
+                if let Some(value) = v.get("repo").and_then(|v| v.as_str()) {
+                    if !value.trim().is_empty() {
+                        repo = value.to_string();
+                    }
+                }
+                should_normalize = v.get("token").is_some();
             }
         }
     }
-    json!({})
+    // 旧版本截图/配置曾使用 changexbc/wb-switch；迁移到实际公开仓库。
+    if owner == "changexbc" && repo == "wb-switch" {
+        repo = GITHUB_REPO.to_string();
+        should_normalize = true;
+    }
+    let normalized = json!({"owner": owner, "repo": repo});
+    if should_normalize {
+        let _ = atomic_write(
+            &f,
+            &serde_json::to_string_pretty(&normalized).unwrap_or_default(),
+        );
+    }
+    normalized
 }
 
-/// 保存更新源配置（去掉空值）。
+/// 保存更新源配置；公开仓库不需要也不保存 GitHub token。
 pub fn save_github_config(cfg: &Value) -> std::io::Result<()> {
-    let obj = cfg.as_object().cloned().unwrap_or_default();
-    let clean: serde_json::Map<String, Value> = obj
-        .into_iter()
-        .filter(|(_, v)| {
-            !(v.is_null()
-                || v.as_str().map(|s| s.is_empty()).unwrap_or(false))
-        })
-        .collect();
+    let owner = cfg
+        .get("owner")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(GITHUB_OWNER);
+    let repo = cfg
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(GITHUB_REPO);
+    let clean = json!({"owner": owner, "repo": repo});
     std::fs::create_dir_all(store_dir())?;
     atomic_write(
         &github_config_file(),
@@ -74,23 +102,12 @@ pub async fn update_check() -> Value {
     let cfg = load_github_config();
     let owner = cfg.get("owner").and_then(|v| v.as_str()).unwrap_or("");
     let repo = cfg.get("repo").and_then(|v| v.as_str()).unwrap_or("");
-    if owner.is_empty() || repo.is_empty() {
-        return json!({"ok": false, "error": "need_config", "message": "未配置 GitHub 仓库"});
-    }
-    let token = cfg.get("token").and_then(|v| v.as_str()).unwrap_or("");
-    if token.is_empty() {
-        return json!({
-            "ok": false,
-            "error": "need_token",
-            "message": "private 仓库需要配置 GitHub token（只读权限）",
-        });
-    }
+    let release_url = format!("https://github.com/{owner}/{repo}/releases/latest");
 
     let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
     let mut headers = HashMap::new();
     headers.insert("Accept".to_string(), "application/vnd.github+json".to_string());
     headers.insert("User-Agent".to_string(), "wb-switch".to_string());
-    headers.insert("Authorization".to_string(), format!("Bearer {token}"));
     let resp = http_request(&url, "GET", None, Some(&headers)).await;
 
     let tag = resp.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
@@ -100,7 +117,12 @@ pub async fn update_check() -> Value {
             .and_then(|v| v.as_str())
             .unwrap_or("查询失败");
         let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
-        return json!({"ok": false, "error": msg, "message": format!("{msg}（code={code}）")});
+        return json!({
+            "ok": false,
+            "error": msg,
+            "message": format!("{msg}（code={code}）"),
+            "releaseUrl": release_url,
+        });
     }
 
     let latest = tag.strip_prefix('v').unwrap_or(tag).to_string();
@@ -139,6 +161,7 @@ pub async fn update_check() -> Value {
         "hasUpdate": compare_versions(&latest, &current) > 0,
         "assets": assets,
         "releaseName": resp.get("name").and_then(|v| v.as_str()).unwrap_or(tag).to_string(),
+        "releaseUrl": resp.get("html_url").and_then(|v| v.as_str()).unwrap_or(&release_url),
         "publishedAt": resp.get("published_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
         "checkedAt": now_secs(),
     })

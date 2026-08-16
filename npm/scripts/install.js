@@ -1,18 +1,13 @@
-// 下载源：GitHub Releases（changexbc/workbuddy-switch），可用环境变量覆盖：
+// workbuddy-switch postinstall：从「平台包」复制本平台二进制。
+//
+// 平台分包（esbuild 模式）：二进制发布在独立 npm 包（workbuddy-switch-<platform>-<arch>），
+// 主包声明为 optionalDependencies，安装时 npm 自动装好平台包，postinstall 只需复制——
+// 不依赖 GitHub，国内镜像（npmmirror）也能稳定安装。
+//
+// 环境变量覆盖：
 //   WB_SWITCH_BINARY=<本地二进制路径>  本地开发/离线安装（直接复制，不联网）
-//   WB_SWITCH_DOWNLOAD_BASE=<URL 前缀>  自定义下载源（默认 GitHub 带版本号的 release 资产）
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
-const https = require("https");
-
-const OWNER = "changexbc"; // 发布二进制到 Release 的 GitHub 仓库
-const REPO = "workbuddy-switch";
-
-// 版本号从 package.json 读，下载地址用「带 tag」而非 latest，
-// 避免 GitHub CDN 对同名资产 latest 重定向的缓存污染（曾出现下载到旧二进制）。
-const PKG = require(path.join(__dirname, "..", "package.json"));
-const VERSION = PKG.version;
 
 const FILE = {
   "darwin-arm64": "wb-switch-darwin-arm64",
@@ -22,9 +17,11 @@ const FILE = {
   "linux-arm64": "wb-switch-linux-arm64",
 }[`${process.platform}-${process.arch}`];
 
+const PLATFORM_PKG = `workbuddy-switch-${process.platform}-${process.arch}`;
+
 if (!FILE) {
   console.warn(
-    `wb-switch: 跳过平台 ${process.platform}-${process.arch}（当前不支持），` +
+    `workbuddy-switch: 跳过平台 ${process.platform}-${process.arch}（当前不支持），` +
       `可手动下载二进制后放置到 bin/ 目录`,
   );
   process.exit(0);
@@ -34,72 +31,51 @@ const binDir = path.join(__dirname, "..", "bin");
 const target = path.join(binDir, FILE);
 
 function fail(msg) {
-  console.error(`wb-switch install: ${msg}`);
-  console.error("安装失败，可手动下载二进制放到 npm 包的 bin/ 目录。");
+  console.error(`workbuddy-switch install: ${msg}`);
+  console.error(
+    "安装失败。请确认安装了对应平台包（npm 会自动装），或设置 WB_SWITCH_BINARY 指向本地二进制。",
+  );
   process.exit(1);
 }
 
-function copyLocal(src) {
+function copyFrom(src) {
   fs.mkdirSync(binDir, { recursive: true });
   fs.copyFileSync(src, target);
   if (process.platform !== "win32") fs.chmodSync(target, 0o755);
-  console.log(`wb-switch: 已从 ${src} 复制二进制`);
-}
-
-function download(url) {
-  fs.mkdirSync(binDir, { recursive: true });
-  console.log(`wb-switch: 正在下载 ${url}`);
-  const file = fs.createWriteStream(target);
-  https
-    .get(url, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        file.close();
-        return download(res.headers.location);
-      }
-      if (res.statusCode !== 200) {
-        file.close();
-        fs.unlinkSync(target);
-        return fail(`下载失败 (HTTP ${res.statusCode})`);
-      }
-      res.pipe(file);
-      file.on("finish", () => {
-        file.close();
-        if (process.platform !== "win32") fs.chmodSync(target, 0o755);
-        // 校验：可执行文件应至少 1MB（防 CDN 缓存/截断导致下载到损坏或旧文件）
-        const size = fs.statSync(target).size;
-        if (size < 1 * 1024 * 1024) {
-          fs.unlinkSync(target);
-          return fail(`下载文件异常（仅 ${size} 字节），请重试或设置 WB_SWITCH_BINARY`);
-        }
-        console.log(`wb-switch: 二进制就绪 → ${target} (${(size / 1048576).toFixed(1)}MB)`);
-      });
-    })
-    .on("error", (e) => {
-      file.close();
-      fs.unlinkSync(target);
-      fail(`网络错误: ${e.message}`);
-    });
+  const size = fs.statSync(target).size;
+  if (size < 1 * 1024 * 1024) {
+    fs.unlinkSync(target);
+    return fail(`平台包二进制异常（仅 ${size} 字节）`);
+  }
+  console.log(
+    `workbuddy-switch: 二进制就绪 → ${target} (${(size / 1048576).toFixed(1)}MB)`,
+  );
 }
 
 async function main() {
   // 1) 本地二进制覆盖（开发/离线）
   if (process.env.WB_SWITCH_BINARY) {
     const local = path.resolve(process.env.WB_SWITCH_BINARY);
-    if (fs.existsSync(local)) return copyLocal(local);
+    if (fs.existsSync(local)) return copyFrom(local);
     return fail(`WB_SWITCH_BINARY 指向的文件不存在: ${local}`);
   }
 
-  // 2) 已存在则跳过
-  if (fs.existsSync(target)) {
-    console.log(`wb-switch: 二进制已存在，跳过下载`);
-    return;
+  // 2) 从平台包复制（node_modules/workbuddy-switch-<platform>-<arch>/bin/<file>）
+  try {
+    const pkgRoot = path.dirname(require.resolve(`${PLATFORM_PKG}/package.json`));
+    const src = path.join(pkgRoot, "bin", FILE);
+    if (fs.existsSync(src)) return copyFrom(src);
+    return fail(`平台包 ${PLATFORM_PKG} 中未找到 ${FILE}`);
+  } catch (e) {
+    // 平台包缺失：可能是 optionalDependencies 没装上（如手动安装/旧版 npm）
+    if (fs.existsSync(target)) {
+      console.log("workbuddy-switch: 二进制已存在，跳过");
+      return;
+    }
+    return fail(
+      `平台包 ${PLATFORM_PKG} 未安装（${e.message}）。请重新执行 npm install。`,
+    );
   }
-
-  // 3) 从 GitHub Releases 下载（带版本号，避免 latest CDN 缓存）
-  const base =
-    process.env.WB_SWITCH_DOWNLOAD_BASE ||
-    `https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}`;
-  download(`${base}/${FILE}`);
 }
 
 main();

@@ -7,6 +7,15 @@ WorkBuddy（腾讯 AI 编程助手）账号切换工具。两种形态：
 
 多账号共享登录态（`workbuddy-desktop.info`），一键切换 WorkBuddy 登录账号，并支持将当前账号的会话复制给目标账号（云端归属目标）。
 
+<p align="center">
+  <img src="src-tauri/icons/generated/workbuddy-switch-icon-v6-512.png" alt="workbuddy-switch 图标" width="128" />
+</p>
+
+<p align="center">
+  <strong>workbuddy-switch</strong><br />
+  WorkBuddy 多账号切换工具
+</p>
+
 ## 快速开始
 
 ### npm 安装（webui）
@@ -46,7 +55,27 @@ webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动
 1. **添加账号**：账号页 →「扫码登录」（OAuth device flow）或「从本机导入」「手动添加」
 2. **切换账号**：账号卡片 →「切换」，可勾选复制当前会话
 3. **自动签到**：设置 → 自动签到，开启并配置时间段
-4. **更新**：设置 → 自动更新，填写 GitHub owner/repo/token 后检查更新
+4. **更新**：应用会自动检查公开 GitHub Releases；发现新版本后可在左下角直接升级，也可从设置页打开 Release 页面手动下载。
+
+## 界面截图
+
+### 账号切换
+
+账号页支持 OAuth 扫码登录、导入本机账号、手动添加，以及对每个账号执行切换、签到和 token 刷新。
+
+<p align="center">
+  <img src="docs/images/workbuddy-switch-accounts-redacted.png" alt="账号切换页面（账号信息已脱敏）" width="1000" />
+</p>
+
+### 设置
+
+设置页集中管理 macOS 权限检测、自动签到、Token 保活和自动更新。
+
+<p align="center">
+  <img src="docs/images/workbuddy-switch-settings.png" alt="设置页面" width="1000" />
+</p>
+
+> 文档截图中的账号名称、头像首字、UID、当前登录名和状态信息均已做脱敏处理。
 
 ### macOS 权限说明
 

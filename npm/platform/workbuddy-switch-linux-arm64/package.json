@@ -1,0 +1,9 @@
+{
+  "name": "workbuddy-switch-linux-arm64",
+  "version": "0.1.6",
+  "description": "workbuddy-switch platform binary (linux-arm64)",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin"],
+  "license": "MIT"
+}

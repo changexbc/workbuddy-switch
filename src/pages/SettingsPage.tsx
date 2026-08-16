@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CalendarCheck, Loader2, RefreshCw, Save } from "lucide-react";
+import { ArrowUpCircle, CalendarCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
-import type { CheckinConfig, CheckinLog, GithubConfig, UpdateInfo } from "@/lib/types";
+import type { CheckinConfig, CheckinLog, UpdateInfo } from "@/lib/types";
+import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
+import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { useAccountsStore } from "@/stores/accounts";
 
 function formatTime(ts: number): string {
@@ -330,46 +332,17 @@ function useAuthFile(): string | undefined {
   return useAccountsStore((s) => s.status?.authFile);
 }
 
-/** 自动更新：配置 GitHub Releases 源 + 检查更新。 */
+/** 自动更新：检查公开 GitHub Releases 源 + 安装签名更新。 */
 function UpdateCard() {
   const version = useAccountsStore((s) => s.status?.version);
-  const [cfg, setCfg] = useState<GithubConfig>({});
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
-    try {
-      const c = await api.getGithubConfig();
-      setCfg(c);
-    } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
-    }
-  }
-
-  async function save() {
-    setSaving(true);
-    setMsg(null);
-    try {
-      const saved = await api.saveGithubConfig(cfg);
-      setCfg(saved);
-      setMsg({ type: "ok", text: "更新源配置已保存" });
-    } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function check() {
     setChecking(true);
     setMsg(null);
-    setInfo(null);
     try {
       const r = await api.checkUpdate();
       setInfo(r);
@@ -383,24 +356,6 @@ function UpdateCard() {
     }
   }
 
-  async function apply() {
-    setMsg(null);
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      setMsg({ type: "ok", text: "正在检查签名更新包…" });
-      const update = await check();
-      if (!update) {
-        setMsg({ type: "ok", text: "没有可用的更新包（需 GitHub Release 含签名产物）" });
-        return;
-      }
-      setMsg({ type: "ok", text: `正在下载 v${update.version}…` });
-      await update.downloadAndInstall();
-      setMsg({ type: "ok", text: "更新已安装，请重启应用" });
-    } catch (e) {
-      setMsg({ type: "err", text: `更新失败：${api.asError(e)}` });
-    }
-  }
-
   return (
     <Card>
       <CardHeader>
@@ -409,7 +364,7 @@ function UpdateCard() {
           自动更新
         </CardTitle>
         <CardDescription>
-          配置 GitHub Releases 更新源，检查新版本。整包更新经签名校验后自动安装。
+          检查公开 GitHub Releases 新版本，整包更新经签名校验后自动安装。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -417,42 +372,22 @@ function UpdateCard() {
           当前版本：<span className="font-mono">v{version || "?"}</span>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="up-owner">GitHub owner</Label>
-            <Input
-              id="up-owner"
-              placeholder="例如 workbuddy-switch"
-              value={cfg.owner ?? ""}
-              onChange={(e) => setCfg({ ...cfg, owner: e.target.value })}
-            />
+        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2.5 text-sm">
+          <div className="min-w-0">
+            <div className="font-medium">公开更新源</div>
+            <div className="truncate text-xs text-muted-foreground">{GITHUB_REPOSITORY_URL}</div>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="up-repo">仓库名 repo</Label>
-            <Input
-              id="up-repo"
-              placeholder="例如 workbuddy-switch"
-              value={cfg.repo ?? ""}
-              onChange={(e) => setCfg({ ...cfg, repo: e.target.value })}
-            />
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="up-token">GitHub token（private 仓库需要，只读权限）</Label>
-          <Input
-            id="up-token"
-            type="password"
-            placeholder="ghp_..."
-            value={cfg.token ?? ""}
-            onChange={(e) => setCfg({ ...cfg, token: e.target.value })}
-          />
+          <Button
+            variant="ghost"
+            size="icon"
+            title="打开 GitHub Release"
+            onClick={() => void openReleaseUrl(GITHUB_RELEASE_URL)}
+          >
+            <ExternalLink />
+          </Button>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button onClick={save} disabled={saving}>
-            {saving ? <Loader2 className="animate-spin" /> : <Save />}
-            保存配置
-          </Button>
           <Button variant="outline" onClick={check} disabled={checking}>
             {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             检查更新
@@ -469,9 +404,19 @@ function UpdateCard() {
                 {info.releaseName && <span className="text-muted-foreground"> · {info.releaseName}</span>}
               </div>
               {info.hasUpdate && (
-                <Button size="sm" onClick={apply}>
-                  <RefreshCw />
-                  下载并安装
+                <Button size="sm" onClick={() => setInstallOpen(true)}>
+                  <ArrowUpCircle />
+                  立即升级
+                </Button>
+              )}
+              {info.releaseUrl && (
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0"
+                  onClick={() => void openReleaseUrl(info.releaseUrl)}
+                >
+                  打开 GitHub Release
                 </Button>
               )}
             </AlertDescription>
@@ -479,9 +424,14 @@ function UpdateCard() {
         )}
         {msg && (
           <Alert variant={msg.type === "err" ? "destructive" : "default"}>
-            <AlertDescription>{msg.text}</AlertDescription>
+          <AlertDescription>{msg.text}</AlertDescription>
           </Alert>
         )}
+        <UpdateInstallDialog
+          open={installOpen}
+          onOpenChange={setInstallOpen}
+          update={info}
+        />
       </CardContent>
     </Card>
   );
