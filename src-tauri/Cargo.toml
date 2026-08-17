@@ -1,6 +1,6 @@
 [package]
 name = "wb-switch-rust"
-version = "0.1.9"
+version = "0.1.10"
 description = "wb-switch —— WorkBuddy 账号切换工具（Rust/Tauri 版）"
 authors = ["apple"]
 edition = "2021"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 wb-switch-core = { path = "../crates/wb-switch-core" }
