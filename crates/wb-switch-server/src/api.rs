@@ -303,7 +303,7 @@ async fn api_refresh_token(Json(body): Json<Value>) -> Response {
 // ---------------------------------------------------------------------------
 
 async fn api_update_check() -> Response {
-    json_ok(update::update_check().await)
+    json_ok(update::update_check(None).await)
 }
 
 async fn api_update_config() -> Response {

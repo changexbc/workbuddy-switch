@@ -102,6 +102,7 @@ export interface CheckinResult {
 export interface GithubConfig {
   owner?: string;
   repo?: string;
+  proxy?: string;
 }
 
 export interface UpdateInfo {

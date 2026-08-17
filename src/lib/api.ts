@@ -240,8 +240,12 @@ export function saveGithubConfig(config: GithubConfig): Promise<GithubConfig> {
   });
 }
 
-export function checkUpdate(): Promise<UpdateInfo> {
-  return call("check_update");
+export function checkUpdate(proxy?: string): Promise<UpdateInfo> {
+  return call("check_update", { proxy: proxy?.trim() || null });
+}
+
+export function relaunchApp(): Promise<void> {
+  return call("relaunch_app");
 }
 
 /** 把 Tauri command / HTTP 抛出的错误统一为 Error。 */

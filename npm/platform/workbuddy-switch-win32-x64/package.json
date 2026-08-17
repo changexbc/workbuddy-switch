@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-switch-win32-x64",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "workbuddy-switch platform binary (win32-x64)",
   "os": ["win32"],
   "cpu": ["x64"],

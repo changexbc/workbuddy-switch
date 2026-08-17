@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
-import type { CheckinConfig, CheckinLog, UpdateInfo } from "@/lib/types";
+import type { CheckinConfig, CheckinLog, GithubConfig, UpdateInfo } from "@/lib/types";
 import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { useAccountsStore } from "@/stores/accounts";
@@ -339,12 +339,32 @@ function UpdateCard() {
   const [checking, setChecking] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [githubConfig, setGithubConfig] = useState<GithubConfig>({});
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [proxySaving, setProxySaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getGithubConfig()
+      .then((config) => {
+        if (cancelled) return;
+        setGithubConfig(config);
+        setProxyUrl(config.proxy ?? "");
+      })
+      .catch((e) => {
+        if (!cancelled) setMsg({ type: "err", text: api.asError(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function check() {
     setChecking(true);
     setMsg(null);
     try {
-      const r = await api.checkUpdate();
+      const r = await api.checkUpdate(proxyUrl);
       setInfo(r);
       if (!r.ok) {
         setMsg({ type: "err", text: r.message || r.error || "检查失败" });
@@ -353,6 +373,34 @@ function UpdateCard() {
       setMsg({ type: "err", text: api.asError(e) });
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function saveProxy() {
+    const value = proxyUrl.trim();
+    if (value) {
+      try {
+        const parsed = new URL(value);
+        if (!parsed.hostname || !["http:", "https:"].includes(parsed.protocol)) {
+          throw new Error("unsupported proxy protocol");
+        }
+      } catch {
+        setMsg({ type: "err", text: "代理地址格式不正确，请填写 HTTP/HTTPS 地址，例如 http://127.0.0.1:7897" });
+        return;
+      }
+    }
+
+    setProxySaving(true);
+    setMsg(null);
+    try {
+      const saved = await api.saveGithubConfig({ ...githubConfig, proxy: value });
+      setGithubConfig(saved);
+      setProxyUrl(saved.proxy ?? "");
+      setMsg({ type: "ok", text: value ? "更新代理已保存" : "已关闭更新代理" });
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setProxySaving(false);
     }
   }
 
@@ -385,6 +433,29 @@ function UpdateCard() {
           >
             <ExternalLink />
           </Button>
+        </div>
+
+        <div className="space-y-2 rounded-md border bg-muted/30 px-3 py-3">
+          <div>
+            <Label htmlFor="update-proxy">更新代理地址</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              仅用于 GitHub 更新检查和安装包下载；留空表示关闭显式代理。
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              id="update-proxy"
+              value={proxyUrl}
+              onChange={(event) => setProxyUrl(event.target.value)}
+              placeholder="例如 http://127.0.0.1:7897"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <Button variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
+              {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
+              保存代理
+            </Button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">

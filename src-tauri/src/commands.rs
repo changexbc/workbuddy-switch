@@ -304,6 +304,18 @@ pub fn save_github_config(config: Value) -> Result<Value, String> {
 
 /// GET /api/update/check —— 检查 GitHub Releases 是否有新版本。
 #[tauri::command]
-pub async fn check_update() -> Value {
-    update::update_check().await
+pub async fn check_update(proxy: Option<String>) -> Value {
+    update::update_check(proxy.as_deref()).await
+}
+
+/// 启动当前应用的新进程并退出旧进程，用于更新安装完成后的立即重启。
+#[tauri::command]
+pub fn relaunch_app() -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|e| format!("无法定位应用程序: {e}"))?;
+    let args = std::env::args_os().skip(1);
+    std::process::Command::new(executable)
+        .args(args)
+        .spawn()
+        .map_err(|e| format!("启动应用失败: {e}"))?;
+    std::process::exit(0);
 }

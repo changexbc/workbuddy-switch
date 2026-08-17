@@ -245,8 +245,33 @@ pub async fn http_request(
     body: Option<Value>,
     headers: Option<&HashMap<String, String>>,
 ) -> Value {
+    http_request_with_proxy(url, method, body, headers, None).await
+}
+
+/// 通用 HTTP 请求，可为单次请求显式指定 HTTP/HTTPS 代理。
+pub async fn http_request_with_proxy(
+    url: &str,
+    method: &str,
+    body: Option<Value>,
+    headers: Option<&HashMap<String, String>>,
+    proxy: Option<&str>,
+) -> Value {
     let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
-    let mut req = http_client().request(method, url);
+    let client = match proxy.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(proxy) => match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .proxy(match reqwest::Proxy::all(proxy) {
+                Ok(proxy) => proxy,
+                Err(e) => return json!({"code": -1, "message": format!("代理地址无效: {e}")}),
+            })
+            .build()
+        {
+            Ok(client) => client,
+            Err(e) => return json!({"code": -1, "message": format!("代理客户端创建失败: {e}")}),
+        },
+        None => http_client().clone(),
+    };
+    let mut req = client.request(method, url);
     req = req.header("Content-Type", "application/json");
     if let Some(h) = headers {
         for (k, v) in h {

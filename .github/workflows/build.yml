@@ -113,7 +113,7 @@ jobs:
           npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
           find "target/${{ matrix.target }}/release/bundle" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' \
-            -o -name '*.AppImage' -o -name '*.app.tar.gz' -o -name '*.sig' \) \
+            -o -name '*.AppImage' \) \
             -exec cp {} dist-bin/ \;
           # mac：纯命令行打 dmg（CI 无 Finder，Tauri 自带的 bundle_dmg.sh 会失败）
           if [ "${{ matrix.bundles }}" = "app" ]; then

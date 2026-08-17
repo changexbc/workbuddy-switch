@@ -7,7 +7,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::modules::config::{atomic_write, http_request, now_secs, store_dir};
+use crate::modules::config::{
+    atomic_write, http_request_with_proxy, now_secs, store_dir,
+};
 
 /// 应用当前版本（来自 Cargo.toml package.version）。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,6 +24,7 @@ pub fn github_config_file() -> PathBuf {
 pub fn load_github_config() -> Value {
     let mut owner = GITHUB_OWNER.to_string();
     let mut repo = GITHUB_REPO.to_string();
+    let mut proxy = String::new();
     let f = github_config_file();
     let mut should_normalize = false;
     if f.exists() {
@@ -37,6 +40,9 @@ pub fn load_github_config() -> Value {
                         repo = value.to_string();
                     }
                 }
+                if let Some(value) = v.get("proxy").and_then(|v| v.as_str()) {
+                    proxy = value.trim().to_string();
+                }
                 should_normalize = v.get("token").is_some();
             }
         }
@@ -46,7 +52,7 @@ pub fn load_github_config() -> Value {
         repo = GITHUB_REPO.to_string();
         should_normalize = true;
     }
-    let normalized = json!({"owner": owner, "repo": repo});
+    let normalized = json!({"owner": owner, "repo": repo, "proxy": proxy});
     if should_normalize {
         let _ = atomic_write(
             &f,
@@ -68,7 +74,12 @@ pub fn save_github_config(cfg: &Value) -> std::io::Result<()> {
         .and_then(|v| v.as_str())
         .filter(|v| !v.trim().is_empty())
         .unwrap_or(GITHUB_REPO);
-    let clean = json!({"owner": owner, "repo": repo});
+    let proxy = cfg
+        .get("proxy")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let clean = json!({"owner": owner, "repo": repo, "proxy": proxy});
     std::fs::create_dir_all(store_dir())?;
     atomic_write(
         &github_config_file(),
@@ -98,17 +109,23 @@ pub fn compare_versions(a: &str, b: &str) -> i64 {
 }
 
 /// 查询最新 Release，与本地版本对比。对照 server.py `update_check`。
-pub async fn update_check() -> Value {
+pub async fn update_check(proxy: Option<&str>) -> Value {
     let cfg = load_github_config();
     let owner = cfg.get("owner").and_then(|v| v.as_str()).unwrap_or("");
     let repo = cfg.get("repo").and_then(|v| v.as_str()).unwrap_or("");
+    let configured_proxy = cfg
+        .get("proxy")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let proxy = proxy.or(configured_proxy);
     let release_url = format!("https://github.com/{owner}/{repo}/releases/latest");
 
     let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
     let mut headers = HashMap::new();
     headers.insert("Accept".to_string(), "application/vnd.github+json".to_string());
     headers.insert("User-Agent".to_string(), "wb-switch".to_string());
-    let resp = http_request(&url, "GET", None, Some(&headers)).await;
+    let resp = http_request_with_proxy(&url, "GET", None, Some(&headers), proxy).await;
 
     let tag = resp.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
     if tag.is_empty() {

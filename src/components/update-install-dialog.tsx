@@ -29,6 +29,29 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 从 Tauri updater 返回的原始 manifest 中取出当前平台的安装包地址。 */
+function getDownloadUrl(rawJson: Record<string, unknown>): string | null {
+  if (typeof rawJson.url === "string") return rawJson.url;
+  if (!isRecord(rawJson.platforms)) return null;
+
+  const preferredTargets = navigator.userAgent.includes("Intel")
+    ? ["darwin-x86_64", "darwin-aarch64"]
+    : ["darwin-aarch64", "darwin-x86_64"];
+  for (const target of preferredTargets) {
+    const platform = rawJson.platforms[target];
+    if (isRecord(platform) && typeof platform.url === "string") return platform.url;
+  }
+
+  for (const platform of Object.values(rawJson.platforms)) {
+    if (isRecord(platform) && typeof platform.url === "string") return platform.url;
+  }
+  return null;
+}
+
 interface UpdateInstallDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -52,6 +75,8 @@ export function UpdateInstallDialog({
   const [received, setReceived] = useState(0);
   const [total, setTotal] = useState(0);
   const [retry, setRetry] = useState(0);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
   const releaseUrl = update?.releaseUrl ?? GITHUB_RELEASE_URL;
 
   useEffect(() => {
@@ -62,6 +87,8 @@ export function UpdateInstallDialog({
     setError(null);
     setReceived(0);
     setTotal(0);
+    setDownloadUrl(null);
+    setRestarting(false);
     setTargetVersion(update?.latest ?? "新版本");
 
     async function install() {
@@ -71,7 +98,14 @@ export function UpdateInstallDialog({
         }
 
         const { check } = await import("@tauri-apps/plugin-updater");
-        const candidate = await withTimeout(check(), UPDATE_CHECK_TIMEOUT_MS);
+        const configuredProxy = await api
+          .getGithubConfig()
+          .then((config) => config.proxy?.trim() || "")
+          .catch(() => "");
+        const candidate = await withTimeout(
+          check({ proxy: configuredProxy || undefined }),
+          UPDATE_CHECK_TIMEOUT_MS,
+        );
         if (cancelled) return;
         if (!candidate) {
           if (update?.hasUpdate) {
@@ -84,6 +118,7 @@ export function UpdateInstallDialog({
         }
 
         setTargetVersion(candidate.version);
+        setDownloadUrl(getDownloadUrl(candidate.rawJson));
         setStage("downloading");
         await candidate.downloadAndInstall((event: DownloadEvent) => {
           if (cancelled) return;
@@ -120,6 +155,26 @@ export function UpdateInstallDialog({
     }
   }
 
+  async function openDownload() {
+    if (!downloadUrl) return;
+    try {
+      await openReleaseUrl(downloadUrl);
+    } catch (e) {
+      setError(api.asError(e));
+    }
+  }
+
+  async function restartApp() {
+    setRestarting(true);
+    try {
+      await api.relaunchApp();
+    } catch (e) {
+      setRestarting(false);
+      setError(`重启失败：${api.asError(e)}`);
+      setStage("error");
+    }
+  }
+
   return (
     <Dialog
       open={open}
@@ -128,7 +183,7 @@ export function UpdateInstallDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent showCloseButton={!busy}>
+      <DialogContent showCloseButton={!busy && !restarting}>
         <DialogHeader>
           <DialogTitle>
             {stage === "checking" && "正在检查更新"}
@@ -141,7 +196,7 @@ export function UpdateInstallDialog({
             {stage === "checking" && "正在检查 GitHub Release 中的签名更新包，请稍候。"}
             {stage === "downloading" && "请不要关闭应用，更新包下载完成后会安装到本机。"}
             {stage === "latest" && "没有发现高于当前版本的签名更新包。"}
-            {stage === "success" && "更新包已安装，请重启应用完成升级。"}
+            {stage === "success" && "更新包已安装，可以立即重启应用完成升级。"}
             {stage === "error" && "自动更新未完成，你仍然可以从 GitHub Release 页面手动下载。"}
           </DialogDescription>
         </DialogHeader>
@@ -175,6 +230,19 @@ export function UpdateInstallDialog({
                 {formatBytes(received)} / {formatBytes(total)}
               </div>
             )}
+            {downloadUrl && (
+              <div className="border-t pt-2 text-xs">
+                <div className="text-muted-foreground">下载地址（点击可手动下载）</div>
+                <button
+                  type="button"
+                  className="mt-1 flex w-full items-start gap-1 break-all text-left text-primary underline-offset-2 hover:underline"
+                  onClick={() => void openDownload()}
+                >
+                  <ExternalLink className="mt-0.5 size-3.5 shrink-0" />
+                  <span>{downloadUrl}</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -187,6 +255,16 @@ export function UpdateInstallDialog({
         {stage === "error" && (
           <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
             <p className="text-destructive">{error || "未知更新错误"}</p>
+            {downloadUrl && (
+              <button
+                type="button"
+                className="flex w-full items-start gap-1 break-all text-left text-primary underline-offset-2 hover:underline"
+                onClick={() => void openDownload()}
+              >
+                <ExternalLink className="mt-0.5 size-3.5 shrink-0" />
+                <span>{downloadUrl}</span>
+              </button>
+            )}
             <p className="break-all text-xs text-muted-foreground">{releaseUrl}</p>
           </div>
         )}
@@ -204,7 +282,18 @@ export function UpdateInstallDialog({
               </Button>
             </>
           )}
-          {(stage === "latest" || stage === "success" || stage === "error") && (
+          {stage === "success" && (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={restarting}>
+                立即关闭
+              </Button>
+              <Button onClick={() => void restartApp()} disabled={restarting}>
+                {restarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                {restarting ? "正在重启…" : "立即重启"}
+              </Button>
+            </>
+          )}
+          {(stage === "latest" || stage === "error") && (
             <Button variant={stage === "error" ? "ghost" : "default"} onClick={() => onOpenChange(false)}>
               关闭
             </Button>
