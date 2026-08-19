@@ -793,7 +793,7 @@ export default function SettingsPage() {
         <PermissionCheckCard />
         <AutoCheckinCard />
         <AutoRotateCard />
-        <UpdateCard />
+        {api.isWebui() ? null : <UpdateCard />}
       </div>
     </div>
   );

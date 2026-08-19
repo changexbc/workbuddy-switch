@@ -130,7 +130,7 @@ function Layout() {
             设置
           </NavLink>
         </nav>
-        <UpdateCenter running={running} />
+        {api.isWebui() ? null : <UpdateCenter running={running} />}
       </aside>
       <main className="flex-1 overflow-y-auto">
         <Outlet />
