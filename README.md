@@ -8,7 +8,7 @@ WorkBuddy（腾讯 AI 编程助手）账号切换工具。两种形态：
 多账号共享登录态（`workbuddy-desktop.info`），一键切换 WorkBuddy 登录账号，并支持将当前账号的会话复制给目标账号（云端归属目标）。
 
 <p align="center">
-  <img src="src-tauri/icons/generated/workbuddy-switch-icon-v6-512.png" alt="workbuddy-switch 图标" width="128" style="border-radius: 22%;" />
+  <img src="src-tauri/icons/generated/workbuddy-switch-icon-v6-rounded-512.png" alt="workbuddy-switch 图标" width="128" />
 </p>
 
 <p align="center">
