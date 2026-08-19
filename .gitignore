@@ -37,3 +37,7 @@ npm/platform/*/bin/
 
 # 个人开发工作流（trellis）
 .trellis/
+
+# AI 工具本地配置
+.codebuddy/
+.cursor/
