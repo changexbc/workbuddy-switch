@@ -23,7 +23,7 @@ interface Props {
 
 /** 手动添加账号（完整字段表单）。 */
 export function ManualAddDialog({ open, onOpenChange }: Props) {
-  const upsertAccount = useAccountsStore((s) => s.upsertAccount);
+  const reconcileAccounts = useAccountsStore((s) => s.reconcileAccounts);
 
   const [accessToken, setAccessToken] = useState("");
   const [refreshToken, setRefreshToken] = useState("");
@@ -61,7 +61,7 @@ export function ManualAddDialog({ open, onOpenChange }: Props) {
         email: email.trim() || undefined,
         domain: domain.trim() || undefined,
       });
-      upsertAccount(res.account);
+      await reconcileAccounts();
       setResult(res.account);
     } catch (e) {
       setError(api.asError(e));

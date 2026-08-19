@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppWindow, Download, Loader2, Plus, QrCode, RefreshCw, Terminal } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
@@ -82,6 +82,18 @@ export default function AccountsPage() {
   useEffect(() => {
     void fetchAll();
   }, [fetchAll]);
+
+  /** 首次启动自动导入本机账号（本会话只尝试一次，无本机账号时静默） */
+  const autoImportTried = useRef(false);
+  useEffect(() => {
+    if (autoImportTried.current || loading || accounts.length > 0) return;
+    autoImportTried.current = true;
+    void importLocal()
+      .then(() => void fetchAll())
+      .catch(() => {
+        /* 本机无 WorkBuddy 登录态时静默，不打扰用户 */
+      });
+  }, [accounts.length, loading, importLocal, fetchAll]);
 
   async function refreshCodebuddyCliStatus() {
     try {

@@ -128,13 +128,7 @@ pub async fn oauth_poll(login_id: &str) -> Value {
         .get("nickname")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let email = acc_data
-        .get("email")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| nickname.clone())
-        .or_else(|| uid.clone())
-        .unwrap_or_else(|| "unknown".to_string());
+    let email = oauth_profile_email(&acc_data);
 
     let expires_at = norm_ts(data.get("expiresAt").or_else(|| data.get("expires_at")));
     let expires_at = match expires_at {
@@ -179,34 +173,18 @@ pub async fn oauth_poll(login_id: &str) -> Value {
         "createdAt": now_ms(),
     });
 
-    // 去重入库（对照 server.py oauth_poll 的三条过滤）
-    let mut accounts = account::load_accounts();
-    let acc_uid = account.get("uid").and_then(|v| v.as_str()).unwrap_or("");
-    let acc_email = account.get("email").and_then(|v| v.as_str()).unwrap_or("");
-    // 1) 主键（uid or email）命中目标元组，且两个字段都不等于目标 → 保留
-    accounts.retain(|a| {
-        let primary = a
-            .get("uid")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .or_else(|| a.get("email").and_then(|v| v.as_str()).filter(|s| !s.is_empty()));
-        let in_target = primary.is_some_and(|p| p == acc_uid || p == acc_email);
-        let a_uid = a.get("uid").and_then(|v| v.as_str()).unwrap_or("");
-        let a_email = a.get("email").and_then(|v| v.as_str()).unwrap_or("");
-        !in_target || (a_uid != acc_uid && a_email != acc_email)
-    });
-    // 2) uid 命中目标 → 移除
-    accounts.retain(|a| {
-        !(acc_uid != ""
-            && a.get("uid").and_then(|v| v.as_str()).unwrap_or("") == acc_uid)
-    });
-    // 3) email 命中目标（目标非 "unknown"）→ 移除
-    accounts.retain(|a| {
-        !(a.get("email").and_then(|v| v.as_str()).unwrap_or("") == acc_email
-            && acc_email != "unknown")
-    });
-    accounts.push(account.clone());
-    let _ = account::save_accounts(&accounts);
+    let account = match account::save_collected_account(account) {
+        Ok(saved) => saved,
+        Err(error) => {
+            let error = format!("保存账号失败: {error}");
+            let mut map = oauth_states().lock().unwrap();
+            if let Some(info) = map.get_mut(login_id) {
+                info.done = true;
+                info.error = Some(error.clone());
+            }
+            return json!({"done": true, "error": error});
+        }
+    };
 
     let result = account::account_meta(&account);
     let mut map = oauth_states().lock().unwrap();
@@ -217,4 +195,30 @@ pub async fn oauth_poll(login_id: &str) -> Value {
     drop(map);
 
     json!({"done": true, "result": result})
+}
+
+fn oauth_profile_email(profile: &Value) -> Option<String> {
+    profile
+        .get("email")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_profile_without_email_does_not_use_nickname_or_uid() {
+        let profile = json!({"uid": "u-1", "nickname": "同名用户"});
+        assert_eq!(oauth_profile_email(&profile), None);
+    }
+
+    #[test]
+    fn oauth_profile_keeps_factual_email() {
+        let profile = json!({"email": " user@example.com "});
+        assert_eq!(oauth_profile_email(&profile).as_deref(), Some("user@example.com"));
+    }
 }

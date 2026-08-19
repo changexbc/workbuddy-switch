@@ -24,7 +24,7 @@ interface Props {
 
 /** OAuth 扫码登录采集：发起 → 打开浏览器 → 轮询采集结果 → 入库。 */
 export function OAuthLoginDialog({ open, onOpenChange }: Props) {
-  const upsertAccount = useAccountsStore((s) => s.upsertAccount);
+  const reconcileAccounts = useAccountsStore((s) => s.reconcileAccounts);
 
   const [busy, setBusy] = useState(false);
   const [loginId, setLoginId] = useState<string | null>(null);
@@ -56,7 +56,7 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
         const res = await api.oauthStatus(loginId);
         if (res.done) {
           if (res.result) {
-            upsertAccount(res.result);
+            await reconcileAccounts();
             if (!cancelled) setResult(res.result);
           } else if (!cancelled) {
             setError(res.error || "登录失败");
@@ -76,7 +76,7 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [loginId, upsertAccount]);
+  }, [loginId, reconcileAccounts]);
 
   async function start() {
     setBusy(true);
@@ -102,7 +102,7 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
     setError("");
     try {
       const res = await api.manualAdd({ accessToken: manualToken.trim() });
-      upsertAccount(res.account);
+      await reconcileAccounts();
       setResult(res.account);
     } catch (e) {
       setError(api.asError(e));

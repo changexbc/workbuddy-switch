@@ -260,7 +260,10 @@ fn setdefault(map: &mut Map<String, Value>, key: &str, value: Value) {
 
 /// 从当前 WorkBuddy 登录态导入账号。对照 server.py `import_from_auth_file`。
 pub fn import_from_auth_file() -> Option<Value> {
-    let root = read_auth_file()?;
+    imported_account_from_root(read_auth_file()?)
+}
+
+fn imported_account_from_root(root: Value) -> Option<Value> {
     let account_obj = root
         .get("account")
         .filter(|v| v.is_object())
@@ -280,10 +283,7 @@ pub fn import_from_auth_file() -> Option<Value> {
         .or_else(|| get_str(&account_obj, "label"));
     let email = get_str(&root, "email")
         .or_else(|| get_str(&account_obj, "email"))
-        .or_else(|| get_str(&auth_obj, "email"))
-        .or_else(|| nickname.clone())
-        .or_else(|| uid.clone())
-        .unwrap_or_else(|| "unknown".to_string());
+        .or_else(|| get_str(&auth_obj, "email"));
     let access_token = get_str(&auth_obj, "accessToken")
         .or_else(|| get_str(&auth_obj, "access_token"))
         .or_else(|| get_str(&root, "accessToken"))
@@ -370,5 +370,17 @@ mod tests {
         assert_eq!(parse_ts(root["auth"].get("refreshToken")), None);
         assert_eq!(parse_ts(Some(&json!("1786728333"))), Some(1786728333));
     }
-}
 
+    #[test]
+    fn import_without_email_does_not_synthesize_one() {
+        let account = imported_account_from_root(json!({
+            "account": {"uid": "u-1", "nickname": "同名用户"},
+            "auth": {"accessToken": "test-token"}
+        }))
+        .expect("auth payload should import");
+
+        assert_eq!(account["uid"], "u-1");
+        assert_eq!(account["nickname"], "同名用户");
+        assert!(account["email"].is_null());
+    }
+}

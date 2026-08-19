@@ -95,18 +95,7 @@ pub async fn oauth_status(login_id: String) -> Value {
 /// POST /api/import-local —— 导入本机当前账号。
 #[tauri::command]
 pub fn import_local() -> Result<Value, String> {
-    let acc = auth_file::import_from_auth_file().ok_or("未读取到本地 WorkBuddy 登录信息")?;
-    let acc_uid = account::get_str(&acc, "uid");
-    let acc_email = account::get_str(&acc, "email").unwrap_or_default();
-    let mut accounts = account::load_accounts();
-    accounts.retain(|a| {
-        let a_uid = account::get_str(a, "uid");
-        let a_email = account::get_str(a, "email").unwrap_or_default();
-        !(acc_uid.is_some() && a_uid.is_some() && a_uid == acc_uid) && a_email != acc_email
-    });
-    accounts.push(acc.clone());
-    account::save_accounts(&accounts).map_err(|e| e.to_string())?;
-    Ok(json!({ "ok": true, "account": account::account_meta(&acc) }))
+    account::import_local().map(|acc| json!({ "ok": true, "account": acc }))
 }
 
 /// POST /api/manual-add —— 手动添加账号。
@@ -122,26 +111,18 @@ pub fn manual_add(
     expires_at: Option<i64>,
     refresh_expires_at: Option<i64>,
 ) -> Result<Value, String> {
-    if access_token.trim().is_empty() {
-        return Err("缺少 accessToken".to_string());
-    }
-    let acc = json!({
-        "id": uuid::Uuid::new_v4().to_string(),
-        "uid": uid,
-        "nickname": nickname,
-        "email": email.unwrap_or_else(|| "手动添加".to_string()),
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": token_type.unwrap_or_else(|| "Bearer".to_string()),
-        "domain": domain,
-        "expiresAt": expires_at,
-        "refreshExpiresAt": refresh_expires_at,
-        "createdAt": crate::modules::config::now_ms(),
-    });
-    let mut accounts = account::load_accounts();
-    accounts.push(acc.clone());
-    account::save_accounts(&accounts).map_err(|e| e.to_string())?;
-    Ok(json!({ "ok": true, "account": account::account_meta(&acc) }))
+    account::manual_add(
+        &access_token,
+        uid,
+        nickname,
+        email,
+        refresh_token,
+        token_type,
+        domain,
+        expires_at,
+        refresh_expires_at,
+    )
+    .map(|acc| json!({ "ok": true, "account": acc }))
 }
 
 /// 打开系统设置授权面板。默认「完全磁盘访问」（该 anchor 各版本均有效）；

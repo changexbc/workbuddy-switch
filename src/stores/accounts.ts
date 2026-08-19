@@ -10,7 +10,7 @@ interface AccountsState {
   fetchAll: () => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   importLocal: () => Promise<AccountMeta>;
-  upsertAccount: (acc: AccountMeta) => void;
+  reconcileAccounts: () => Promise<void>;
 }
 
 export const useAccountsStore = create<AccountsState>((set, get) => ({
@@ -36,19 +36,12 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
 
   async importLocal() {
     const res = await api.importLocal();
-    get().upsertAccount(res.account);
+    await get().reconcileAccounts();
     return res.account;
   },
 
-  upsertAccount(acc: AccountMeta) {
-    const accounts = get().accounts;
-    const idx = accounts.findIndex((a) => a.id === acc.id);
-    if (idx >= 0) {
-      const next = [...accounts];
-      next[idx] = acc;
-      set({ accounts: next });
-    } else {
-      set({ accounts: [...accounts, acc] });
-    }
+  async reconcileAccounts() {
+    const { accounts } = await api.getAccounts();
+    set({ accounts });
   },
 }));
