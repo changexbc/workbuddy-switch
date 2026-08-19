@@ -34,3 +34,6 @@ backups/
 *.sln
 *.sw?
 npm/platform/*/bin/
+
+# 个人开发工作流（trellis）
+.trellis/
