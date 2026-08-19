@@ -117,12 +117,17 @@ fn apply_dock_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) {
     }
 }
 
-/// Re-apply the bundled PNG as the Dock icon after returning to Regular.
+/// Re-apply the Dock icon after returning to Regular.
 ///
-/// `tauri dev` runs a binary named `exec`. After Accessory → Regular, macOS rebuilds
-/// the Dock tile from that file (black "exec" icon). Tauri only sets
-/// `setApplicationIconImage` once on `RunEvent::Ready`. `TransformProcessType` is
-/// asynchronous, so we also re-apply after a short delay.
+/// `TransformProcessType` rebuilds the Dock tile from the running executable.
+/// Packaged `.app` binaries have no icon of their own, and `tauri dev` is named
+/// `exec`, so both need an explicit restore. Tauri only sets
+/// `setApplicationIconImage` once on `RunEvent::Ready` (dev only).
+/// `TransformProcessType` is asynchronous, so we also re-apply after a short delay.
+///
+/// Do **not** feed the raw `icon.png` here: it is a full-bleed opaque square.
+/// `setApplicationIconImage` then bypasses the system squircle, which is why the
+/// Dock icon lost rounded corners and changed size after “打开主窗口”.
 #[cfg(target_os = "macos")]
 fn restore_macos_dock_icon<R: Runtime>(app: &AppHandle<R>) {
     let generation = DOCK_ICON_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
@@ -148,17 +153,51 @@ fn apply_macos_app_icon() {
     use objc2_app_kit::{NSApplication, NSImage};
     use objc2_foundation::NSData;
 
-    const APP_ICON_PNG: &[u8] =
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.png"));
-
     // SAFETY: tray / window events and run_on_main_thread all run on the AppKit main thread.
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
+
+    if let Some(icon) = macos_bundle_dock_icon() {
+        unsafe { app.setApplicationIconImage(Some(&icon)) };
+        return;
+    }
+
+    // `tauri dev` has no `.app` bundle; keep the PNG fallback so Dock is not "exec".
+    const APP_ICON_PNG: &[u8] =
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.png"));
     let data = NSData::with_bytes(APP_ICON_PNG);
     let Some(icon) = NSImage::initWithData(NSImage::alloc(), &data) else {
         return;
     };
     unsafe { app.setApplicationIconImage(Some(&icon)) };
+}
+
+/// Finder-composited app icon (system squircle already applied).
+#[cfg(target_os = "macos")]
+fn macos_bundle_dock_icon() -> Option<objc2::rc::Retained<objc2_app_kit::NSImage>> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::NSString;
+
+    let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let bundle = app_bundle_path_from_exe(&exe)?;
+    let path = NSString::from_str(&bundle.to_string_lossy());
+    Some(NSWorkspace::sharedWorkspace().iconForFile(&path))
+}
+
+/// `Foo.app/Contents/MacOS/binary` → `Foo.app`.
+#[cfg(any(target_os = "macos", test))]
+fn app_bundle_path_from_exe(exe: &std::path::Path) -> Option<&std::path::Path> {
+    let macos_dir = exe.parent()?;
+    if macos_dir.file_name()?.to_str()? != "MacOS" {
+        return None;
+    }
+    let contents = macos_dir.parent()?;
+    if contents.file_name()?.to_str()? != "Contents" {
+        return None;
+    }
+    let bundle = contents.parent()?;
+    (bundle.extension()?.to_str()? == "app").then_some(bundle)
 }
 
 fn toggle_lightweight<R: Runtime>(app: &AppHandle<R>) {
@@ -474,6 +513,32 @@ mod tests {
         assert!(!checkin_succeeded(&json!({
             "accounts": [{"result": "success"}, {"result": "error"}]
         })));
+    }
+
+    #[test]
+    fn app_bundle_path_from_packaged_exe() {
+        use std::path::Path;
+        let exe = Path::new("/Applications/workbuddy-switch.app/Contents/MacOS/wb-switch-rust");
+        assert_eq!(
+            super::app_bundle_path_from_exe(exe),
+            Some(Path::new("/Applications/workbuddy-switch.app"))
+        );
+    }
+
+    #[test]
+    fn app_bundle_path_none_outside_app_bundle() {
+        use std::path::Path;
+        assert!(super::app_bundle_path_from_exe(Path::new("/tmp/exec")).is_none());
+        assert!(
+            super::app_bundle_path_from_exe(Path::new("/Users/x/target/debug/wb-switch-rust"))
+                .is_none()
+        );
+        assert!(
+            super::app_bundle_path_from_exe(Path::new(
+                "/Applications/workbuddy-switch.app/Contents/Resources/icon.icns"
+            ))
+            .is_none()
+        );
     }
 
     #[test]

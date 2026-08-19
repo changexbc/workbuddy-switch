@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-switch-darwin-arm64",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "workbuddy-switch platform binary (darwin-arm64)",
   "os": ["darwin"],
   "cpu": ["arm64"],

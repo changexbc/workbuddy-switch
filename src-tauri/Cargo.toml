@@ -1,6 +1,6 @@
 [package]
 name = "wb-switch-rust"
-version = "0.1.16"
+version = "0.1.17"
 description = "wb-switch —— WorkBuddy 账号切换工具（Rust/Tauri 版）"
 authors = ["apple"]
 edition = "2021"
@@ -30,5 +30,5 @@ tauri-plugin-notification = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSString"] }
