@@ -69,7 +69,7 @@ pub fn default_checkin_config() -> Value {
         "enabled": false,
         "start_hour": 6,
         "end_hour": 12,
-        "keepalive_days": 10,
+        "keepalive_days": 0,
         "lazy_refresh_hours": 24,
     })
 }

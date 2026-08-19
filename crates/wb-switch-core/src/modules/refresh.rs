@@ -132,24 +132,28 @@ pub async fn ensure_fresh_token(mut account: Value, cfg: &Value) -> Value {
     account
 }
 
-/// 保活检查：对全部账号，token 剩余 < keepalive_days 或缺失时效时刷新。
+/// 保活检查：每天由后台循环调用一次，默认（keepalive_days <= 0）无条件刷新
+/// 全部带 refresh token 的账号；keepalive_days > 0 时仅刷新剩余不足该天数的账号。
 ///
-/// 由后台循环每天调用一次。成功续期让 refresh token 在 90 天窗口内始终有效。
+/// 高频保活是为了避免官方服务端清理闲置的 refresh 会话——曾出现闲置数天后
+/// 刷新返回 12153 invalid_grant（Session doesn't have required client）导致
+/// 账号被迫重新登录。
 pub async fn run_keepalive_cycle() -> Value {
     let Some(_guard) = RunFlagGuard::try_acquire(&KEEPALIVE_RUNNING) else {
         return json!({"skipped": "already_running"});
     };
     let cfg = load_checkin_config();
-    let keep_days = cfg.get("keepalive_days").and_then(|v| v.as_i64()).unwrap_or(10);
+    let keep_days = cfg.get("keepalive_days").and_then(|v| v.as_i64()).unwrap_or(0);
     let accounts = crate::modules::account::load_accounts();
     let total = accounts.len();
     let mut results: Vec<Value> = Vec::new();
     for mut acc in accounts {
         let exp = acc.get("expiresAt").and_then(|v| v.as_i64());
-        let stale = match exp {
-            Some(e) => now_ms() >= e || e - now_ms() < keep_days * 24 * 3600 * 1000,
-            None => true,
-        };
+        let stale = keep_days <= 0
+            || match exp {
+                Some(e) => now_ms() >= e || e - now_ms() < keep_days * 24 * 3600 * 1000,
+                None => true,
+            };
         if !stale {
             continue;
         }

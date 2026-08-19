@@ -169,11 +169,11 @@ function AutoCheckinCard() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="ac-keep">保活阈值（天）</Label>
+                <Label htmlFor="ac-keep">保活阈值（天，0=每天无条件刷新）</Label>
                 <Input
                   id="ac-keep"
                   type="number"
-                  min={1}
+                  min={0}
                   max={90}
                   value={cfg.keepalive_days}
                   onChange={(e) => setNum("keepalive_days", e.target.value)}
