@@ -366,7 +366,7 @@ async fn api_rotate_logs() -> Response {
 // ---------------------------------------------------------------------------
 
 async fn api_update_check() -> Response {
-    json_ok(update::update_check(None).await)
+    json_ok(update::update_check(None, false).await)
 }
 
 async fn api_update_config() -> Response {

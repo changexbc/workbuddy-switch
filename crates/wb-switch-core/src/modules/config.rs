@@ -395,3 +395,74 @@ pub async fn http_request_with_proxy(
         Err(e) => json!({"code": -1, "message": e.to_string()}),
     }
 }
+
+/// 通用 HTTP 请求，返回原始响应（状态码 + 响应头 + 响应体），可选是否跟随重定向。
+///
+/// 供需要读取响应头（如 302 的 `Location`）或自行处理非 JSON 响应的场景使用；
+/// 其余场景优先用 [`http_request_with_proxy`]。失败（网络错误 / 代理配置错误）
+/// 返回 `(0, HashMap::new(), 错误信息)`，由调用方根据 status 判断。
+pub async fn http_request_raw(
+    url: &str,
+    method: &str,
+    body: Option<Value>,
+    headers: Option<&HashMap<String, String>>,
+    proxy: Option<&str>,
+    follow_redirects: bool,
+) -> (u16, HashMap<String, String>, String) {
+    let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
+    let client = match proxy.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(proxy) => {
+            let mut builder = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .proxy(match reqwest::Proxy::all(proxy) {
+                    Ok(proxy) => proxy,
+                    Err(e) => return (0, HashMap::new(), format!("代理地址无效: {e}")),
+                });
+            if !follow_redirects {
+                builder = builder.redirect(reqwest::redirect::Policy::none());
+            }
+            match builder.build() {
+                Ok(client) => client,
+                Err(e) => return (0, HashMap::new(), format!("代理客户端创建失败: {e}")),
+            }
+        }
+        None => {
+            if follow_redirects {
+                http_client().clone()
+            } else {
+                match reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(e) => return (0, HashMap::new(), format!("客户端创建失败: {e}")),
+                }
+            }
+        }
+    };
+    let mut req = client.request(method, url);
+    req = req.header("Content-Type", "application/json");
+    if let Some(h) = headers {
+        for (k, v) in h {
+            req = req.header(k, v);
+        }
+    }
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let mut resp_headers = HashMap::new();
+            for (k, v) in resp.headers() {
+                if let Ok(vs) = v.to_str() {
+                    resp_headers.insert(k.as_str().to_string(), vs.to_string());
+                }
+            }
+            let text = resp.text().await.unwrap_or_default();
+            (status, resp_headers, text)
+        }
+        Err(e) => (0, HashMap::new(), e.to_string()),
+    }
+}

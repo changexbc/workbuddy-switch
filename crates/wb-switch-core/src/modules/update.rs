@@ -2,19 +2,37 @@
 //!
 //! 对照 server.py `load_github_config` / `save_github_config` /
 //! `compare_versions` / `update_check`。下载安装走 tauri-plugin-updater（整包更新）。
+//!
+//! 版本检查不走 GitHub API（避免 60 次/小时/IP 限流）：
+//! 1. 主端点：release 资产的 updater manifest（下载不计 API 配额）；
+//! 2. 兜底端点：`/releases/latest` 的 302 `Location` 头解析 tag；
+//! 3. 成功结果进程级缓存 6 小时，缓存命中不发网络请求。
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crate::modules::config::{
-    atomic_write, http_request_with_proxy, now_secs, store_dir,
+    atomic_write, http_request_raw, http_request_with_proxy, now_secs, store_dir,
 };
 
 /// 应用当前版本（来自 Cargo.toml package.version）。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GITHUB_OWNER: &str = "changexbc";
 pub const GITHUB_REPO: &str = "workbuddy-switch";
+
+/// 成功结果缓存有效期（6 小时）。自动轮询（30 分钟）命中缓存，不发网络请求；
+/// 设置页手动检查传 force=true 绕过缓存强制刷新。
+const CACHE_TTL_SECS: i64 = 6 * 60 * 60;
+
+/// 进程级内存缓存，只缓存 ok=true 的结果；失败不写缓存。
+struct CachedCheck {
+    checked_at: i64,
+    value: Value,
+}
+
+static CACHE: Mutex<Option<CachedCheck>> = Mutex::new(None);
 
 pub fn github_config_file() -> PathBuf {
     store_dir().join("github_config.json")
@@ -108,11 +126,107 @@ pub fn compare_versions(a: &str, b: &str) -> i64 {
     0
 }
 
+/// manifest 端点 URL：release 资产下载不计 GitHub API 配额。
+fn manifest_url(owner: &str, repo: &str) -> String {
+    let arch = std::env::consts::ARCH;
+    format!("https://github.com/{owner}/{repo}/releases/latest/download/latest-macos-{arch}.json")
+}
+
+/// 主端点：拉取 updater manifest。成功返回解析后的 JSON（含 version / pub_date），
+/// 失败返回可读错误信息。
+async fn fetch_manifest_version(
+    owner: &str,
+    repo: &str,
+    proxy: Option<&str>,
+) -> Result<Value, String> {
+    let url = manifest_url(owner, repo);
+    let mut headers = HashMap::new();
+    headers.insert("Accept".to_string(), "application/json".to_string());
+    headers.insert("User-Agent".to_string(), "wb-switch".to_string());
+    let resp = http_request_with_proxy(&url, "GET", None, Some(&headers), proxy).await;
+
+    let version = resp.get("version").and_then(|v| v.as_str()).unwrap_or("");
+    if version.trim().is_empty() {
+        let msg = resp
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("更新清单解析失败");
+        return Err(msg.to_string());
+    }
+    Ok(resp)
+}
+
+/// 兜底端点：请求 `/releases/latest`，读 302 `Location` 头（形如
+/// `.../releases/tag/v0.1.13`）解析 tag。不跟随重定向，避免拉到 HTML 页面。
+/// 成功返回 tag，失败返回可读错误 + code（状态码或 -1）。
+async fn fetch_latest_tag(
+    owner: &str,
+    repo: &str,
+    proxy: Option<&str>,
+) -> Result<String, (String, i64)> {
+    let url = format!("https://github.com/{owner}/{repo}/releases/latest");
+    let mut headers = HashMap::new();
+    headers.insert("Accept".to_string(), "text/html".to_string());
+    headers.insert("User-Agent".to_string(), "wb-switch".to_string());
+    let (status, resp_headers, body) =
+        http_request_raw(&url, "GET", None, Some(&headers), proxy, false).await;
+
+    if status == 0 {
+        let msg = if body.trim().is_empty() {
+            "网络请求失败".to_string()
+        } else {
+            body
+        };
+        return Err((msg, -1));
+    }
+    if status == 404 {
+        // 无正式 release 或仓库不存在。
+        return Err(("未找到可用的发布版本".to_string(), 404));
+    }
+    let location = resp_headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+        .map(|(_, v)| v.clone());
+    let location = match location {
+        Some(location) => location,
+        None => {
+            return Err((
+                format!("无法获取发布页跳转地址（HTTP {status}）"),
+                status as i64,
+            ))
+        }
+    };
+    let tag = location.rsplit('/').next().unwrap_or("").trim().to_string();
+    if tag.is_empty() || !location.contains("/releases/tag/") {
+        return Err(("无法解析发布版本标签".to_string(), -1));
+    }
+    Ok(tag)
+}
+
 /// 查询最新 Release，与本地版本对比。对照 server.py `update_check`。
-pub async fn update_check(proxy: Option<&str>) -> Value {
+///
+/// `force=true` 绕过缓存强制刷新（设置页手动检查）；否则 6 小时内成功结果直接返回，
+/// 不发网络请求。主端点 manifest 失败时自动走 302 兜底；两个端点都失败返回可读错误。
+pub async fn update_check(proxy: Option<&str>, force: bool) -> Value {
+    if !force {
+        if let Some(cached) = CACHE.lock().unwrap().as_ref() {
+            if now_secs() - cached.checked_at < CACHE_TTL_SECS {
+                return cached.value.clone();
+            }
+        }
+    }
+
     let cfg = load_github_config();
-    let owner = cfg.get("owner").and_then(|v| v.as_str()).unwrap_or("");
-    let repo = cfg.get("repo").and_then(|v| v.as_str()).unwrap_or("");
+    let owner = cfg
+        .get("owner")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let repo = cfg
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let configured_proxy = cfg
         .get("proxy")
         .and_then(|v| v.as_str())
@@ -120,66 +234,69 @@ pub async fn update_check(proxy: Option<&str>) -> Value {
         .filter(|v| !v.is_empty());
     let proxy = proxy.or(configured_proxy);
     let release_url = format!("https://github.com/{owner}/{repo}/releases/latest");
+    let current = APP_VERSION.to_string();
 
-    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let mut headers = HashMap::new();
-    headers.insert("Accept".to_string(), "application/vnd.github+json".to_string());
-    headers.insert("User-Agent".to_string(), "wb-switch".to_string());
-    let resp = http_request_with_proxy(&url, "GET", None, Some(&headers), proxy).await;
-
-    let tag = resp.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
-    if tag.is_empty() {
-        let msg = resp
-            .get("message")
+    // 主端点：updater manifest（release 资产下载，不计 GitHub API 配额）。
+    if let Ok(manifest) = fetch_manifest_version(&owner, &repo, proxy).await {
+        let version = manifest
+            .get("version")
             .and_then(|v| v.as_str())
-            .unwrap_or("查询失败");
-        let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
-        return json!({
+            .unwrap_or("")
+            .trim();
+        let latest = version.strip_prefix('v').unwrap_or(version).to_string();
+        let tag = format!("v{latest}");
+        let release_name = manifest
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&tag)
+            .to_string();
+        let published_at = manifest
+            .get("pub_date")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let value = json!({
+            "ok": true,
+            "current": current,
+            "latest": latest,
+            "latestTag": tag,
+            "hasUpdate": compare_versions(&latest, &current) > 0,
+            "releaseName": release_name,
+            "releaseUrl": release_url,
+            "publishedAt": published_at,
+            "checkedAt": now_secs(),
+        });
+        *CACHE.lock().unwrap() = Some(CachedCheck {
+            checked_at: now_secs(),
+            value: value.clone(),
+        });
+        return value;
+    }
+
+    // 兜底端点：`/releases/latest` 的 302 Location 头解析 tag（仅 manifest 失败时）。
+    match fetch_latest_tag(&owner, &repo, proxy).await {
+        Ok(tag) => {
+            let latest = tag.strip_prefix('v').unwrap_or(&tag).to_string();
+            let value = json!({
+                "ok": true,
+                "current": current,
+                "latest": latest,
+                "latestTag": tag,
+                "hasUpdate": compare_versions(&latest, &current) > 0,
+                "releaseName": tag.clone(),
+                "releaseUrl": release_url,
+                "checkedAt": now_secs(),
+            });
+            *CACHE.lock().unwrap() = Some(CachedCheck {
+                checked_at: now_secs(),
+                value: value.clone(),
+            });
+            value
+        }
+        Err((msg, code)) => json!({
             "ok": false,
             "error": msg,
             "message": format!("{msg}（code={code}）"),
             "releaseUrl": release_url,
-        });
+        }),
     }
-
-    let latest = tag.strip_prefix('v').unwrap_or(tag).to_string();
-    let current = APP_VERSION.to_string();
-    let assets: Vec<Value> = resp
-        .get("assets")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter(|a| {
-                    // Rust 版整包更新产物：.tar.gz 签名包 + .sig + 版本清单
-                    a.get("name")
-                        .and_then(|n| n.as_str())
-                        .map(|s| {
-                            s.ends_with(".tar.gz") || s.ends_with(".sig") || s.starts_with("latest-")
-                        })
-                        .unwrap_or(false)
-                })
-                .map(|a| {
-                    json!({
-                        "id": a.get("id"),
-                        "name": a.get("name"),
-                        "size": a.get("size"),
-                        "url": a.get("browser_download_url"),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    json!({
-        "ok": true,
-        "current": current,
-        "latest": latest,
-        "latestTag": tag,
-        "hasUpdate": compare_versions(&latest, &current) > 0,
-        "assets": assets,
-        "releaseName": resp.get("name").and_then(|v| v.as_str()).unwrap_or(tag).to_string(),
-        "releaseUrl": resp.get("html_url").and_then(|v| v.as_str()).unwrap_or(&release_url),
-        "publishedAt": resp.get("published_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        "checkedAt": now_secs(),
-    })
 }

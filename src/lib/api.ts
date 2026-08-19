@@ -294,8 +294,8 @@ export function saveGithubConfig(config: GithubConfig): Promise<GithubConfig> {
   });
 }
 
-export function checkUpdate(proxy?: string): Promise<UpdateInfo> {
-  return call("check_update", { proxy: proxy?.trim() || null });
+export function checkUpdate(proxy?: string, force?: boolean): Promise<UpdateInfo> {
+  return call("check_update", { proxy: proxy?.trim() || null, force: force ?? false });
 }
 
 export function relaunchApp(): Promise<void> {

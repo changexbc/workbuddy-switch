@@ -344,9 +344,10 @@ pub fn save_github_config(config: Value) -> Result<Value, String> {
 }
 
 /// GET /api/update/check —— 检查 GitHub Releases 是否有新版本。
+/// force=true 时绕过缓存强制刷新（设置页手动检查）。
 #[tauri::command]
-pub async fn check_update(proxy: Option<String>) -> Value {
-    update::update_check(proxy.as_deref()).await
+pub async fn check_update(proxy: Option<String>, force: Option<bool>) -> Value {
+    update::update_check(proxy.as_deref(), force.unwrap_or(false)).await
 }
 
 /// 启动当前应用的新进程并退出旧进程，用于更新安装完成后的立即重启。

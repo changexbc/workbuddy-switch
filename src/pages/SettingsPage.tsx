@@ -636,7 +636,7 @@ function UpdateCard() {
     setChecking(true);
     setMsg(null);
     try {
-      const r = await api.checkUpdate(proxyUrl);
+      const r = await api.checkUpdate(proxyUrl, true);
       setInfo(r);
       if (!r.ok) {
         setMsg({ type: "err", text: r.message || r.error || "检查失败" });
