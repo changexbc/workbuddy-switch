@@ -111,7 +111,7 @@ webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动
 
 ## 致谢
 
-感谢 [Linux.do](https://linux.do) 社区与各位坛友的交流和支持。
+感谢 [Linux.do](https://linux.do) 社区。
 
 ## 许可
 
