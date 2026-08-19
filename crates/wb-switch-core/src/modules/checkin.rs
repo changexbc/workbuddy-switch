@@ -12,8 +12,8 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::modules::account::{account_display_name, build_auth_headers, load_accounts};
 use crate::modules::config::{
-    add_checkin_log, http_request, load_checkin_config, now_ms, RunFlagGuard, CHECKIN_API_PREFIX,
-    WORKBUDDY_API_ENDPOINT,
+    add_checkin_log, http_request, load_checkin_config, load_checkin_logs, now_ms, RunFlagGuard,
+    CHECKIN_API_PREFIX, WORKBUDDY_API_ENDPOINT,
 };
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 
@@ -252,6 +252,37 @@ pub async fn run_checkin_cycle() -> Value {
     summary
 }
 
+/// True when every stored account has a today's log of `success` or `already`.
+///
+/// Empty account list is false so the tray keeps offering 一键签到.
+pub fn all_accounts_checked_in_today() -> bool {
+    accounts_checked_in_today(&load_accounts(), &load_checkin_logs(), &date_str(None))
+}
+
+pub fn accounts_checked_in_today(accounts: &[Value], logs: &[Value], today: &str) -> bool {
+    if accounts.is_empty() {
+        return false;
+    }
+    accounts.iter().all(|account| {
+        let Some(id) = account.get("id").and_then(Value::as_str) else {
+            return false;
+        };
+        latest_today_result(logs, id, today)
+            .map(|result| result == "success" || result == "already")
+            .unwrap_or(false)
+    })
+}
+
+fn latest_today_result<'a>(logs: &'a [Value], account_id: &str, today: &str) -> Option<&'a str> {
+    logs.iter()
+        .rev()
+        .find(|entry| {
+            entry.get("accountId").and_then(Value::as_str) == Some(account_id)
+                && date_str(entry.get("ts").and_then(Value::as_i64)) == today
+        })
+        .and_then(|entry| entry.get("result").and_then(Value::as_str))
+}
+
 /// 对全部账号立即签到（前端一键签到）。
 pub async fn run_checkin_all() -> Value {
     let accounts = load_accounts();
@@ -293,5 +324,34 @@ mod tests {
         assert!(is_unauthorized(&json!({"code": 401})));
         assert!(is_unauthorized(&json!({"code": 403})));
         assert!(!is_unauthorized(&json!({"code": 0})));
+    }
+
+    #[test]
+    fn checked_in_today_requires_every_account() {
+        let accounts = vec![json!({"id": "a"}), json!({"id": "b"})];
+        let logs = vec![
+            json!({"accountId": "a", "result": "success", "ts": 1_700_000_000_000_i64}),
+            json!({"accountId": "b", "result": "already", "ts": 1_700_000_100_000_i64}),
+        ];
+        let today = date_str(Some(1_700_000_000_000));
+        assert!(accounts_checked_in_today(&accounts, &logs, &today));
+    }
+
+    #[test]
+    fn checked_in_today_false_when_one_failed_last() {
+        let accounts = vec![json!({"id": "a"})];
+        let logs = vec![
+            json!({"accountId": "a", "result": "success", "ts": 1_700_000_000_000_i64}),
+            json!({"accountId": "a", "result": "error", "ts": 1_700_000_200_000_i64}),
+        ];
+        let today = date_str(Some(1_700_000_200_000));
+        assert!(!accounts_checked_in_today(&accounts, &logs, &today));
+    }
+
+    #[test]
+    fn checked_in_today_false_when_empty_or_missing() {
+        assert!(!accounts_checked_in_today(&[], &[], "2026-08-19"));
+        let accounts = vec![json!({"id": "a"})];
+        assert!(!accounts_checked_in_today(&accounts, &[], "2026-08-19"));
     }
 }

@@ -1,0 +1,492 @@
+//! Desktop tray: menu-bar icon, dock visibility, lightweight mode, and check-in.
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+
+use serde_json::Value;
+use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager, RunEvent, Runtime, WebviewWindowBuilder, Window, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
+use wb_switch_core::modules::{checkin, update};
+
+const TRAY_ID: &str = "main-menu-bar";
+const MAIN_WINDOW_LABEL: &str = "main";
+const DEFAULT_TOOLTIP: &str = "workbuddy-switch";
+const CHECKIN_TOOLTIP_RESTORE_SECS: u64 = 8;
+
+static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
+static CHECKIN_BUSY: AtomicBool = AtomicBool::new(false);
+static TOOLTIP_GENERATION: AtomicU64 = AtomicU64::new(0);
+static DOCK_ICON_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
+    let menu = build_tray_menu(app)?;
+
+    TrayIconBuilder::with_id(TRAY_ID)
+        .icon(menu_bar_icon())
+        .icon_as_template(true)
+        .tooltip(DEFAULT_TOOLTIP)
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open-main-window" => show_main_window(app),
+            "open-github" => open_github(app),
+            "checkin-all" => start_checkin_all(app),
+            "lightweight-mode" => toggle_lightweight(app),
+            "quit-app" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
+pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
+    if window.label() != MAIN_WINDOW_LABEL {
+        return;
+    }
+    if let WindowEvent::CloseRequested { api, .. } = event {
+        api.prevent_close();
+        let _ = window.hide();
+        apply_dock_visible(window.app_handle(), false);
+    }
+}
+
+/// Keep the tray process alive when the last window is destroyed (lightweight mode).
+///
+/// `code == None` is Tauri's runtime exit after zero windows remain.
+/// `code == Some(_)` is an explicit `app.exit()` / restart — let those through.
+pub fn on_run_event(event: RunEvent) {
+    if let RunEvent::ExitRequested { api, code, .. } = event {
+        if should_keep_tray_alive(code) {
+            api.prevent_exit();
+        }
+    }
+}
+
+fn should_keep_tray_alive(code: Option<i32>) -> bool {
+    code.is_none()
+}
+
+fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    // Recreate if the WebView is gone even when the flag is already false
+    // (e.g. destroy() completed after a failed lightweight toggle).
+    if LIGHTWEIGHT_MODE.load(Ordering::Acquire)
+        || app.get_webview_window(MAIN_WINDOW_LABEL).is_none()
+    {
+        exit_lightweight(app);
+        return;
+    }
+    apply_dock_visible(app, true);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    allow(unused_variables)
+)]
+fn apply_dock_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::ActivationPolicy;
+        let policy = if visible {
+            ActivationPolicy::Regular
+        } else {
+            ActivationPolicy::Accessory
+        };
+        let _ = app.set_dock_visibility(visible);
+        let _ = app.set_activation_policy(policy);
+        if visible {
+            restore_macos_dock_icon(app);
+        } else {
+            DOCK_ICON_GENERATION.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+            let _ = window.set_skip_taskbar(!visible);
+        }
+    }
+}
+
+/// Re-apply the bundled PNG as the Dock icon after returning to Regular.
+///
+/// `tauri dev` runs a binary named `exec`. After Accessory → Regular, macOS rebuilds
+/// the Dock tile from that file (black "exec" icon). Tauri only sets
+/// `setApplicationIconImage` once on `RunEvent::Ready`. `TransformProcessType` is
+/// asynchronous, so we also re-apply after a short delay.
+#[cfg(target_os = "macos")]
+fn restore_macos_dock_icon<R: Runtime>(app: &AppHandle<R>) {
+    let generation = DOCK_ICON_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    apply_macos_app_icon();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if DOCK_ICON_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        let _ = app.run_on_main_thread(move || {
+            if DOCK_ICON_GENERATION.load(Ordering::Acquire) == generation {
+                apply_macos_app_icon();
+            }
+        });
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_app_icon() {
+    use objc2::AllocAnyThread;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    const APP_ICON_PNG: &[u8] =
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.png"));
+
+    // SAFETY: tray / window events and run_on_main_thread all run on the AppKit main thread.
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
+    let data = NSData::with_bytes(APP_ICON_PNG);
+    let Some(icon) = NSImage::initWithData(NSImage::alloc(), &data) else {
+        return;
+    };
+    unsafe { app.setApplicationIconImage(Some(&icon)) };
+}
+
+fn toggle_lightweight<R: Runtime>(app: &AppHandle<R>) {
+    if LIGHTWEIGHT_MODE.load(Ordering::Acquire) {
+        exit_lightweight(app);
+    } else {
+        enter_lightweight(app);
+    }
+}
+
+fn enter_lightweight<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        if window.destroy().is_err() {
+            // CheckMenuItem may have already toggled visually; restore it.
+            refresh_tray_menu(app);
+            return;
+        }
+    }
+    apply_dock_visible(app, false);
+    LIGHTWEIGHT_MODE.store(true, Ordering::Release);
+    refresh_tray_menu(app);
+}
+
+fn exit_lightweight<R: Runtime>(app: &AppHandle<R>) {
+    // Regular / dock first so a from_config window is not created while Accessory.
+    apply_dock_visible(app, true);
+    if app.get_webview_window(MAIN_WINDOW_LABEL).is_none() {
+        let Some(config) = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|window| window.label == MAIN_WINDOW_LABEL)
+            .cloned()
+        else {
+            apply_dock_visible(app, false);
+            refresh_tray_menu(app);
+            return;
+        };
+        if WebviewWindowBuilder::from_config(app, &config)
+            .and_then(|builder| builder.build())
+            .is_err()
+        {
+            apply_dock_visible(app, false);
+            refresh_tray_menu(app);
+            return;
+        }
+    }
+    // Window exists now: Windows skip_taskbar was a no-op before recreate.
+    apply_dock_visible(app, true);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    LIGHTWEIGHT_MODE.store(false, Ordering::Release);
+    refresh_tray_menu(app);
+}
+
+fn open_github<R: Runtime>(app: &AppHandle<R>) {
+    let url = format!(
+        "https://github.com/{}/{}",
+        update::GITHUB_OWNER,
+        update::GITHUB_REPO
+    );
+    let _ = app.opener().open_url(url, None::<&str>);
+}
+
+struct CheckinBusyGuard<R: Runtime> {
+    app: AppHandle<R>,
+}
+
+impl<R: Runtime> Drop for CheckinBusyGuard<R> {
+    fn drop(&mut self) {
+        CHECKIN_BUSY.store(false, Ordering::Release);
+        refresh_tray_menu(&self.app);
+    }
+}
+
+fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
+    if CHECKIN_BUSY
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    bump_tooltip_generation();
+    refresh_tray_menu(app);
+    set_tray_tooltip(app, "正在签到…");
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _busy = CheckinBusyGuard { app: app.clone() };
+        let payload = checkin::run_checkin_all().await;
+        let text = format_checkin_tooltip(&payload);
+        if checkin_succeeded(&payload) {
+            notify_checkin(&app, &text);
+        } else {
+            let generation = bump_tooltip_generation();
+            set_tray_tooltip(&app, &text);
+            restore_tooltip_after(app, generation);
+        }
+    });
+}
+
+fn notify_checkin<R: Runtime>(app: &AppHandle<R>, body: &str) {
+    let _ = app
+        .notification()
+        .builder()
+        .title("workbuddy-switch")
+        .body(body)
+        .show();
+}
+
+fn checkin_succeeded(value: &Value) -> bool {
+    let Some(accounts) = value.get("accounts").and_then(Value::as_array) else {
+        return false;
+    };
+    !accounts.is_empty()
+        && accounts.iter().all(|account| {
+            matches!(
+                account.get("result").and_then(Value::as_str),
+                Some("success" | "already")
+            )
+        })
+}
+
+fn restore_tooltip_after<R: Runtime>(app: AppHandle<R>, generation: u64) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(CHECKIN_TOOLTIP_RESTORE_SECS)).await;
+        if TOOLTIP_GENERATION.load(Ordering::Acquire) == generation {
+            set_tray_tooltip(&app, DEFAULT_TOOLTIP);
+        }
+    });
+}
+
+fn bump_tooltip_generation() -> u64 {
+    TOOLTIP_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+fn set_tray_tooltip<R: Runtime>(app: &AppHandle<R>, text: &str) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
+fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) {
+    let Ok(menu) = build_tray_menu(app) else {
+        return;
+    };
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
+    let open_item = MenuItem::with_id(app, "open-main-window", "打开主界面", true, None::<&str>)?;
+    let github_item = MenuItem::with_id(app, "open-github", "打开 GitHub", true, None::<&str>)?;
+    let checked_in = checkin::all_accounts_checked_in_today();
+    let (checkin_label, checkin_enabled) = if CHECKIN_BUSY.load(Ordering::Acquire) {
+        ("一键签到", false)
+    } else if checked_in {
+        ("已签到", false)
+    } else {
+        ("一键签到", true)
+    };
+    let checkin_item = MenuItem::with_id(
+        app,
+        "checkin-all",
+        checkin_label,
+        checkin_enabled,
+        None::<&str>,
+    )?;
+    let lightweight_item = CheckMenuItem::with_id(
+        app,
+        "lightweight-mode",
+        "轻量模式",
+        true,
+        LIGHTWEIGHT_MODE.load(Ordering::Acquire),
+        None::<&str>,
+    )?;
+    let quit_item = MenuItem::with_id(app, "quit-app", "退出应用", true, None::<&str>)?;
+
+    MenuBuilder::new(app)
+        .item(&open_item)
+        .item(&github_item)
+        .item(&checkin_item)
+        .separator()
+        .item(&lightweight_item)
+        .separator()
+        .item(&quit_item)
+        .build()
+}
+
+fn set_icon_pixel(pixels: &mut [u8], size: i32, x: i32, y: i32) {
+    if x < 0 || y < 0 || x >= size || y >= size {
+        return;
+    }
+    let offset = ((y * size + x) * 4) as usize;
+    pixels[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
+}
+
+fn draw_disc(pixels: &mut [u8], size: i32, cx: i32, cy: i32, radius: i32) {
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= radius * radius {
+                set_icon_pixel(pixels, size, x, y);
+            }
+        }
+    }
+}
+
+fn draw_segment(pixels: &mut [u8], size: i32, x1: i32, y1: i32, x2: i32, y2: i32, width: i32) {
+    let steps = (x2 - x1).abs().max((y2 - y1).abs()) * 2;
+    let radius = width / 2;
+    for step in 0..=steps {
+        let progress = step as f32 / steps.max(1) as f32;
+        let x = (x1 as f32 + (x2 - x1) as f32 * progress).round() as i32;
+        let y = (y1 as f32 + (y2 - y1) as f32 * progress).round() as i32;
+        draw_disc(pixels, size, x, y, radius);
+    }
+}
+
+/// Monochrome two-way switch glyph used as the macOS menu-bar template icon.
+fn menu_bar_icon() -> tauri::image::Image<'static> {
+    let size = 36;
+    let mut pixels = vec![0; (size * size * 4) as usize];
+
+    draw_segment(&mut pixels, size, 8, 10, 25, 10, 4);
+    draw_segment(&mut pixels, size, 25, 10, 20, 5, 4);
+    draw_segment(&mut pixels, size, 25, 10, 20, 15, 4);
+    draw_segment(&mut pixels, size, 28, 26, 11, 26, 4);
+    draw_segment(&mut pixels, size, 11, 26, 16, 21, 4);
+    draw_segment(&mut pixels, size, 11, 26, 16, 31, 4);
+
+    tauri::image::Image::new_owned(pixels, size as u32, size as u32)
+}
+
+fn format_checkin_tooltip(value: &Value) -> String {
+    let Some(accounts) = value.get("accounts").and_then(Value::as_array) else {
+        return "没有可签到的账号".to_string();
+    };
+    if accounts.is_empty() {
+        return "没有可签到的账号".to_string();
+    }
+
+    let mut ok = 0;
+    let mut already = 0;
+    let mut err = 0;
+    for account in accounts {
+        match account.get("result").and_then(Value::as_str) {
+            Some("success") => ok += 1,
+            Some("already") => already += 1,
+            Some("error") => err += 1,
+            _ => {}
+        }
+    }
+    format!("签到完成：成功 {ok}，已签 {already}，失败 {err}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_checkin_tooltip, should_keep_tray_alive};
+    use serde_json::json;
+
+    #[test]
+    fn runtime_exit_with_no_code_keeps_tray() {
+        assert!(should_keep_tray_alive(None));
+        assert!(!should_keep_tray_alive(Some(0)));
+    }
+
+    #[test]
+    fn tooltip_when_no_accounts() {
+        assert_eq!(
+            format_checkin_tooltip(&json!({"accounts": []})),
+            "没有可签到的账号"
+        );
+    }
+
+    #[test]
+    fn tooltip_when_accounts_missing() {
+        assert_eq!(format_checkin_tooltip(&json!({})), "没有可签到的账号");
+    }
+
+    #[test]
+    fn tooltip_summarizes_success_already_error() {
+        let payload = json!({
+            "accounts": [
+                {"result": "success"},
+                {"result": "success"},
+                {"result": "already"},
+                {"result": "error"},
+                {"result": "error"},
+                {"result": "error"}
+            ]
+        });
+        assert_eq!(
+            format_checkin_tooltip(&payload),
+            "签到完成：成功 2，已签 1，失败 3"
+        );
+    }
+
+    #[test]
+    fn checkin_succeeded_requires_all_ok() {
+        use super::checkin_succeeded;
+        assert!(!checkin_succeeded(&json!({})));
+        assert!(!checkin_succeeded(&json!({"accounts": []})));
+        assert!(checkin_succeeded(&json!({
+            "accounts": [{"result": "success"}, {"result": "already"}]
+        })));
+        assert!(!checkin_succeeded(&json!({
+            "accounts": [{"result": "success"}, {"result": "error"}]
+        })));
+    }
+
+    #[test]
+    fn tooltip_ignores_unknown_results() {
+        let payload = json!({
+            "accounts": [
+                {"result": "success"},
+                {"result": "skipped"},
+                {"result": null}
+            ]
+        });
+        assert_eq!(
+            format_checkin_tooltip(&payload),
+            "签到完成：成功 1，已签 0，失败 0"
+        );
+    }
+}

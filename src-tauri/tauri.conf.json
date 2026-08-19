@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "workbuddy-switch · WorkBuddy 账号切换",
         "width": 1000,
         "height": 720,
