@@ -1,10 +1,13 @@
 pub mod account;
 pub mod auth_file;
 pub mod checkin;
+pub mod codebuddy_cli;
 pub mod config;
+pub mod credits;
 pub mod oauth;
 pub mod process;
 pub mod refresh;
+pub mod rotate;
 pub mod session;
 pub mod switch;
 pub mod update;

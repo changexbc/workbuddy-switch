@@ -99,6 +99,93 @@ export interface CheckinResult {
   error?: string;
 }
 
+export interface AutoRotateConfig {
+  enabled: boolean;
+  check_interval_minutes: number;
+  cooldown_minutes: number;
+  min_gap_hours: number;
+  min_urgency_hours: number;
+  active_guard_minutes: number;
+  min_remaining_credits: number;
+}
+
+export interface RotateLog {
+  ts: number;
+  action: string;
+  reason?: string | null;
+  from?: { id: string; name?: string | null } | null;
+  to?: { id: string; name?: string | null } | null;
+}
+
+export interface RotateStatus {
+  config: AutoRotateConfig;
+  cliConfigured: boolean;
+  activeAccountId: string | null;
+  activeAccountName: string | null;
+  lastCheckAt: number | null;
+  lastSwitchAt: number | null;
+}
+
+export interface CreditResource {
+  packageCode: string | null;
+  packageName: string | null;
+  total: number;
+  remaining: number;
+  used: number;
+  status: number | null;
+  expireAt: number | null;
+  expired: boolean;
+  expiringSoon: boolean;
+}
+
+export interface CreditExpiry {
+  ok: boolean;
+  accountId?: string | null;
+  accountName?: string;
+  updatedAt?: number;
+  totalRemaining?: number;
+  expiringSoonRemaining?: number;
+  expiredRemaining?: number;
+  soonestExpireAt?: number | null;
+  expiringSoon?: boolean;
+  expired?: boolean;
+  resources?: CreditResource[];
+  error?: string;
+}
+
+export interface CodeBuddyCliStatus {
+  configured: boolean;
+  settingsPresent: boolean;
+  helperPresent: boolean;
+  helperSupportsAccountIds: boolean;
+  activeIndex: number | null;
+  activeAccountId: string | null;
+  activeAccountName: string | null;
+  accountCount: number;
+  statePath: string;
+}
+
+export interface CodeBuddyCliSwitchResult {
+  ok: boolean;
+  configured: boolean;
+  synced: boolean;
+  activeIndex?: number;
+  activeAccountId?: string;
+  source?: string;
+  skipped?: boolean;
+  message?: string;
+  error?: string;
+}
+
+export interface CodeBuddyCliInstallResult {
+  ok: boolean;
+  configured: boolean;
+  helperPresent: boolean;
+  helperSupportsAccountIds: boolean;
+  message?: string;
+  error?: string;
+}
+
 export interface GithubConfig {
   owner?: string;
   repo?: string;

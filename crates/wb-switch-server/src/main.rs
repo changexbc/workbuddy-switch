@@ -11,10 +11,35 @@ mod api;
 
 use serde_json::json;
 
-use wb_switch_core::modules::{account, auth_file, process, update};
+use wb_switch_core::modules::{
+    account, auth_file, config, process, rotate, update,
+};
 
 fn default_port() -> u16 {
     57890
+}
+
+/// 后台轮询任务：自动轮换（CodeBuddy CLI 账号）按配置间隔执行。
+fn spawn_background_loops() {
+    tokio::spawn(async move {
+        let mut last_cycle_at: i64 = 0;
+        loop {
+            let cfg = config::load_auto_rotate_config();
+            if cfg.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
+                let interval_minutes = cfg
+                    .get("check_interval_minutes")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(5)
+                    .max(1);
+                let now = config::now_ms();
+                if now - last_cycle_at >= interval_minutes * 60_000 {
+                    last_cycle_at = now;
+                    let _ = rotate::run_rotate_cycle().await;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
 }
 
 fn print_status() {
@@ -83,6 +108,8 @@ async fn serve(args: &[String]) {
     if !no_open {
         open_browser(&addr);
     }
+
+    spawn_background_loops();
 
     axum::serve(listener, app).await.unwrap();
 }

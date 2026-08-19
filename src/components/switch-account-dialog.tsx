@@ -276,6 +276,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
                 ? ` 已复制 ${result.sessionCopy.copied.length} 个会话`
                 : ""}
               {result.backup ? ` 认证文件备份：${result.backup}` : ""}
+              {" CodeBuddy CLI 保持原当前账号；如需切换，请在对应账号卡片上单独点击 CLI 切换。"}
             </AlertDescription>
           </Alert>
         )}

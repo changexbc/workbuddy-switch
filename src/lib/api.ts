@@ -2,14 +2,21 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountMeta,
   AppStatus,
+  AutoRotateConfig,
+  CodeBuddyCliInstallResult,
+  CodeBuddyCliStatus,
+  CodeBuddyCliSwitchResult,
   CheckinConfig,
   CheckinLog,
   CheckinResult,
+  CreditExpiry,
   CopyResult,
   GithubConfig,
   ManualAddArgs,
   OAuthPollResult,
   OAuthStartResult,
+  RotateLog,
+  RotateStatus,
   Session,
   SwitchResult,
   UpdateInfo,
@@ -32,6 +39,9 @@ type Route = { method: "GET" | "POST"; path: string };
 const ROUTES: Record<string, Route> = {
   get_status: { method: "GET", path: "/api/status" },
   get_accounts: { method: "GET", path: "/api/accounts" },
+  get_codebuddy_cli_status: { method: "GET", path: "/api/codebuddy-cli/status" },
+  install_codebuddy_cli_helper: { method: "POST", path: "/api/codebuddy-cli/install-helper" },
+  switch_codebuddy_cli_account: { method: "POST", path: "/api/codebuddy-cli/switch" },
   delete_account: { method: "POST", path: "/api/delete" },
   oauth_start: { method: "POST", path: "/api/oauth/start" },
   oauth_status: { method: "POST", path: "/api/oauth/status" },
@@ -41,11 +51,17 @@ const ROUTES: Record<string, Route> = {
   list_sessions: { method: "GET", path: "/api/sessions" },
   copy_sessions: { method: "POST", path: "/api/sessions/copy" },
   get_checkin_status: { method: "GET", path: "/api/checkin/status" },
+  get_credit_expiry: { method: "POST", path: "/api/credits" },
   checkin: { method: "POST", path: "/api/checkin" },
   checkin_all: { method: "POST", path: "/api/checkin/all" },
   get_auto_checkin_config: { method: "GET", path: "/api/checkin/config" },
   save_auto_checkin_config: { method: "POST", path: "/api/checkin/config" },
   get_checkin_logs: { method: "GET", path: "/api/checkin/logs" },
+  get_auto_rotate_config: { method: "GET", path: "/api/rotate/config" },
+  save_auto_rotate_config: { method: "POST", path: "/api/rotate/config" },
+  rotate_status: { method: "GET", path: "/api/rotate/status" },
+  run_rotate: { method: "POST", path: "/api/rotate/run" },
+  get_rotate_logs: { method: "GET", path: "/api/rotate/logs" },
   refresh_account_token: { method: "POST", path: "/api/refresh-token" },
   get_github_config: { method: "GET", path: "/api/update/config" },
   save_github_config: { method: "POST", path: "/api/update/config" },
@@ -88,6 +104,18 @@ export function getStatus(): Promise<AppStatus> {
 
 export function getAccounts(): Promise<{ accounts: AccountMeta[] }> {
   return call("get_accounts");
+}
+
+export function getCodebuddyCliStatus(): Promise<CodeBuddyCliStatus> {
+  return call("get_codebuddy_cli_status");
+}
+
+export function installCodebuddyCliHelper(): Promise<CodeBuddyCliInstallResult> {
+  return call("install_codebuddy_cli_helper");
+}
+
+export function switchCodebuddyCliAccount(accountId: string): Promise<CodeBuddyCliSwitchResult> {
+  return call("switch_codebuddy_cli_account", { accountId });
 }
 
 export function deleteAccount(accountId: string): Promise<{ ok: boolean }> {
@@ -198,6 +226,10 @@ export async function getCheckinStatus(accountId: string): Promise<{
   return call("get_checkin_status", { accountId });
 }
 
+export function getCreditExpiry(accountId: string): Promise<CreditExpiry> {
+  return call("get_credit_expiry", { accountId });
+}
+
 export function checkin(accountId: string): Promise<CheckinResult> {
   return call("checkin", { accountId });
 }
@@ -220,6 +252,28 @@ export function saveAutoCheckinConfig(config: CheckinConfig): Promise<CheckinCon
 
 export function getCheckinLogs(): Promise<{ logs: CheckinLog[] }> {
   return call("get_checkin_logs");
+}
+
+export function getAutoRotateConfig(): Promise<AutoRotateConfig> {
+  return call("get_auto_rotate_config");
+}
+
+export function saveAutoRotateConfig(config: AutoRotateConfig): Promise<AutoRotateConfig> {
+  return call("save_auto_rotate_config", {
+    config: config as unknown as Record<string, unknown>,
+  });
+}
+
+export function getRotateStatus(): Promise<RotateStatus> {
+  return call("rotate_status");
+}
+
+export function runRotate(): Promise<{ status: string; reason?: string; error?: string; to?: string }> {
+  return call("run_rotate");
+}
+
+export function getRotateLogs(): Promise<{ logs: RotateLog[] }> {
+  return call("get_rotate_logs");
 }
 
 export function refreshAccountToken(accountId: string): Promise<AccountMeta> {

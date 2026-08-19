@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use tauri::Emitter;
-use wb_switch_core::modules::{account, auth_file, checkin, oauth, process, refresh, session, switch, update};
+use wb_switch_core::modules::{account, auth_file, checkin, codebuddy_cli, credits, oauth, process, refresh, rotate, session, switch, update};
 
 #[derive(Serialize)]
 pub struct AppStatus {
@@ -47,6 +47,24 @@ pub fn get_accounts() -> Value {
         .map(account::account_meta)
         .collect();
     json!({ "accounts": metas })
+}
+
+/// GET /api/codebuddy-cli/status —— CodeBuddy CLI helper 轮换状态（不含 token）。
+#[tauri::command]
+pub fn get_codebuddy_cli_status() -> Value {
+    codebuddy_cli::status()
+}
+
+/// POST /api/codebuddy-cli/install-helper —— 显式安装/升级 CLI helper。
+#[tauri::command]
+pub fn install_codebuddy_cli_helper() -> Result<Value, String> {
+    codebuddy_cli::install_helper()
+}
+
+/// POST /api/codebuddy-cli/switch —— 只切换 CodeBuddy CLI，不重启 WorkBuddy。
+#[tauri::command(rename_all = "camelCase")]
+pub fn switch_codebuddy_cli_account(account_id: String) -> Result<Value, String> {
+    codebuddy_cli::set_active_account(&account_id)
 }
 
 /// DELETE /api/delete —— 删除账号。
@@ -245,6 +263,13 @@ pub async fn get_checkin_status(account_id: String) -> Result<Value, String> {
     Ok(checkin::get_checkin_status(&acc).await)
 }
 
+/// POST /api/credits —— 查询单账号积分资源及到期时间。
+#[tauri::command]
+pub async fn get_credit_expiry(account_id: String) -> Result<Value, String> {
+    let acc = account::find_account(&account_id).ok_or("账号不存在")?;
+    Ok(credits::get_credit_expiry(&acc).await)
+}
+
 /// POST /api/checkin —— 单账号立即签到。
 #[tauri::command]
 pub async fn checkin(account_id: String) -> Result<Value, String> {
@@ -275,6 +300,41 @@ pub fn save_auto_checkin_config(config: Value) -> Result<Value, String> {
 #[tauri::command]
 pub fn get_checkin_logs() -> Value {
     json!({ "logs": crate::modules::config::load_checkin_logs() })
+}
+
+// ---------------------------------------------------------------------------
+// 自动轮换（CodeBuddy CLI）
+// ---------------------------------------------------------------------------
+
+/// GET /api/rotate/config —— 自动轮换配置。
+#[tauri::command]
+pub fn get_auto_rotate_config() -> Value {
+    crate::modules::config::load_auto_rotate_config()
+}
+
+/// POST /api/rotate/config —— 保存自动轮换配置。
+#[tauri::command]
+pub fn save_auto_rotate_config(config: Value) -> Result<Value, String> {
+    crate::modules::config::save_auto_rotate_config(&config).map_err(|e| e.to_string())?;
+    Ok(crate::modules::config::load_auto_rotate_config())
+}
+
+/// GET /api/rotate/status —— 轮换状态（配置 + 上次检查/切换）。
+#[tauri::command]
+pub fn rotate_status() -> Value {
+    rotate::rotate_status()
+}
+
+/// POST /api/rotate/run —— 手动触发一次轮换检查。
+#[tauri::command]
+pub async fn run_rotate() -> Value {
+    rotate::run_rotate_cycle().await
+}
+
+/// GET /api/rotate/logs —— 最近轮换日志。
+#[tauri::command]
+pub fn get_rotate_logs() -> Value {
+    json!({ "logs": rotate::rotate_logs() })
 }
 
 /// POST /api/refresh-token —— 单账号刷新 token。

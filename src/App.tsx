@@ -97,7 +97,7 @@ function Layout() {
           </span>
           <div className="leading-tight">
             <div className="text-sm font-semibold">workbuddy-switch</div>
-            <div className="text-xs text-muted-foreground">WorkBuddy 账号切换</div>
+            <div className="text-xs text-muted-foreground">WorkBuddy / CodeBuddy 账号</div>
           </div>
         </div>
         <Separator />
@@ -113,7 +113,7 @@ function Layout() {
               )
             }
           >
-            账号切换
+            WorkBuddy / CodeBuddy
           </NavLink>
           <NavLink
             to="/settings"

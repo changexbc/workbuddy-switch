@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUpCircle, CalendarCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
+import { ArrowLeftRight, ArrowUpCircle, CalendarCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
-import type { CheckinConfig, CheckinLog, GithubConfig, UpdateInfo } from "@/lib/types";
+import type {
+  AutoRotateConfig,
+  CheckinConfig,
+  CheckinLog,
+  GithubConfig,
+  RotateLog,
+  RotateStatus,
+  UpdateInfo,
+} from "@/lib/types";
 import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { useAccountsStore } from "@/stores/accounts";
@@ -230,6 +238,270 @@ function AutoCheckinCard() {
                             : tone.tone === "warning"
                               ? "text-amber-600"
                               : "text-emerald-600"
+                        }
+                      >
+                        {tone.text}
+                      </span>
+                      <span className="text-muted-foreground">{formatTime(l.ts)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 自动轮换配置（CodeBuddy CLI）+ 手动检查 + 日志。 */
+function AutoRotateCard() {
+  const [cfg, setCfg] = useState<AutoRotateConfig | null>(null);
+  const [status, setStatus] = useState<RotateStatus | null>(null);
+  const [logs, setLogs] = useState<RotateLog[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function load() {
+    try {
+      const [c, s, l] = await Promise.all([
+        api.getAutoRotateConfig(),
+        api.getRotateStatus(),
+        api.getRotateLogs(),
+      ]);
+      setCfg(c);
+      setStatus(s);
+      setLogs(l.logs);
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    }
+  }
+
+  async function save() {
+    if (!cfg) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      const saved = await api.saveAutoRotateConfig(cfg);
+      setCfg(saved);
+      setMsg({ type: "ok", text: "配置已保存" });
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runNow() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await api.runRotate();
+      setMsg({
+        type: res.status === "error" ? "err" : "ok",
+        text:
+          res.status === "switched"
+            ? `已切换到 ${res.to ?? "目标账号"}`
+            : res.status === "disabled"
+              ? "自动轮换未启用（请在下方开启后重试）"
+              : (res.reason ?? `检查完成：${res.status}`),
+      });
+      void load();
+    } catch (e) {
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setNum(key: keyof AutoRotateConfig, value: string) {
+    if (!cfg) return;
+    setCfg({ ...cfg, [key]: Number(value) });
+  }
+
+  function actionLabel(action: string): { text: string; tone: "success" | "warning" | "error" } {
+    switch (action) {
+      case "switched":
+        return { text: "已切换", tone: "success" };
+      case "skipped":
+        return { text: "未切换", tone: "warning" };
+      case "disabled":
+        return { text: "未启用", tone: "warning" };
+      case "error":
+        return { text: "出错", tone: "error" };
+      default:
+        return { text: action, tone: "warning" };
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ArrowLeftRight className="size-4" />
+          CodeBuddy CLI 自动轮换
+        </CardTitle>
+        <CardDescription>
+          定期把 CodeBuddy CLI 切到积分最紧迫（最早到期）的账号，防止积分过期浪费；正在使用时不切，所有账号到期还早时也不切。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {status && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <span>
+              当前 CLI 账号：
+              <b className="text-foreground">{status.activeAccountName ?? "未配置"}</b>
+            </span>
+            {status.lastCheckAt && <span>上次检查 {formatTime(status.lastCheckAt)}</span>}
+            {status.lastSwitchAt && <span>上次切换 {formatTime(status.lastSwitchAt)}</span>}
+            {!status.cliConfigured && (
+              <span className="text-destructive">未接入 CodeBuddy CLI（请先到账号页安装 helper）</span>
+            )}
+          </div>
+        )}
+
+        {cfg ? (
+          <>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+              <div>
+                <div className="text-sm font-medium">启用自动轮换</div>
+                <div className="text-xs text-muted-foreground">
+                  开启后按下方间隔自动检查并切换 CodeBuddy CLI 账号
+                </div>
+              </div>
+              <Switch
+                checked={cfg.enabled}
+                onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-interval">检查间隔（分钟）</Label>
+                <Input
+                  id="ar-interval"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={cfg.check_interval_minutes}
+                  onChange={(e) => setNum("check_interval_minutes", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-cooldown">切换冷却（分钟）</Label>
+                <Input
+                  id="ar-cooldown"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={cfg.cooldown_minutes}
+                  onChange={(e) => setNum("cooldown_minutes", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-gap">到期差异阈值（小时）</Label>
+                <Input
+                  id="ar-gap"
+                  type="number"
+                  min={0}
+                  max={720}
+                  value={cfg.min_gap_hours}
+                  onChange={(e) => setNum("min_gap_hours", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-urgency">到期紧迫阈值（小时）</Label>
+                <Input
+                  id="ar-urgency"
+                  type="number"
+                  min={0}
+                  max={720}
+                  value={cfg.min_urgency_hours}
+                  onChange={(e) => setNum("min_urgency_hours", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-guard">活跃保护（分钟）</Label>
+                <Input
+                  id="ar-guard"
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={cfg.active_guard_minutes}
+                  onChange={(e) => setNum("active_guard_minutes", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-min">最小剩余积分</Label>
+                <Input
+                  id="ar-min"
+                  type="number"
+                  min={0}
+                  value={cfg.min_remaining_credits}
+                  onChange={(e) => setNum("min_remaining_credits", e.target.value)}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              切换时机：目标账号剩余到期时间少于「紧迫阈值」且比当前账号早超过「差异阈值」，且最近「活跃保护」分钟内 CLI 无对话、目标剩余积分不低于「最小剩余积分」。
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={save} disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" /> : <Save />}
+                保存配置
+              </Button>
+              <Button variant="outline" onClick={runNow} disabled={busy}>
+                {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                立即检查一次
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">加载配置中…</p>
+        )}
+
+        {msg && (
+          <Alert variant={msg.type === "err" ? "destructive" : "default"}>
+            <AlertDescription>{msg.text}</AlertDescription>
+          </Alert>
+        )}
+
+        <div>
+          <p className="mb-2 text-sm font-medium">轮换日志（最近 200 条）</p>
+          {logs.length === 0 ? (
+            <p className="py-3 text-center text-sm text-muted-foreground">暂无轮换记录</p>
+          ) : (
+            <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+              {logs.map((l, i) => {
+                const tone = actionLabel(l.action);
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between rounded-md border px-3 py-1.5 text-xs"
+                  >
+                    <div className="min-w-0 flex-1 truncate">
+                      {l.action === "switched" && l.from && l.to && (
+                        <span className="font-medium">
+                          {l.from.name ?? l.from.id} → {l.to.name ?? l.to.id}
+                        </span>
+                      )}
+                      {l.reason && <span className="text-muted-foreground">（{l.reason}）</span>}
+                    </div>
+                    <div className="ml-2 flex shrink-0 items-center gap-2">
+                      <span
+                        className={
+                          tone.tone === "error"
+                            ? "text-destructive"
+                            : tone.tone === "success"
+                              ? "text-emerald-600"
+                              : "text-amber-600"
                         }
                       >
                         {tone.text}
@@ -520,6 +792,7 @@ export default function SettingsPage() {
       <div className="space-y-4">
         <PermissionCheckCard />
         <AutoCheckinCard />
+        <AutoRotateCard />
         <UpdateCard />
       </div>
     </div>

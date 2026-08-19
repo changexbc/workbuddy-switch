@@ -16,7 +16,8 @@ use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
-    account, auth_file, checkin, config, oauth, process, refresh, session, switch, update,
+    account, auth_file, checkin, codebuddy_cli, config, credits, oauth, process, refresh, rotate,
+    session, switch, update,
 };
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
@@ -55,6 +56,9 @@ pub fn router() -> Router {
     Router::new()
         .route("/api/status", get(api_status))
         .route("/api/accounts", get(api_accounts))
+        .route("/api/codebuddy-cli/status", get(api_codebuddy_cli_status))
+        .route("/api/codebuddy-cli/install-helper", post(api_codebuddy_cli_install_helper))
+        .route("/api/codebuddy-cli/switch", post(api_codebuddy_cli_switch))
         .route("/api/delete", post(api_delete))
         .route("/api/oauth/start", post(api_oauth_start))
         .route("/api/oauth/status", post(api_oauth_status))
@@ -65,10 +69,15 @@ pub fn router() -> Router {
         .route("/api/sessions", get(api_sessions))
         .route("/api/sessions/copy", post(api_copy_sessions))
         .route("/api/checkin/status", get(api_checkin_status))
+        .route("/api/credits", post(api_credits))
         .route("/api/checkin", post(api_checkin))
         .route("/api/checkin/all", post(api_checkin_all))
         .route("/api/checkin/config", get(api_checkin_config).post(api_save_checkin_config))
         .route("/api/checkin/logs", get(api_checkin_logs))
+        .route("/api/rotate/config", get(api_rotate_config).post(api_save_rotate_config))
+        .route("/api/rotate/status", get(api_rotate_status))
+        .route("/api/rotate/run", post(api_rotate_run))
+        .route("/api/rotate/logs", get(api_rotate_logs))
         .route("/api/refresh-token", post(api_refresh_token))
         .route("/api/update/check", get(api_update_check))
         .route("/api/update/config", get(api_update_config).post(api_save_update_config))
@@ -115,6 +124,25 @@ async fn api_accounts() -> Response {
         "current": auth_file::read_auth_file()
             .and_then(|a| a.get("account").and_then(|x| x.get("uid")).and_then(|x| x.as_str()).map(String::from)),
     }))
+}
+
+async fn api_codebuddy_cli_status() -> Response {
+    json_ok(codebuddy_cli::status())
+}
+
+async fn api_codebuddy_cli_install_helper() -> Response {
+    match codebuddy_cli::install_helper() {
+        Ok(result) => json_ok(result),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_codebuddy_cli_switch(Json(body): Json<Value>) -> Response {
+    let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
+    match codebuddy_cli::set_active_account(id) {
+        Ok(result) => json_ok(result),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
 }
 
 async fn api_delete(Json(body): Json<Value>) -> Response {
@@ -263,6 +291,14 @@ async fn api_checkin_status() -> Response {
     json_ok(json!({ "accounts": items }))
 }
 
+async fn api_credits(Json(body): Json<Value>) -> Response {
+    let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(acc) = account::find_account(id) else {
+        return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+    };
+    json_ok(credits::get_credit_expiry(&acc).await)
+}
+
 async fn api_checkin(Json(body): Json<Value>) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
     let Some(acc) = account::find_account(id) else {
@@ -296,6 +332,33 @@ async fn api_refresh_token(Json(body): Json<Value>) -> Response {
         return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
     };
     json_ok(refresh::refresh_account_token(acc).await)
+}
+
+// ---------------------------------------------------------------------------
+// 自动轮换（CodeBuddy CLI）
+// ---------------------------------------------------------------------------
+
+async fn api_rotate_config() -> Response {
+    json_ok(config::load_auto_rotate_config())
+}
+
+async fn api_save_rotate_config(Json(body): Json<Value>) -> Response {
+    match config::save_auto_rotate_config(&body) {
+        Ok(()) => json_ok(json!({ "ok": true, "config": config::load_auto_rotate_config() })),
+        Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_rotate_status() -> Response {
+    json_ok(rotate::rotate_status())
+}
+
+async fn api_rotate_run() -> Response {
+    json_ok(rotate::run_rotate_cycle().await)
+}
+
+async fn api_rotate_logs() -> Response {
+    json_ok(json!({ "logs": rotate::rotate_logs() }))
 }
 
 // ---------------------------------------------------------------------------

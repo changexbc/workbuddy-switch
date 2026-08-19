@@ -1,15 +1,53 @@
 import { useEffect, useState } from "react";
-import { Download, Loader2, QrCode, Plus } from "lucide-react";
+import { AppWindow, Download, Loader2, Plus, QrCode, RefreshCw, Terminal } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ManualAddDialog } from "@/components/manual-add-dialog";
 import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import * as api from "@/lib/api";
-import type { AccountMeta } from "@/lib/types";
+import type { AccountMeta, AppStatus, CodeBuddyCliStatus, CreditExpiry } from "@/lib/types";
 import { useAccountsStore } from "@/stores/accounts";
+
+function expiringSoonAmount(credit?: CreditExpiry): number {
+  return credit?.ok ? credit.expiringSoonRemaining ?? 0 : 0;
+}
+
+function hasExpiringSoonCredits(credit?: CreditExpiry): boolean {
+  return credit?.ok === true && expiringSoonAmount(credit) > 0;
+}
+
+function soonestRelevantExpiry(credit?: CreditExpiry): number {
+  const soonestExpiringCredit = (credit?.resources ?? [])
+    .filter((resource) => resource.remaining > 0 && resource.expiringSoon && resource.expireAt != null)
+    .map((resource) => resource.expireAt as number)
+    .reduce((soonest, expireAt) => Math.min(soonest, expireAt), Number.POSITIVE_INFINITY);
+  return Number.isFinite(soonestExpiringCredit)
+    ? soonestExpiringCredit
+    : credit?.soonestExpireAt ?? Number.POSITIVE_INFINITY;
+}
+
+function creditPriorityRank(credit?: CreditExpiry): number {
+  if (!credit?.ok) return 3;
+  if (hasExpiringSoonCredits(credit)) return 0;
+  if (credit.expired) return 1;
+  return 2;
+}
+
+function formatCredits(value: number): string {
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
+}
+
+function isWorkbuddyCurrent(account: AccountMeta, current: AppStatus["current"] | undefined): boolean {
+  if (!current) return false;
+  return Boolean(
+    (current.uid && (account.uid === current.uid || account.id === current.uid)) ||
+      (current.email && account.email === current.email),
+  );
+}
 
 export default function AccountsPage() {
   const { accounts, status, loading, error, fetchAll, deleteAccount, importLocal } =
@@ -21,10 +59,29 @@ export default function AccountsPage() {
   const [notice, setNotice] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
+  /** 账号 id -> 积分资源及到期状态 */
+  const [creditMap, setCreditMap] = useState<Record<string, CreditExpiry>>({});
+  const [creditLoadingMap, setCreditLoadingMap] = useState<Record<string, boolean>>({});
+  const [refreshingCredits, setRefreshingCredits] = useState(false);
+  const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
+  const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
+  const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
 
   useEffect(() => {
     void fetchAll();
   }, [fetchAll]);
+
+  async function refreshCodebuddyCliStatus() {
+    try {
+      setCodebuddyCli(await api.getCodebuddyCliStatus());
+    } catch {
+      setCodebuddyCli(null);
+    }
+  }
+
+  useEffect(() => {
+    void refreshCodebuddyCliStatus();
+  }, [accounts.length]);
 
   // 账号列表变化后并行查询各账号今日签到状态
   useEffect(() => {
@@ -42,6 +99,36 @@ export default function AccountsPage() {
         }
       }),
     );
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts]);
+
+  // 账号列表变化后并行查询各账号积分资源及到期时间
+  useEffect(() => {
+    if (!accounts.length) return;
+    let cancelled = false;
+    for (const account of accounts) {
+      setCreditLoadingMap((prev) => ({ ...prev, [account.id]: true }));
+      void api
+        .getCreditExpiry(account.id)
+        .then((result) => {
+          if (!cancelled) setCreditMap((prev) => ({ ...prev, [account.id]: result }));
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setCreditMap((prev) => ({
+              ...prev,
+              [account.id]: { ok: false, error: api.asError(error) },
+            }));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setCreditLoadingMap((prev) => ({ ...prev, [account.id]: false }));
+          }
+        });
+    }
     return () => {
       cancelled = true;
     };
@@ -118,18 +205,157 @@ export default function AccountsPage() {
     }
   }
 
+  async function onRefreshCredits() {
+    if (!accounts.length || refreshingCredits) return;
+    setRefreshingCredits(true);
+    setNotice(null);
+    try {
+      await Promise.all(
+        accounts.map(async (account) => {
+          setCreditLoadingMap((prev) => ({ ...prev, [account.id]: true }));
+          try {
+            const result = await api.getCreditExpiry(account.id);
+            setCreditMap((prev) => ({ ...prev, [account.id]: result }));
+          } catch (error) {
+            setCreditMap((prev) => ({
+              ...prev,
+              [account.id]: { ok: false, error: api.asError(error) },
+            }));
+          } finally {
+            setCreditLoadingMap((prev) => ({ ...prev, [account.id]: false }));
+          }
+        }),
+      );
+      setNotice({ type: "ok", text: "积分到期情况已刷新" });
+    } finally {
+      setRefreshingCredits(false);
+    }
+  }
+
+  async function onSwitchCodebuddyCli(account: AccountMeta) {
+    setCodebuddyCliSwitchingId(account.id);
+    setNotice(null);
+    try {
+      const result = await api.switchCodebuddyCliAccount(account.id);
+      setNotice({
+        type: "ok",
+        text: `${account.nickname || account.email || account.id}：${result.message || "CodeBuddy CLI 已切换"}`,
+      });
+      await refreshCodebuddyCliStatus();
+    } catch (error) {
+      setNotice({ type: "err", text: api.asError(error) });
+    } finally {
+      setCodebuddyCliSwitchingId(null);
+    }
+  }
+
+  async function onInstallCodebuddyCli() {
+    const action = codebuddyCli?.configured ? "升级" : "接入";
+    if (
+      !window.confirm(
+        `${action} CodeBuddy CLI helper 会自动写入 ~/.codebuddy-rotate/helper.cjs，并更新 ~/.codebuddy/settings.json 的 apiKeyHelper 配置，是否继续？`,
+      )
+    ) {
+      return;
+    }
+    setInstallingCodebuddyCli(true);
+    setNotice(null);
+    try {
+      const result = await api.installCodebuddyCliHelper();
+      setNotice({ type: "ok", text: result.message || "CodeBuddy CLI helper 已更新" });
+      await refreshCodebuddyCliStatus();
+    } catch (error) {
+      setNotice({ type: "err", text: api.asError(error) });
+    } finally {
+      setInstallingCodebuddyCli(false);
+    }
+  }
+
   const current = status?.current;
+  const creditOrderingReady =
+    accounts.length > 0 &&
+    accounts.every((account) => Boolean(creditMap[account.id]) && !creditLoadingMap[account.id]);
+  const orderedAccounts = creditOrderingReady
+    ? accounts
+        .map((account, index) => ({ account, index }))
+        .sort((left, right) => {
+          const leftCredit = creditMap[left.account.id];
+          const rightCredit = creditMap[right.account.id];
+          const rankDifference = creditPriorityRank(leftCredit) - creditPriorityRank(rightCredit);
+          if (rankDifference !== 0) return rankDifference;
+
+          const leftExpiry = soonestRelevantExpiry(leftCredit);
+          const rightExpiry = soonestRelevantExpiry(rightCredit);
+          if (leftExpiry !== rightExpiry) return leftExpiry - rightExpiry;
+
+          const amountDifference = expiringSoonAmount(rightCredit) - expiringSoonAmount(leftCredit);
+          if (amountDifference !== 0) return amountDifference;
+          return left.index - right.index;
+        })
+        .map(({ account }) => account)
+    : accounts;
+  const urgentCreditAccounts = orderedAccounts.filter((account) => {
+    const credit = creditMap[account.id];
+    return credit?.ok && (credit.expired || credit.expiringSoon);
+  });
+  const priorityAccountId =
+    creditOrderingReady
+      ? orderedAccounts.find((account) => hasExpiringSoonCredits(creditMap[account.id]))?.id
+      : undefined;
+  const cliCurrentAccountId = codebuddyCli?.activeAccountId;
+  const workbuddyCurrentName = current
+    ? current.nickname || current.email || current.uid || "未知账号"
+    : "未检测到当前登录账号";
+  const codebuddyCurrentName = codebuddyCli?.configured
+    ? codebuddyCli.activeAccountName || "已接入，未检测到当前账号"
+    : "尚未接入 CodeBuddy CLI";
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-6">
       <header className="mb-6">
-        <h1 className="text-xl font-semibold">账号切换</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-xl font-semibold">账号管理</h1>
+          {codebuddyCli?.configured && <Badge variant="success">CodeBuddy CLI 已接入</Badge>}
+        </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          {current
-            ? `当前登录：${current.nickname || current.email || current.uid || "未知"}`
-            : "当前未检测到 WorkBuddy 登录账号"}
-          {status?.authFile && ` · ${status.authFile}`}
+          WorkBuddy 与 CodeBuddy CLI 共用同一份账号库和积分；两侧当前账号互不影响，可分别切换。
         </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border bg-card p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="flex size-7 items-center justify-center rounded-md bg-sky-100 text-sky-700">
+                  <AppWindow className="size-4" />
+                </span>
+                <span className="text-sm font-semibold">WorkBuddy</span>
+              </div>
+              <Badge variant={current ? "success" : "outline"}>{current ? "已登录" : "未登录"}</Badge>
+            </div>
+            <div className="mt-3 truncate text-sm font-medium">{workbuddyCurrentName}</div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {status?.authFile ? `认证文件：${status.authFile}` : "通过本应用切换账号"}
+            </div>
+          </div>
+          <div className="rounded-xl border bg-card p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="flex size-7 items-center justify-center rounded-md bg-violet-100 text-violet-700">
+                  <Terminal className="size-4" />
+                </span>
+                <span className="text-sm font-semibold">CodeBuddy CLI</span>
+              </div>
+              <Badge variant={codebuddyCli?.configured ? "success" : "outline"}>
+                {codebuddyCli?.configured ? "已接入" : "未接入"}
+              </Badge>
+            </div>
+            <div className="mt-3 truncate text-sm font-medium">{codebuddyCurrentName}</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {codebuddyCli?.configured
+                ? "在账号卡片上点击「切换 CodeBuddy CLI」生效"
+                : "接入 apiKeyHelper 后即可从本应用切换"}
+            </div>
+          </div>
+        </div>
       </header>
 
       <div className="mb-5 flex flex-wrap items-center gap-2">
@@ -145,6 +371,10 @@ export default function AccountsPage() {
           <Plus />
           手动添加
         </Button>
+        <Button onClick={onRefreshCredits} disabled={refreshingCredits || accounts.length === 0} variant="outline">
+          <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
+          刷新积分
+        </Button>
       </div>
 
       {notice && (
@@ -159,6 +389,44 @@ export default function AccountsPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {codebuddyCli && (!codebuddyCli.configured || !codebuddyCli.helperSupportsAccountIds) && (
+        <Alert className="mb-4">
+          <Terminal />
+          <AlertTitle>CodeBuddy CLI 接入</AlertTitle>
+          <AlertDescription>
+            <p>
+              {codebuddyCli.configured
+                ? "当前 helper 仍按旧索引读取账号；升级后将按账号 ID 独立切换，账号增删也不会错位。"
+                : "WorkBuddy 账号与积分功能可正常使用；如需从这里切换 CodeBuddy CLI 账号，点击下方按钮一键接入（自动完成配置，无需手动操作）。"}
+            </p>
+            <Button
+              className="mt-2"
+              size="sm"
+              variant="outline"
+              onClick={() => void onInstallCodebuddyCli()}
+              disabled={installingCodebuddyCli}
+            >
+              {installingCodebuddyCli && <Loader2 className="animate-spin" />}
+              {codebuddyCli.configured ? "升级 CLI helper" : "接入 CLI"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {urgentCreditAccounts.length > 0 && (
+        <Alert className="mb-4 border-amber-300 bg-amber-50 text-amber-950">
+          <AlertTitle>积分即将到期</AlertTitle>
+          <AlertDescription>
+            以下账号有积分将在 7 天内到期，建议尽快使用：{" "}
+            {urgentCreditAccounts.map((account) => {
+              const credit = creditMap[account.id];
+              const amount = expiringSoonAmount(credit);
+              const name = account.nickname || account.email || account.uid || account.id;
+              return amount > 0 ? `${name}（${formatCredits(amount)} 积分）` : `${name}（有已到期资源）`;
+            }).join("、")}
+            。具体资源和时间已标注在账号卡片上。
+          </AlertDescription>
+        </Alert>
+      )}
 
       {loading && accounts.length === 0 ? (
         <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
@@ -171,7 +439,7 @@ export default function AccountsPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {accounts.map((a) => (
+          {orderedAccounts.map((a) => (
             <AccountCard
               key={a.id}
               account={a}
@@ -180,6 +448,14 @@ export default function AccountsPage() {
               onCheckin={onCheckin}
               onRefresh={onRefresh}
               todayCheckedIn={checkinMap[a.id]}
+              credit={creditMap[a.id]}
+              creditLoading={creditLoadingMap[a.id]}
+              creditPriority={a.id === priorityAccountId}
+              workbuddyActive={isWorkbuddyCurrent(a, current)}
+              codebuddyCliConfigured={codebuddyCli?.configured}
+              codebuddyCliActive={a.id === cliCurrentAccountId}
+              onSwitchCodebuddyCli={onSwitchCodebuddyCli}
+              codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
               featuresDisabled={false}
             />
           ))}
@@ -194,7 +470,10 @@ export default function AccountsPage() {
           if (!o) setSwitchAccount(null);
         }}
         account={switchAccount}
-        onDone={() => void fetchAll()}
+        onDone={() => {
+          void fetchAll();
+          void refreshCodebuddyCliStatus();
+        }}
       />
     </div>
   );

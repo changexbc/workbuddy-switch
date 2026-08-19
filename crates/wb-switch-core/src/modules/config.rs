@@ -21,6 +21,8 @@ pub const CHECKIN_API_PREFIX: &str = "/v2/billing/meter";
 pub const CHECKIN_LOG_KEEP_DAYS: i64 = 30;
 pub const CHECKIN_LOG_MAX_RECORDS: usize = 500;
 
+pub const ROTATE_LOG_MAX_RECORDS: usize = 200;
+
 // ---------------------------------------------------------------------------
 // 路径
 // ---------------------------------------------------------------------------
@@ -47,6 +49,14 @@ pub fn checkin_config_file() -> PathBuf {
 
 pub fn checkin_logs_file() -> PathBuf {
     store_dir().join("auto_checkin_logs.json")
+}
+
+pub fn auto_rotate_config_file() -> PathBuf {
+    store_dir().join("auto_rotate_config.json")
+}
+
+pub fn auto_rotate_logs_file() -> PathBuf {
+    store_dir().join("auto_rotate_logs.json")
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +138,92 @@ pub fn add_checkin_log(entry: &Value) {
     let mut logs = load_checkin_logs();
     logs.push(entry.clone());
     let _ = save_checkin_logs(&logs);
+}
+
+// ---------------------------------------------------------------------------
+// 自动轮换配置 / 日志（CodeBuddy CLI 账号轮换）
+// ---------------------------------------------------------------------------
+
+/// 默认自动轮换配置。
+pub fn default_auto_rotate_config() -> Value {
+    json!({
+        "enabled": false,
+        "check_interval_minutes": 5,
+        "cooldown_minutes": 120,
+        "min_gap_hours": 24,
+        "min_urgency_hours": 72,
+        "active_guard_minutes": 30,
+        "min_remaining_credits": 0,
+    })
+}
+
+/// 读取自动轮换配置（缺失/损坏时合并默认值）。
+pub fn load_auto_rotate_config() -> Value {
+    let mut cfg = default_auto_rotate_config();
+    let f = auto_rotate_config_file();
+    if f.exists() {
+        if let Ok(text) = std::fs::read_to_string(&f) {
+            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
+                for (k, v) in map {
+                    cfg[k] = v;
+                }
+            }
+        }
+    }
+    cfg
+}
+
+/// 保存自动轮换配置（只保留已知字段）。
+pub fn save_auto_rotate_config(cfg: &Value) -> std::io::Result<()> {
+    let mut merged = default_auto_rotate_config();
+    let allowed: Vec<&str> = vec![
+        "enabled",
+        "check_interval_minutes",
+        "cooldown_minutes",
+        "min_gap_hours",
+        "min_urgency_hours",
+        "active_guard_minutes",
+        "min_remaining_credits",
+    ];
+    for k in allowed {
+        if let Some(v) = cfg.get(k) {
+            merged[k] = v.clone();
+        }
+    }
+    std::fs::create_dir_all(store_dir())?;
+    let content = serde_json::to_string_pretty(&merged).unwrap_or_default();
+    atomic_write(&auto_rotate_config_file(), &content)
+}
+
+/// 读取自动轮换日志。
+pub fn load_rotate_logs() -> Vec<Value> {
+    let f = auto_rotate_logs_file();
+    if f.exists() {
+        if let Ok(text) = std::fs::read_to_string(&f) {
+            if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&text) {
+                return arr;
+            }
+        }
+    }
+    vec![]
+}
+
+/// 保存自动轮换日志（保留最近 N 条，保持插入顺序）。
+pub fn save_rotate_logs(logs: &[Value]) -> std::io::Result<()> {
+    let mut kept: Vec<Value> = logs.to_vec();
+    if kept.len() > ROTATE_LOG_MAX_RECORDS {
+        kept.drain(..kept.len() - ROTATE_LOG_MAX_RECORDS);
+    }
+    std::fs::create_dir_all(store_dir())?;
+    let content = serde_json::to_string_pretty(&kept).unwrap_or_default();
+    atomic_write(&auto_rotate_logs_file(), &content)
+}
+
+/// 追加一条自动轮换日志。
+pub fn add_rotate_log(entry: &Value) {
+    let mut logs = load_rotate_logs();
+    logs.push(entry.clone());
+    let _ = save_rotate_logs(&logs);
 }
 
 // ---------------------------------------------------------------------------

@@ -126,14 +126,29 @@ fn setup_menu_bar(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 后台循环：30 秒轮询自动签到；每天一次保活刷新（对照 server.py `_background_loops`）。
+/// 后台循环：30 秒轮询自动签到与自动轮换；每天一次保活刷新（对照 server.py `_background_loops`）。
 fn spawn_background_loops() {
     tauri::async_runtime::spawn(async move {
         let mut last_keepalive_day = String::new();
+        let mut last_rotate_at: i64 = 0;
         loop {
             let cfg = modules::config::load_checkin_config();
             if cfg.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
                 let _ = modules::checkin::run_checkin_cycle().await;
+            }
+            // 自动轮换（CodeBuddy CLI）：按配置间隔执行
+            let rotate_cfg = modules::config::load_auto_rotate_config();
+            if rotate_cfg.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
+                let interval_minutes = rotate_cfg
+                    .get("check_interval_minutes")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(5)
+                    .max(1);
+                let now = modules::config::now_ms();
+                if now - last_rotate_at >= interval_minutes * 60_000 {
+                    last_rotate_at = now;
+                    let _ = modules::rotate::run_rotate_cycle().await;
+                }
             }
             let today = modules::checkin::date_str(None);
             if today != last_keepalive_day {
@@ -159,6 +174,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::get_accounts,
+            commands::get_codebuddy_cli_status,
+            commands::install_codebuddy_cli_helper,
+            commands::switch_codebuddy_cli_account,
             commands::delete_account,
             commands::oauth_start,
             commands::oauth_status,
@@ -171,12 +189,18 @@ pub fn run() {
             commands::check_auth_permission,
             commands::reveal_app_in_finder,
             commands::get_checkin_status,
+            commands::get_credit_expiry,
             commands::checkin,
             commands::checkin_all,
             commands::get_auto_checkin_config,
             commands::save_auto_checkin_config,
             commands::get_checkin_logs,
             commands::refresh_account_token,
+            commands::get_auto_rotate_config,
+            commands::save_auto_rotate_config,
+            commands::rotate_status,
+            commands::run_rotate,
+            commands::get_rotate_logs,
             commands::get_github_config,
             commands::save_github_config,
             commands::check_update,
