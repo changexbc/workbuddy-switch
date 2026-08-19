@@ -19,6 +19,7 @@ const CHECKIN_TOOLTIP_RESTORE_SECS: u64 = 8;
 static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
 static CHECKIN_BUSY: AtomicBool = AtomicBool::new(false);
 static TOOLTIP_GENERATION: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "macos")]
 static DOCK_ICON_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
