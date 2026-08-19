@@ -5,6 +5,14 @@ import { AccountCard } from "@/components/account-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ManualAddDialog } from "@/components/manual-add-dialog";
 import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
@@ -66,6 +74,10 @@ export default function AccountsPage() {
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
+  /** 接入/升级 CLI helper 确认框 */
+  const [installConfirmOpen, setInstallConfirmOpen] = useState(false);
+  /** 删除账号确认目标（null=关闭） */
+  const [deleteTarget, setDeleteTarget] = useState<AccountMeta | null>(null);
 
   useEffect(() => {
     void fetchAll();
@@ -148,8 +160,14 @@ export default function AccountsPage() {
   }
 
   async function onDelete(a: AccountMeta) {
-    const label = a.nickname || a.email || a.id;
-    if (!window.confirm(`确定删除账号「${label}」？`)) return;
+    // 桌面 App（Tauri WebView）不支持 window.confirm，改用 Dialog 确认
+    setDeleteTarget(a);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const a = deleteTarget;
+    setDeleteTarget(null);
     setNotice(null);
     try {
       await deleteAccount(a.id);
@@ -250,14 +268,12 @@ export default function AccountsPage() {
   }
 
   async function onInstallCodebuddyCli() {
-    const action = codebuddyCli?.configured ? "升级" : "接入";
-    if (
-      !window.confirm(
-        `${action} CodeBuddy CLI helper 会自动写入 ~/.codebuddy-rotate/helper.cjs，并更新 ~/.codebuddy/settings.json 的 apiKeyHelper 配置，是否继续？`,
-      )
-    ) {
-      return;
-    }
+    // 桌面 App（Tauri WebView）不支持 window.confirm，改用 Dialog 确认
+    setInstallConfirmOpen(true);
+  }
+
+  async function confirmInstallCodebuddyCli() {
+    setInstallConfirmOpen(false);
     setInstallingCodebuddyCli(true);
     setNotice(null);
     try {
@@ -475,6 +491,49 @@ export default function AccountsPage() {
           void refreshCodebuddyCliStatus();
         }}
       />
+
+      {/* 接入/升级 CLI helper 确认（桌面 App 不支持 window.confirm） */}
+      <Dialog open={installConfirmOpen} onOpenChange={setInstallConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{codebuddyCli?.configured ? "升级 CodeBuddy CLI helper" : "接入 CodeBuddy CLI"}</DialogTitle>
+            <DialogDescription>
+              {codebuddyCli?.configured ? "升级" : "接入"}会自动写入
+              <code className="mx-1 rounded bg-muted px-1">~/.codebuddy-rotate/helper.cjs</code>
+              并更新
+              <code className="mx-1 rounded bg-muted px-1">~/.codebuddy/settings.json</code>
+              的 apiKeyHelper 配置，是否继续？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInstallConfirmOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={() => void confirmInstallCodebuddyCli()}>继续</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除账号确认 */}
+      <Dialog open={deleteTarget !== null} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除账号</DialogTitle>
+            <DialogDescription>
+              确定删除账号「{deleteTarget?.nickname || deleteTarget?.email || deleteTarget?.id}」？
+              此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={() => void confirmDelete()}>
+              删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
