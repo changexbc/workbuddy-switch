@@ -73,12 +73,12 @@ webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动
   <img src="docs/images/workbuddy-switch-accounts-redacted.png" alt="账号切换页面（账号信息已脱敏）" width="1000" />
 </p>
 
-### 设置
+### 自动轮换
 
-设置页集中管理 macOS 权限检测、自动签到、Token 保活和自动更新。
+设置页可开启 CodeBuddy CLI 自动轮换：按间隔检查并把 CLI 切到积分最紧迫的账号。
 
 <p align="center">
-  <img src="docs/images/workbuddy-switch-settings.png" alt="设置页面" width="1000" />
+  <img src="docs/images/workbuddy-switch-rotate-redacted.png" alt="自动轮换设置（账号信息已脱敏）" width="1000" />
 </p>
 
 > 文档截图中的账号名称、头像首字、UID、当前登录名和状态信息均已做脱敏处理。
