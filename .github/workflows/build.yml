@@ -171,15 +171,33 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          VER="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VER" =~ ^[0-9] ]]; then
+            VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          fi
+          BUNDLE_ROOT="target/${{ matrix.target }}/release/bundle"
+          # cargo cache 会保留旧 NSIS/DMG/AppImage；不清理就会把 0.1.17 一类产物带进 Release。
+          rm -rf "$BUNDLE_ROOT"
           npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-          find "target/${{ matrix.target }}/release/bundle" -type f \
+          echo "bundle after build:"
+          find "$BUNDLE_ROOT" -type f | sort || true
+          if [ "${{ matrix.bundles }}" = "nsis" ]; then
+            STALE=$(find "$BUNDLE_ROOT" -type f -name '*-setup.exe' ! -name "workbuddy-switch_${VER}_x64-setup.exe" || true)
+            if [ -n "$STALE" ]; then
+              echo "error: stale Windows installer still present:" >&2
+              printf '%s\n' "$STALE" >&2
+              exit 1
+            fi
+            test -f "$BUNDLE_ROOT/nsis/workbuddy-switch_${VER}_x64-setup.exe"
+          fi
+          find "$BUNDLE_ROOT" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' \
             -o -name '*.AppImage' \) \
             -exec cp {} dist-bin/ \;
           # mac：纯命令行打 dmg（CI 无 Finder，Tauri 自带的 bundle_dmg.sh 会失败）
           if [ "${{ matrix.bundles }}" = "app" ]; then
-            sh scripts/make-dmg.sh "${GITHUB_REF_NAME#v}" "${{ matrix.update_arch }}" "target/${{ matrix.target }}/release/bundle/macos/workbuddy-switch.app"
-            cp "workbuddy-switch_${GITHUB_REF_NAME#v}_${{ matrix.update_arch }}.dmg" dist-bin/
+            sh scripts/make-dmg.sh "$VER" "${{ matrix.update_arch }}" "target/${{ matrix.target }}/release/bundle/macos/workbuddy-switch.app"
+            cp "workbuddy-switch_${VER}_${{ matrix.update_arch }}.dmg" dist-bin/
           fi
 
       - name: Generate updater manifest
@@ -191,22 +209,33 @@ jobs:
           UPDATE_ARCHIVE_NAME: ${{ matrix.update_archive_name }}
           BUNDLE_DIR: target/${{ matrix.target }}/release/bundle/${{ matrix.update_bundle }}
         run: |
-          echo "updater bundle dir: $BUNDLE_DIR"
+          VER="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VER" =~ ^[0-9] ]]; then
+            VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          fi
+          echo "updater bundle dir: $BUNDLE_DIR (version $VER)"
           ls -la "$BUNDLE_DIR" || true
           if [ "$UPDATE_OS" = "windows" ]; then
-            # Tauri 2 默认签 *-setup.exe，不是 v1 的 *.nsis.zip
-            ARCHIVE_GLOB="*-setup.exe"
+            ARCHIVE="$BUNDLE_DIR/workbuddy-switch_${VER}_x64-setup.exe"
           else
-            ARCHIVE_GLOB="*.app.tar.gz"
+            ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.app.tar.gz' | sort)"
+            COUNT=$(printf '%s\n' "$ARCHIVE" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$COUNT" != 1 ]; then
+              echo "error: expected exactly 1 .app.tar.gz, found $COUNT" >&2
+              printf '%s\n' "$ARCHIVE" >&2
+              exit 1
+            fi
           fi
-          ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 2 -type f -name "$ARCHIVE_GLOB" -print -quit)"
-          if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE.sig" ]; then
-            echo "error: missing signed updater archive ($ARCHIVE_GLOB / $ARCHIVE.sig)" >&2
+          if [ ! -f "$ARCHIVE" ] || [ ! -f "$ARCHIVE.sig" ]; then
+            echo "error: missing signed updater archive ($ARCHIVE)" >&2
             exit 1
           fi
           cp "$ARCHIVE" "dist-bin/$UPDATE_ARCHIVE_NAME"
           cp "$ARCHIVE.sig" "dist-bin/$UPDATE_ARCHIVE_NAME.sig"
-          sh scripts/gen-update-json.sh
+          if [ "$UPDATE_OS" = "windows" ]; then
+            cmp -s "dist-bin/$UPDATE_ARCHIVE_NAME" "dist-bin/workbuddy-switch_${VER}_x64-setup.exe"
+          fi
+          UPDATE_VERSION="$VER" sh scripts/gen-update-json.sh
           MANIFEST="$BUNDLE_DIR/latest-${UPDATE_OS}-${UPDATE_ARCH}.json"
           test -f "$MANIFEST"
           cp "$MANIFEST" dist-bin/

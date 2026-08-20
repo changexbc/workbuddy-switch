@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.." || exit 1
 
 OWNER="${1:-changexbc}"
 REPO="${2:-workbuddy-switch}"
-VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+VERSION="${UPDATE_VERSION:-$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')}"
 UPDATE_OS="${UPDATE_OS:-macos}"
 UPDATE_ARCH="${UPDATE_ARCH:-aarch64}"
 UPDATE_ARCHIVE_NAME="${UPDATE_ARCHIVE_NAME:-}"
@@ -30,8 +30,8 @@ case "$UPDATE_OS" in
     ;;
   windows)
     DEFAULT_BUNDLE="nsis"
-    # Tauri 2 createUpdaterArtifacts=true 签的是安装包本身：*-setup.exe + *.exe.sig
-    SIG_GLOB="*-setup.exe.sig"
+    # Tauri 2 createUpdaterArtifacts=true 签的是当前版本安装包：*_VERSION_x64-setup.exe.sig
+    SIG_GLOB="*_${VERSION}_x64-setup.exe.sig"
     PLATFORM_KEYS="windows-$UPDATE_ARCH-nsis windows-$UPDATE_ARCH"
     ;;
   *)
@@ -45,11 +45,19 @@ if [ ! -d "$BUNDLE_DIR" ] && [ -d "src-tauri/target/release/bundle/$DEFAULT_BUND
   BUNDLE_DIR="src-tauri/target/release/bundle/$DEFAULT_BUNDLE"
 fi
 
-SIG_FILE=$(find "$BUNDLE_DIR" -maxdepth 2 -type f -name "$SIG_GLOB" -print -quit)
+SIG_MATCHES=$(find "$BUNDLE_DIR" -maxdepth 2 -type f -name "$SIG_GLOB" | sort)
+SIG_COUNT=$(printf '%s\n' "$SIG_MATCHES" | sed '/^$/d' | wc -l | tr -d ' ')
+if [ "$SIG_COUNT" != 1 ]; then
+  echo "gen-update-json: 期望恰好 1 个签名包（$SIG_GLOB），实际 $SIG_COUNT" >&2
+  printf '%s\n' "$SIG_MATCHES" >&2
+  ls -la "$BUNDLE_DIR" >&2 || true
+  exit 1
+fi
+SIG_FILE=$SIG_MATCHES
 ARCHIVE_FILE="${SIG_FILE%.sig}"
 JSON_FILE="$BUNDLE_DIR/latest-$UPDATE_OS-$UPDATE_ARCH.json"
 
-if [ -z "$SIG_FILE" ] || [ ! -f "$SIG_FILE" ] || [ ! -f "$ARCHIVE_FILE" ]; then
+if [ ! -f "$SIG_FILE" ] || [ ! -f "$ARCHIVE_FILE" ]; then
   echo "gen-update-json: 未找到签名更新包（$SIG_GLOB in $BUNDLE_DIR）" >&2
   ls -la "$BUNDLE_DIR" >&2 || true
   exit 1

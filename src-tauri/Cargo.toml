@@ -1,6 +1,6 @@
 [package]
 name = "wb-switch-rust"
-version = "0.1.20"
+version = "0.1.21"
 description = "wb-switch —— WorkBuddy 账号切换工具（Rust/Tauri 版）"
 authors = ["apple"]
 edition = "2021"
