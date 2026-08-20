@@ -40,6 +40,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYwNEU4RkQ5OEZCN0FGRApSV1Q5ZXZ1WS9lZ0VEd1VuVFpOYjU1OGJGd1NmMVhaWHJTSEdnNVRSSEcweUxWR05TN0h2WnloSwo=",
       "endpoints": [
+        "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest.json",
+        "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-{{target}}-{{arch}}.json",
         "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-macos-{{arch}}.json"
       ]
     }

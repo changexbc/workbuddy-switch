@@ -41,7 +41,10 @@ jobs:
                   "cli_bin": "wb-switch-darwin-arm64",
                   "platform_tag": "darwin-arm64",
                   "bundles": "app",
+                  "update_os": "macos",
                   "update_arch": "aarch64",
+                  "update_bundle": "macos",
+                  "update_archive_name": "workbuddy-switch-macos-aarch64.app.tar.gz",
               },
               {
                   "name": "mac-x64",
@@ -50,7 +53,10 @@ jobs:
                   "cli_bin": "wb-switch-darwin-x64",
                   "platform_tag": "darwin-x64",
                   "bundles": "app",
+                  "update_os": "macos",
                   "update_arch": "x86_64",
+                  "update_bundle": "macos",
+                  "update_archive_name": "workbuddy-switch-macos-x86_64.app.tar.gz",
               },
               {
                   "name": "win-x64",
@@ -59,7 +65,10 @@ jobs:
                   "cli_bin": "wb-switch-win32-x64.exe",
                   "platform_tag": "win32-x64",
                   "bundles": "nsis",
-                  "update_arch": "",
+                  "update_os": "windows",
+                  "update_arch": "x86_64",
+                  "update_bundle": "nsis",
+                  "update_archive_name": "workbuddy-switch-windows-x86_64.nsis.zip",
               },
               {
                   "name": "linux-x64",
@@ -173,22 +182,27 @@ jobs:
             cp "workbuddy-switch_${GITHUB_REF_NAME#v}_${{ matrix.update_arch }}.dmg" dist-bin/
           fi
 
-      - name: Generate macOS updater manifest
+      - name: Generate updater manifest
         if: matrix.update_arch != ''
         shell: bash
         env:
+          UPDATE_OS: ${{ matrix.update_os }}
           UPDATE_ARCH: ${{ matrix.update_arch }}
-          UPDATE_ARCHIVE_NAME: workbuddy-switch-macos-${{ matrix.update_arch }}.app.tar.gz
+          UPDATE_ARCHIVE_NAME: ${{ matrix.update_archive_name }}
+          BUNDLE_DIR: target/${{ matrix.target }}/release/bundle/${{ matrix.update_bundle }}
         run: |
-          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle/macos"
-          ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)"
+          if [ "$UPDATE_OS" = "windows" ]; then
+            ARCHIVE_GLOB="*.nsis.zip"
+          else
+            ARCHIVE_GLOB="*.app.tar.gz"
+          fi
+          ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 2 -type f -name "$ARCHIVE_GLOB" -print -quit)"
           test -n "$ARCHIVE"
           test -f "$ARCHIVE.sig"
           cp "$ARCHIVE" "dist-bin/$UPDATE_ARCHIVE_NAME"
           cp "$ARCHIVE.sig" "dist-bin/$UPDATE_ARCHIVE_NAME.sig"
-          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle/macos" \
-            sh scripts/gen-update-json.sh
-          MANIFEST="$BUNDLE_DIR/latest-macos-${UPDATE_ARCH}.json"
+          sh scripts/gen-update-json.sh
+          MANIFEST="$BUNDLE_DIR/latest-${UPDATE_OS}-${UPDATE_ARCH}.json"
           test -f "$MANIFEST"
           cp "$MANIFEST" dist-bin/
 
@@ -223,10 +237,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Merge updater manifests
+        run: python3 scripts/merge-update-manifests.py artifacts
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2

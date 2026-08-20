@@ -159,6 +159,16 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
 
   const copyCount = copySessions ? selected.size : 0;
   const needsPermission = error.includes("无权限");
+  const sessionsEmpty = !loadingSessions && sessions.length === 0;
+  const copyHint = loadingSessions
+    ? "正在加载会话…"
+    : error && sessionsEmpty
+      ? "无法加载会话列表，暂不能复制"
+      : sessionsEmpty
+        ? currentUid
+          ? "当前账号暂无会话，无法复制"
+          : "未检测到当前登录账号，无法列出会话"
+        : "将当前账号勾选的会话以新 id 复制给目标账号（云端归属目标）";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -181,11 +191,17 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         )}
 
         <div className="space-y-3">
-          <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
-            <div>
+          <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
+            <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">复制会话到目标账号</div>
-              <div className="text-xs text-muted-foreground">
-                将当前账号勾选的会话以新 id 复制给目标账号（云端归属目标）
+              <div
+                className={
+                  sessionsEmpty
+                    ? "text-xs text-amber-700 dark:text-amber-400"
+                    : "text-xs text-muted-foreground"
+                }
+              >
+                {copyHint}
               </div>
             </div>
             <Switch

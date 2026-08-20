@@ -126,10 +126,29 @@ pub fn compare_versions(a: &str, b: &str) -> i64 {
     0
 }
 
-/// manifest 端点 URL：release 资产下载不计 GitHub API 配额。
-fn manifest_url(owner: &str, repo: &str) -> String {
-    let arch = std::env::consts::ARCH;
-    format!("https://github.com/{owner}/{repo}/releases/latest/download/latest-macos-{arch}.json")
+/// updater manifest 候选 URL（按优先级）。
+///
+/// 1. 合并后的 `latest.json`（含各平台）；
+/// 2. 当前系统的 `latest-<os>-<arch>.json`；
+/// 3. 兼容旧 Windows 安装包：它们仍请求 `latest-macos-<arch>.json`。
+pub fn updater_manifest_urls(owner: &str, repo: &str, os: &str, arch: &str) -> Vec<String> {
+    let os_slug = match os {
+        "macos" | "darwin" => "macos",
+        other => other,
+    };
+    let mut urls = vec![format!(
+        "https://github.com/{owner}/{repo}/releases/latest/download/latest.json"
+    )];
+    urls.push(format!(
+        "https://github.com/{owner}/{repo}/releases/latest/download/latest-{os_slug}-{arch}.json"
+    ));
+    if os_slug != "macos" {
+        urls.push(format!(
+            "https://github.com/{owner}/{repo}/releases/latest/download/latest-macos-{arch}.json"
+        ));
+    }
+    urls.dedup();
+    urls
 }
 
 /// 主端点：拉取 updater manifest。成功返回解析后的 JSON（含 version / pub_date），
@@ -139,21 +158,23 @@ async fn fetch_manifest_version(
     repo: &str,
     proxy: Option<&str>,
 ) -> Result<Value, String> {
-    let url = manifest_url(owner, repo);
     let mut headers = HashMap::new();
     headers.insert("Accept".to_string(), "application/json".to_string());
     headers.insert("User-Agent".to_string(), "wb-switch".to_string());
-    let resp = http_request_with_proxy(&url, "GET", None, Some(&headers), proxy).await;
-
-    let version = resp.get("version").and_then(|v| v.as_str()).unwrap_or("");
-    if version.trim().is_empty() {
-        let msg = resp
+    let mut last_err = "更新清单解析失败".to_string();
+    for url in updater_manifest_urls(owner, repo, std::env::consts::OS, std::env::consts::ARCH) {
+        let resp = http_request_with_proxy(&url, "GET", None, Some(&headers), proxy).await;
+        let version = resp.get("version").and_then(|v| v.as_str()).unwrap_or("");
+        if !version.trim().is_empty() {
+            return Ok(resp);
+        }
+        last_err = resp
             .get("message")
             .and_then(|v| v.as_str())
-            .unwrap_or("更新清单解析失败");
-        return Err(msg.to_string());
+            .unwrap_or("更新清单解析失败")
+            .to_string();
     }
-    Ok(resp)
+    Err(last_err)
 }
 
 /// 兜底端点：请求 `/releases/latest`，读 302 `Location` 头（形如
@@ -298,5 +319,42 @@ pub async fn update_check(proxy: Option<&str>, force: bool) -> Value {
             "message": format!("{msg}（code={code}）"),
             "releaseUrl": release_url,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn updater_manifest_urls_macos_skips_duplicate_fallback() {
+        let urls = updater_manifest_urls("changexbc", "workbuddy-switch", "macos", "aarch64");
+        assert_eq!(
+            urls,
+            vec![
+                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest.json",
+                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-macos-aarch64.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn updater_manifest_urls_windows_keeps_macos_compat() {
+        let urls = updater_manifest_urls("changexbc", "workbuddy-switch", "windows", "x86_64");
+        assert_eq!(
+            urls,
+            vec![
+                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest.json",
+                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-windows-x86_64.json",
+                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-macos-x86_64.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn compare_versions_orders_semver() {
+        assert_eq!(compare_versions("0.1.18", "0.1.18"), 0);
+        assert_eq!(compare_versions("0.1.19", "0.1.18"), 1);
+        assert_eq!(compare_versions("v0.1.17", "0.1.18"), -1);
     }
 }

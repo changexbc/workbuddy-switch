@@ -38,9 +38,14 @@ function getDownloadUrl(rawJson: Record<string, unknown>): string | null {
   if (typeof rawJson.url === "string") return rawJson.url;
   if (!isRecord(rawJson.platforms)) return null;
 
-  const preferredTargets = navigator.userAgent.includes("Intel")
-    ? ["darwin-x86_64", "darwin-aarch64"]
-    : ["darwin-aarch64", "darwin-x86_64"];
+  const ua = navigator.userAgent;
+  const preferredTargets = ua.includes("Windows")
+    ? ["windows-x86_64-nsis", "windows-x86_64"]
+    : ua.includes("Linux")
+      ? ["linux-x86_64"]
+      : ua.includes("Intel")
+        ? ["darwin-x86_64", "darwin-aarch64"]
+        : ["darwin-aarch64", "darwin-x86_64"];
   for (const target of preferredTargets) {
     const platform = rawJson.platforms[target];
     if (isRecord(platform) && typeof platform.url === "string") return platform.url;
