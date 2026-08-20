@@ -68,7 +68,7 @@ jobs:
                   "update_os": "windows",
                   "update_arch": "x86_64",
                   "update_bundle": "nsis",
-                  "update_archive_name": "workbuddy-switch-windows-x86_64.nsis.zip",
+                  "update_archive_name": "workbuddy-switch-windows-x86_64-setup.exe",
               },
               {
                   "name": "linux-x64",
@@ -191,14 +191,19 @@ jobs:
           UPDATE_ARCHIVE_NAME: ${{ matrix.update_archive_name }}
           BUNDLE_DIR: target/${{ matrix.target }}/release/bundle/${{ matrix.update_bundle }}
         run: |
+          echo "updater bundle dir: $BUNDLE_DIR"
+          ls -la "$BUNDLE_DIR" || true
           if [ "$UPDATE_OS" = "windows" ]; then
-            ARCHIVE_GLOB="*.nsis.zip"
+            # Tauri 2 默认签 *-setup.exe，不是 v1 的 *.nsis.zip
+            ARCHIVE_GLOB="*-setup.exe"
           else
             ARCHIVE_GLOB="*.app.tar.gz"
           fi
           ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 2 -type f -name "$ARCHIVE_GLOB" -print -quit)"
-          test -n "$ARCHIVE"
-          test -f "$ARCHIVE.sig"
+          if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE.sig" ]; then
+            echo "error: missing signed updater archive ($ARCHIVE_GLOB / $ARCHIVE.sig)" >&2
+            exit 1
+          fi
           cp "$ARCHIVE" "dist-bin/$UPDATE_ARCHIVE_NAME"
           cp "$ARCHIVE.sig" "dist-bin/$UPDATE_ARCHIVE_NAME.sig"
           sh scripts/gen-update-json.sh

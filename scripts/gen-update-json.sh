@@ -30,7 +30,8 @@ case "$UPDATE_OS" in
     ;;
   windows)
     DEFAULT_BUNDLE="nsis"
-    SIG_GLOB="*.nsis.zip.sig"
+    # Tauri 2 createUpdaterArtifacts=true 签的是安装包本身：*-setup.exe + *.exe.sig
+    SIG_GLOB="*-setup.exe.sig"
     PLATFORM_KEYS="windows-$UPDATE_ARCH-nsis windows-$UPDATE_ARCH"
     ;;
   *)
@@ -49,8 +50,9 @@ ARCHIVE_FILE="${SIG_FILE%.sig}"
 JSON_FILE="$BUNDLE_DIR/latest-$UPDATE_OS-$UPDATE_ARCH.json"
 
 if [ -z "$SIG_FILE" ] || [ ! -f "$SIG_FILE" ] || [ ! -f "$ARCHIVE_FILE" ]; then
-  echo "gen-update-json: 未找到签名更新包（先运行 release 构建：$BUNDLE_DIR）"
-  exit 0
+  echo "gen-update-json: 未找到签名更新包（$SIG_GLOB in $BUNDLE_DIR）" >&2
+  ls -la "$BUNDLE_DIR" >&2 || true
+  exit 1
 fi
 
 SIGNATURE=$(cat "$SIG_FILE")

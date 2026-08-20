@@ -144,11 +144,11 @@ def _self_test() -> None:
                     "platforms": {
                         "windows-x86_64-nsis": {
                             "signature": "win",
-                            "url": "https://example/win.nsis.zip",
+                            "url": "https://example/win-setup.exe",
                         },
                         "windows-x86_64": {
                             "signature": "win",
-                            "url": "https://example/win.nsis.zip",
+                            "url": "https://example/win-setup.exe",
                         },
                     },
                 }
