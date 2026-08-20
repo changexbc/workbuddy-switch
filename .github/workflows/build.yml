@@ -4,6 +4,17 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Which platform to build. win-x64 produces a test installer without a GitHub Release."
+        type: choice
+        default: all
+        options:
+          - all
+          - win-x64
+          - mac-arm64
+          - mac-x64
+          - linux-x64
 
 permissions:
   contents: write
@@ -11,6 +22,7 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.name }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.name
     strategy:
       fail-fast: false
       matrix:
@@ -86,7 +98,9 @@ jobs:
           mkdir -p dist-bin
 
       # 打包本平台包并发布到 npm（CLI 二进制走 npm registry，Release 只留桌面 App）
+      # 仅 tag 发布；手动触发（例如只打 Windows 试装包）不得 npm publish。
       - name: Publish platform package
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
