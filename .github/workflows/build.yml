@@ -20,41 +20,79 @@ permissions:
   contents: write
 
 jobs:
+  select-matrix:
+    name: Select platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          all_platforms = [
+              {
+                  "name": "mac-arm64",
+                  "os": "macos-14",
+                  "target": "aarch64-apple-darwin",
+                  "cli_bin": "wb-switch-darwin-arm64",
+                  "platform_tag": "darwin-arm64",
+                  "bundles": "app",
+                  "update_arch": "aarch64",
+              },
+              {
+                  "name": "mac-x64",
+                  "os": "macos-14",
+                  "target": "x86_64-apple-darwin",
+                  "cli_bin": "wb-switch-darwin-x64",
+                  "platform_tag": "darwin-x64",
+                  "bundles": "app",
+                  "update_arch": "x86_64",
+              },
+              {
+                  "name": "win-x64",
+                  "os": "windows-latest",
+                  "target": "x86_64-pc-windows-msvc",
+                  "cli_bin": "wb-switch-win32-x64.exe",
+                  "platform_tag": "win32-x64",
+                  "bundles": "nsis",
+                  "update_arch": "",
+              },
+              {
+                  "name": "linux-x64",
+                  "os": "ubuntu-latest",
+                  "target": "x86_64-unknown-linux-gnu",
+                  "cli_bin": "wb-switch-linux-x64",
+                  "platform_tag": "linux-x64",
+                  "bundles": "deb,appimage",
+                  "update_arch": "",
+              },
+          ]
+          event = os.environ.get("EVENT_NAME", "")
+          platform = (os.environ.get("PLATFORM") or "all").strip()
+          if event != "workflow_dispatch" or platform in ("", "all"):
+              selected = all_platforms
+          else:
+              selected = [p for p in all_platforms if p["name"] == platform]
+              if not selected:
+                  raise SystemExit(f"unknown platform: {platform}")
+          matrix = json.dumps({"include": selected})
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a", encoding="utf-8") as f:
+              f.write("matrix<<EOF\n")
+              f.write(matrix + "\n")
+              f.write("EOF\n")
+          PY
+
   build:
     name: ${{ matrix.name }}
-    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.name
+    needs: select-matrix
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: mac-arm64
-            os: macos-14
-            target: aarch64-apple-darwin
-            cli_bin: wb-switch-darwin-arm64
-            platform_tag: darwin-arm64
-            bundles: app
-            update_arch: aarch64
-          - name: mac-x64
-            os: macos-14
-            target: x86_64-apple-darwin
-            cli_bin: wb-switch-darwin-x64
-            platform_tag: darwin-x64
-            bundles: app
-            update_arch: x86_64
-          - name: win-x64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            cli_bin: wb-switch-win32-x64.exe
-            platform_tag: win32-x64
-            bundles: nsis
-            update_arch: ''
-          - name: linux-x64
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            cli_bin: wb-switch-linux-x64
-            platform_tag: linux-x64
-            bundles: deb,appimage
-            update_arch: ''
+      matrix: ${{ fromJSON(needs.select-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
