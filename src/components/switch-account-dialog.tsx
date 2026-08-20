@@ -162,7 +162,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={!busy}>
+      <DialogContent showCloseButton={!busy} className="min-w-0 overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>切换到「{account?.nickname || account?.email || account?.uid || "该账号"}」</DialogTitle>
           <DialogDescription>
@@ -230,9 +230,9 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         </div>
 
         {error && (
-          <Alert variant={needsPermission ? "warning" : "destructive"}>
-            <AlertDescription>
-              <div>{error}</div>
+          <Alert variant={needsPermission ? "warning" : "destructive"} className="min-w-0 break-all">
+            <AlertDescription className="min-w-0 break-all">
+              <div className="min-w-0 break-all">{error}</div>
               {needsPermission && (
                 <div className="mt-2 space-y-2">
                   <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">

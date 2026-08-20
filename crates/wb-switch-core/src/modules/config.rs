@@ -59,6 +59,42 @@ pub fn auto_rotate_logs_file() -> PathBuf {
     store_dir().join("auto_rotate_logs.json")
 }
 
+pub fn workbuddy_exe_cache_file() -> PathBuf {
+    store_dir().join("workbuddy_exe.json")
+}
+
+fn parse_workbuddy_exe_cache_json(text: &str) -> Option<PathBuf> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let exe = v.get("exe")?.as_str()?.trim();
+    if exe.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(exe))
+    }
+}
+
+/// 读取上次成功解析到的 WorkBuddy.exe；损坏或空文件视为无缓存。
+pub fn load_workbuddy_exe_cache() -> Option<PathBuf> {
+    let f = workbuddy_exe_cache_file();
+    if !f.exists() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&f).ok()?;
+    parse_workbuddy_exe_cache_json(&text)
+}
+
+/// 记住已存在的 WorkBuddy.exe，供下次未运行时启动。
+pub fn save_workbuddy_exe_cache(exe: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(store_dir())?;
+    let content =
+        serde_json::to_string_pretty(&json!({ "exe": exe.to_string_lossy() })).unwrap_or_default();
+    atomic_write(&workbuddy_exe_cache_file(), &content)
+}
+
+pub fn clear_workbuddy_exe_cache() {
+    let _ = std::fs::remove_file(workbuddy_exe_cache_file());
+}
+
 // ---------------------------------------------------------------------------
 // 签到配置 / 日志（对照 server.py load/save_checkin_config / load/save/add_checkin_log）
 // ---------------------------------------------------------------------------
@@ -464,5 +500,29 @@ pub async fn http_request_raw(
             (status, resp_headers, text)
         }
         Err(e) => (0, HashMap::new(), e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_workbuddy_exe_cache_json_reads_exe() {
+        let path = parse_workbuddy_exe_cache_json(
+            r#"{ "exe": "D:\\Users\\Zhou\\AppData\\Local\\Programs\\WorkBuddy\\WorkBuddy.exe" }"#,
+        )
+        .expect("valid cache");
+        assert_eq!(
+            path.to_string_lossy(),
+            r"D:\Users\Zhou\AppData\Local\Programs\WorkBuddy\WorkBuddy.exe"
+        );
+    }
+
+    #[test]
+    fn parse_workbuddy_exe_cache_json_ignores_corrupt_and_empty() {
+        assert!(parse_workbuddy_exe_cache_json("not-json").is_none());
+        assert!(parse_workbuddy_exe_cache_json(r#"{ "exe": "  " }"#).is_none());
+        assert!(parse_workbuddy_exe_cache_json("{}").is_none());
     }
 }
