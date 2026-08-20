@@ -1,6 +1,6 @@
 [package]
 name = "wb-switch-server"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 description = "wb-switch HTTP server + CLI（npm 安装形态：wb-switch 命令启动本地 webui）"
 
