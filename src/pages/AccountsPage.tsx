@@ -58,8 +58,20 @@ function isWorkbuddyCurrent(account: AccountMeta, current: AppStatus["current"] 
 }
 
 export default function AccountsPage() {
-  const { accounts, status, loading, error, fetchAll, deleteAccount, importLocal } =
-    useAccountsStore();
+  const {
+    accounts,
+    status,
+    loading,
+    error,
+    fetchAll,
+    deleteAccount,
+    importLocal,
+    creditMap,
+    creditLoadingMap,
+    refreshingCredits,
+    ensureCredits,
+    refreshCredits,
+  } = useAccountsStore();
   const [oauthOpen, setOauthOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
@@ -67,10 +79,6 @@ export default function AccountsPage() {
   const [notice, setNotice] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
-  /** 账号 id -> 积分资源及到期状态 */
-  const [creditMap, setCreditMap] = useState<Record<string, CreditExpiry>>({});
-  const [creditLoadingMap, setCreditLoadingMap] = useState<Record<string, boolean>>({});
-  const [refreshingCredits, setRefreshingCredits] = useState(false);
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
@@ -128,35 +136,11 @@ export default function AccountsPage() {
     };
   }, [accounts]);
 
-  // 账号列表变化后并行查询各账号积分资源及到期时间
+  // 只给尚未缓存的账号拉积分；切回首页不重复请求。点「刷新积分」才强制更新。
   useEffect(() => {
     if (!accounts.length) return;
-    let cancelled = false;
-    for (const account of accounts) {
-      setCreditLoadingMap((prev) => ({ ...prev, [account.id]: true }));
-      void api
-        .getCreditExpiry(account.id)
-        .then((result) => {
-          if (!cancelled) setCreditMap((prev) => ({ ...prev, [account.id]: result }));
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            setCreditMap((prev) => ({
-              ...prev,
-              [account.id]: { ok: false, error: api.asError(error) },
-            }));
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setCreditLoadingMap((prev) => ({ ...prev, [account.id]: false }));
-          }
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [accounts]);
+    void ensureCredits(accounts.map((account) => account.id));
+  }, [accounts, ensureCredits]);
 
   async function onImport() {
     setImporting(true);
@@ -237,29 +221,9 @@ export default function AccountsPage() {
 
   async function onRefreshCredits() {
     if (!accounts.length || refreshingCredits) return;
-    setRefreshingCredits(true);
     setNotice(null);
-    try {
-      await Promise.all(
-        accounts.map(async (account) => {
-          setCreditLoadingMap((prev) => ({ ...prev, [account.id]: true }));
-          try {
-            const result = await api.getCreditExpiry(account.id);
-            setCreditMap((prev) => ({ ...prev, [account.id]: result }));
-          } catch (error) {
-            setCreditMap((prev) => ({
-              ...prev,
-              [account.id]: { ok: false, error: api.asError(error) },
-            }));
-          } finally {
-            setCreditLoadingMap((prev) => ({ ...prev, [account.id]: false }));
-          }
-        }),
-      );
-      setNotice({ type: "ok", text: "积分到期情况已刷新" });
-    } finally {
-      setRefreshingCredits(false);
-    }
+    await refreshCredits(accounts.map((account) => account.id));
+    setNotice({ type: "ok", text: "积分到期情况已刷新" });
   }
 
   async function onSwitchCodebuddyCli(account: AccountMeta) {

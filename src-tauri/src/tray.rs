@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, RunEvent, Runtime, WebviewWindowBuilder, Window, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewWindowBuilder, Window, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use wb_switch_core::modules::{checkin, update};
@@ -52,7 +52,12 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         api.prevent_close();
         let _ = window.hide();
         apply_dock_visible(window.app_handle(), false);
+        emit_main_window_visible(window.app_handle(), false);
     }
+}
+
+fn emit_main_window_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) {
+    let _ = app.emit("main-window-visible", visible);
 }
 
 /// Keep the tray process alive when the last window is destroyed (lightweight mode).
@@ -86,6 +91,7 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+    emit_main_window_visible(app, true);
 }
 
 #[cfg_attr(
@@ -253,6 +259,7 @@ fn exit_lightweight<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+    emit_main_window_visible(app, true);
     LIGHTWEIGHT_MODE.store(false, Ordering::Release);
     refresh_tray_menu(app);
 }

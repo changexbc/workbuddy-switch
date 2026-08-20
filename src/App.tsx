@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import AccountsPage from "@/pages/AccountsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
+import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useAccountsStore } from "@/stores/accounts";
 
 function UpdateCenter({ running }: { running: boolean | undefined }) {
@@ -87,6 +88,7 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
 
 function Layout() {
   const running = useAccountsStore((s) => s.status?.running);
+  useCreditAutoRefresh();
 
   return (
     <div className="flex h-screen overflow-hidden">
