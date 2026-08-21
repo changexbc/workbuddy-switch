@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
-import { ArrowUpCircle, Loader2, RefreshCw, Settings } from "lucide-react";
+import { ArrowUpCircle, Loader2, RefreshCw, Settings, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -109,14 +109,15 @@ function Layout() {
             to="/"
             className={({ isActive }) =>
               cn(
-                "rounded-md px-3 py-2 text-sm transition-colors",
+                "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
                 isActive
                   ? "bg-accent font-medium text-accent-foreground"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )
             }
           >
-            WorkBuddy / CodeBuddy
+            <Users className="size-4" />
+            账号管理
           </NavLink>
           <NavLink
             to="/settings"

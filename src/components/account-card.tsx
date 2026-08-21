@@ -265,15 +265,17 @@ export function AccountCard({
             </Button>
           )}
           <div className="ml-auto flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={featuresDisabled || !onCheckin}
-              onClick={() => onCheckin?.(account)}
-            >
-              <CalendarCheck />
-              签到
-            </Button>
+            {todayCheckedIn !== true && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={featuresDisabled || !onCheckin || todayCheckedIn !== false}
+                onClick={() => onCheckin?.(account)}
+              >
+                <CalendarCheck />
+                签到
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

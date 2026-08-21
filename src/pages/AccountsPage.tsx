@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AppWindow, Download, FileDown, FileUp, Loader2, QrCode, RefreshCw, Terminal } from "lucide-react";
+import { AppWindow, CalendarCheck, Download, FileDown, FileUp, Loader2, QrCode, RefreshCw, Terminal } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -60,6 +60,29 @@ function isWorkbuddyCurrent(account: AccountMeta, current: AppStatus["current"] 
   );
 }
 
+/** 并行查询今日签到；失败的账号不写入，由调用方保留原值。 */
+async function fetchTodayCheckinMap(
+  accountIds: string[],
+  isStale?: () => boolean,
+): Promise<Record<string, boolean>> {
+  const entries = await Promise.all(
+    accountIds.map(async (id) => {
+      try {
+        const res = await api.getCheckinStatus(id);
+        if (isStale?.() || !res.ok) return null;
+        return [id, res.todayCheckedIn] as const;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const next: Record<string, boolean> = {};
+  for (const entry of entries) {
+    if (entry) next[entry[0]] = entry[1];
+  }
+  return next;
+}
+
 export default function AccountsPage() {
   const {
     accounts,
@@ -85,6 +108,7 @@ export default function AccountsPage() {
   const [autoCheckinSaving, setAutoCheckinSaving] = useState(false);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
+  const [refreshingCheckin, setRefreshingCheckin] = useState(false);
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
@@ -142,18 +166,14 @@ export default function AccountsPage() {
   useEffect(() => {
     if (!accounts.length) return;
     let cancelled = false;
-    Promise.all(
-      accounts.map(async (a) => {
-        try {
-          const res = await api.getCheckinStatus(a.id);
-          if (!cancelled && res.ok) {
-            setCheckinMap((prev) => ({ ...prev, [a.id]: res.todayCheckedIn }));
-          }
-        } catch {
-          /* 查询失败忽略，保持未知 */
-        }
-      }),
-    );
+    void fetchTodayCheckinMap(
+      accounts.map((account) => account.id),
+      () => cancelled,
+    ).then((next) => {
+      if (!cancelled && Object.keys(next).length > 0) {
+        setCheckinMap((prev) => ({ ...prev, ...next }));
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -282,6 +302,21 @@ export default function AccountsPage() {
     setNotice({ type: "ok", text: "积分到期情况已刷新" });
   }
 
+  async function onRefreshCheckin() {
+    if (!accounts.length || refreshingCheckin) return;
+    setRefreshingCheckin(true);
+    setNotice(null);
+    try {
+      const next = await fetchTodayCheckinMap(accounts.map((account) => account.id));
+      setCheckinMap((prev) => ({ ...prev, ...next }));
+      setNotice({ type: "ok", text: "签到状态已刷新" });
+    } catch (e) {
+      setNotice({ type: "err", text: api.asError(e) });
+    } finally {
+      setRefreshingCheckin(false);
+    }
+  }
+
   async function onSwitchCodebuddyCli(account: AccountMeta) {
     setCodebuddyCliSwitchingId(account.id);
     setNotice(null);
@@ -361,9 +396,22 @@ export default function AccountsPage() {
   return (
     <div className="mx-auto max-w-4xl px-6 py-6">
       <header className="mb-6">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <h1 className="text-xl font-semibold">账号管理</h1>
           {codebuddyCli?.configured && <Badge variant="success">CodeBuddy CLI 已接入</Badge>}
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="accounts-auto-checkin" className="text-xs text-muted-foreground">
+              {autoCheckinConfig?.enabled ? "自动签到已开启" : "自动签到已关闭"}
+            </label>
+            <Switch
+              id="accounts-auto-checkin"
+              checked={autoCheckinConfig?.enabled ?? false}
+              disabled={!autoCheckinConfig || autoCheckinSaving}
+              onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
+              aria-label="自动签到"
+            />
+            {autoCheckinSaving && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
+          </div>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           WorkBuddy 与 CodeBuddy CLI 共用同一份账号库和积分；两侧当前账号互不影响，可分别切换。
@@ -431,22 +479,14 @@ export default function AccountsPage() {
           <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
           刷新积分
         </Button>
-        <div className="flex min-h-9 items-center gap-3 rounded-md border bg-card px-3 py-1.5 sm:ml-auto">
-          <div>
-            <label htmlFor="accounts-auto-checkin" className="block text-sm font-medium">
-              自动签到
-            </label>
-            <p className="text-xs text-muted-foreground">启动检查，运行期间自动补签</p>
-          </div>
-          <Switch
-            id="accounts-auto-checkin"
-            checked={autoCheckinConfig?.enabled ?? false}
-            disabled={!autoCheckinConfig || autoCheckinSaving}
-            onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
-            aria-label="自动签到"
-          />
-          {autoCheckinSaving && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
-        </div>
+        <Button
+          onClick={() => void onRefreshCheckin()}
+          disabled={refreshingCheckin || accounts.length === 0}
+          variant="outline"
+        >
+          {refreshingCheckin ? <Loader2 className="animate-spin" /> : <CalendarCheck />}
+          刷新签到状态
+        </Button>
       </div>
 
       {notice && (
