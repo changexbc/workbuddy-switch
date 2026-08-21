@@ -325,9 +325,16 @@ async fn api_checkin_status() -> Response {
     let list = account::load_accounts();
     let mut items = Vec::new();
     for acc in &list {
-        items.push(checkin::get_checkin_status(acc).await);
+        let status = checkin::get_checkin_status(acc).await;
+        items.push(checkin_status_item(acc, status));
     }
     json_ok(json!({ "accounts": items }))
+}
+
+fn checkin_status_item(account: &Value, mut status: Value) -> Value {
+    status["accountId"] = account.get("id").cloned().unwrap_or(Value::Null);
+    status["email"] = json!(account::account_display_name(account));
+    status
 }
 
 async fn api_credits(Json(body): Json<Value>) -> Response {
@@ -343,7 +350,7 @@ async fn api_checkin(Json(body): Json<Value>) -> Response {
     let Some(acc) = account::find_account(id) else {
         return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
     };
-    json_ok(checkin::perform_checkin(&acc).await)
+    json_ok(checkin::checkin_account(&acc).await)
 }
 
 async fn api_checkin_all() -> Response {
@@ -355,8 +362,9 @@ async fn api_checkin_config() -> Response {
 }
 
 async fn api_save_checkin_config(Json(body): Json<Value>) -> Response {
-    match config::save_checkin_config(&body) {
-        Ok(()) => json_ok(json!({ "ok": true, "config": config::load_checkin_config() })),
+    let submitted = body.get("config").unwrap_or(&body);
+    match config::save_checkin_config(submitted) {
+        Ok(()) => json_ok(config::load_checkin_config()),
         Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
     }
 }
@@ -462,5 +470,35 @@ async fn static_handler(uri: Uri) -> Response {
             .status(StatusCode::NOT_FOUND)
             .body(Body::from("not found"))
             .unwrap(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checkin_status_item;
+    use serde_json::json;
+
+    #[test]
+    fn web_checkin_status_keeps_account_identity() {
+        let item = checkin_status_item(
+            &json!({"id": "account-1", "email": "user@example.com"}),
+            json!({"ok": true, "todayCheckedIn": true}),
+        );
+
+        assert_eq!(item["accountId"], "account-1");
+        assert_eq!(item["email"], "user@example.com");
+        assert_eq!(item["todayCheckedIn"], true);
+    }
+
+    #[test]
+    fn web_checkin_status_preserves_failure_state() {
+        let item = checkin_status_item(
+            &json!({"id": "account-2"}),
+            json!({"ok": false, "todayCheckedIn": false, "error": "status failed"}),
+        );
+
+        assert_eq!(item["accountId"], "account-2");
+        assert_eq!(item["ok"], false);
+        assert_eq!(item["error"], "status failed");
     }
 }

@@ -446,6 +446,11 @@ fn menu_bar_icon() -> tauri::image::Image<'static> {
 }
 
 fn format_checkin_tooltip(value: &Value) -> String {
+    if value.get("status").and_then(Value::as_str) == Some("skipped")
+        && value.get("reason").and_then(Value::as_str) == Some("already_running")
+    {
+        return "签到任务正在进行，请稍后再试".to_string();
+    }
     let Some(accounts) = value.get("accounts").and_then(Value::as_array) else {
         return "没有可签到的账号".to_string();
     };
@@ -489,6 +494,18 @@ mod tests {
     #[test]
     fn tooltip_when_accounts_missing() {
         assert_eq!(format_checkin_tooltip(&json!({})), "没有可签到的账号");
+    }
+
+    #[test]
+    fn tooltip_reports_overlapping_checkin_as_busy() {
+        assert_eq!(
+            format_checkin_tooltip(&json!({
+                "accounts": [],
+                "status": "skipped",
+                "reason": "already_running"
+            })),
+            "签到任务正在进行，请稍后再试"
+        );
     }
 
     #[test]

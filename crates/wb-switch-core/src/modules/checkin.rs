@@ -1,14 +1,15 @@
 //! 签到：状态查询 / 执行签到 / 自动签到调度。
 //!
 //! 对照 server.py `get_checkin_status` / `perform_checkin` /
-//! `checkin_account` / `run_checkin_cycle` / `_generate_schedule_minute` /
-//! `_checkin_request` / `_is_unauthorized`。
+//! `checkin_account` / `run_checkin_cycle` / `_checkin_request` /
+//! `_is_unauthorized`。
 
-use chrono::{Local, Timelike};
+use chrono::Local;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use crate::modules::account::{account_display_name, build_auth_headers, load_accounts};
 use crate::modules::config::{
@@ -18,10 +19,55 @@ use crate::modules::config::{
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 
 static CHECKIN_RUNNING: AtomicBool = AtomicBool::new(false);
-static SCHEDULES: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
+static CHECKIN_ACCOUNTS_RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-fn schedules() -> &'static Mutex<HashMap<String, Value>> {
-    SCHEDULES.get_or_init(|| Mutex::new(HashMap::new()))
+/// Automatic recovery cadence shared by every host.
+pub const CHECKIN_RECOVERY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckinCycleMode {
+    /// Always verify every account against the server after a host starts.
+    StartupVerify,
+    /// Re-verify every account against the server during background recovery.
+    PeriodicRecovery,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum StatusDecision {
+    Already,
+    Submit,
+    Error(String),
+}
+
+struct AccountRunGuard {
+    key: String,
+}
+
+impl AccountRunGuard {
+    fn try_acquire(account: &Value) -> Option<Self> {
+        let key = account
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| account_display_name(account));
+        let mut running = CHECKIN_ACCOUNTS_RUNNING
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .unwrap();
+        if !running.insert(key.clone()) {
+            return None;
+        }
+        Some(Self { key })
+    }
+}
+
+impl Drop for AccountRunGuard {
+    fn drop(&mut self) {
+        if let Some(running) = CHECKIN_ACCOUNTS_RUNNING.get() {
+            running.lock().unwrap().remove(&self.key);
+        }
+    }
 }
 
 /// 判断是否因 token 失效被拒（用于触发刷新重试）。
@@ -121,31 +167,46 @@ pub async fn perform_checkin(account: &Value) -> Value {
     json!({"ok": false, "error": msg})
 }
 
-/// 对单个账号执行完整签到流程：惰性刷新 → 查状态 → 签到 → 写日志。
+fn decide_from_status(status: &Value) -> StatusDecision {
+    if status.get("ok").and_then(Value::as_bool) != Some(true) {
+        return StatusDecision::Error(
+            status
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("查询签到状态失败")
+                .to_string(),
+        );
+    }
+    if status.get("todayCheckedIn").and_then(Value::as_bool) == Some(true) {
+        StatusDecision::Already
+    } else {
+        StatusDecision::Submit
+    }
+}
+
+/// 对单个账号执行完整签到流程：惰性刷新 → 查状态 → 未签到时提交 → 写提交日志。
 pub async fn checkin_account(account: &Value) -> Value {
+    let Some(_account_guard) = AccountRunGuard::try_acquire(account) else {
+        return json!({"result": "error", "error": "该账号正在签到，请稍后再试"});
+    };
     let cfg = load_checkin_config();
     let acc = ensure_fresh_token(account.clone(), &cfg).await;
+    let status = get_checkin_status(&acc).await;
+    match decide_from_status(&status) {
+        StatusDecision::Already => return json!({"result": "already"}),
+        StatusDecision::Error(error) => {
+            return json!({"result": "error", "error": error});
+        }
+        StatusDecision::Submit => {}
+    }
+
+    // Only this branch submits daily-checkin, so only its outcome is eligible
+    // for the sign-in log.
     let entry = json!({
         "ts": now_ms(),
-        "accountId": acc.get("id").cloned().unwrap_or_else(|| json!(null)),
+        "accountId": acc.get("id").cloned().unwrap_or(Value::Null),
         "email": account_display_name(&acc),
     });
-    let status = get_checkin_status(&acc).await;
-    if status.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-        let error = status
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("查询签到状态失败")
-            .to_string();
-        let entry = json!({"result": "error", "error": error, "ts": entry["ts"], "accountId": entry["accountId"], "email": entry["email"]});
-        add_checkin_log(&entry);
-        return json!({"result": "error", "error": error});
-    }
-    if status.get("todayCheckedIn").and_then(|v| v.as_bool()) == Some(true) {
-        let entry = json!({"result": "already", "ts": entry["ts"], "accountId": entry["accountId"], "email": entry["email"]});
-        add_checkin_log(&entry);
-        return json!({"result": "already"});
-    }
     let res = perform_checkin(&acc).await;
     let result = if res.get("ok").and_then(|v| v.as_bool()) == Some(true) {
         if res.get("already").and_then(|v| v.as_bool()) == Some(true) {
@@ -157,7 +218,9 @@ pub async fn checkin_account(account: &Value) -> Value {
         "error"
     };
     let error = if result == "error" {
-        res.get("error").and_then(|v| v.as_str()).map(|s| s.to_string())
+        res.get("error")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     } else {
         None
     };
@@ -177,7 +240,7 @@ pub async fn checkin_account(account: &Value) -> Value {
 pub fn date_str(ts_ms: Option<i64>) -> String {
     let dt = Local::now();
     if let Some(ms) = ts_ms {
-        let secs = (ms / 1000) as i64;
+        let secs = ms / 1000;
         chrono::DateTime::from_timestamp(secs, 0)
             .map(|d| d.with_timezone(&Local).format("%Y-%m-%d").to_string())
             .unwrap_or_else(|| dt.format("%Y-%m-%d").to_string())
@@ -186,29 +249,10 @@ pub fn date_str(ts_ms: Option<i64>) -> String {
     }
 }
 
-fn minute_of_day() -> i64 {
-    let dt = Local::now();
-    dt.hour() as i64 * 60 + dt.minute() as i64
-}
-
-/// 在配置时间段 [start_hour, end_hour) 内生成一个随机分钟。
-fn generate_schedule_minute(cfg: &Value) -> i64 {
-    let start_h = (cfg.get("start_hour").and_then(|v| v.as_i64()).unwrap_or(6) as i64).clamp(0, 23);
-    let mut end_h = (cfg.get("end_hour").and_then(|v| v.as_i64()).unwrap_or(12) as i64).clamp(1, 24);
-    if end_h <= start_h {
-        end_h = start_h + 1;
-    }
-    let start_m = start_h * 60;
-    let end_m = end_h * 60;
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    rng.gen_range(start_m..end_m)
-}
-
-/// 执行一轮自动签到：为每个账号在时间段内生成随机签到分钟，到点且未签则执行。
+/// 执行一轮自动签到。启动与周期轮次均逐账号查询服务端状态。
 ///
 /// 并发锁防止与手动签到/上一轮重复运行。
-pub async fn run_checkin_cycle() -> Value {
+pub async fn run_checkin_cycle(_mode: CheckinCycleMode) -> Value {
     let Some(_guard) = RunFlagGuard::try_acquire(&CHECKIN_RUNNING) else {
         return json!({"status": "skipped", "reason": "already_running"});
     };
@@ -220,34 +264,14 @@ pub async fn run_checkin_cycle() -> Value {
     if accounts.is_empty() {
         return json!({"status": "no_accounts"});
     }
-    let today = date_str(None);
-    let now_min = minute_of_day();
     let mut summary = json!({"status": "ok", "accounts": []});
     for acc in accounts {
-        let sid = acc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        // 锁与借用收在 block 内，避免跨 await 持有 MutexGuard
-        let minute = {
-            let mut sched_map = schedules().lock().unwrap();
-            let sched = sched_map
-                .entry(sid.clone())
-                .or_insert_with(|| json!({"date": "", "minute": 0}));
-            if sched.get("date").and_then(|v| v.as_str()) != Some(today.as_str()) {
-                *sched = json!({"date": today, "minute": generate_schedule_minute(&cfg)});
-            }
-            sched.get("minute").and_then(|v| v.as_i64()).unwrap_or(0)
-        };
-        if now_min < minute {
-            continue;
-        }
         let result = checkin_account(&acc).await;
-        summary["accounts"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({
-                "email": account_display_name(&acc),
-                "result": result.get("result").cloned().unwrap_or_else(|| json!(null)),
-                "error": result.get("error").cloned().unwrap_or_else(|| json!(null)),
-            }));
+        summary["accounts"].as_array_mut().unwrap().push(json!({
+            "email": account_display_name(&acc),
+            "result": result.get("result").cloned().unwrap_or(Value::Null),
+            "error": result.get("error").cloned().unwrap_or(Value::Null),
+        }));
     }
     summary
 }
@@ -285,15 +309,18 @@ fn latest_today_result<'a>(logs: &'a [Value], account_id: &str, today: &str) -> 
 
 /// 对全部账号立即签到（前端一键签到）。
 pub async fn run_checkin_all() -> Value {
+    let Some(_guard) = RunFlagGuard::try_acquire(&CHECKIN_RUNNING) else {
+        return json!({"accounts": [], "status": "skipped", "reason": "already_running"});
+    };
     let accounts = load_accounts();
     let mut results: Vec<Value> = Vec::new();
     for acc in accounts {
         let r = checkin_account(&acc).await;
         results.push(json!({
-            "accountId": acc.get("id").cloned().unwrap_or_else(|| json!(null)),
+            "accountId": acc.get("id").cloned().unwrap_or(Value::Null),
             "email": account_display_name(&acc),
-            "result": r.get("result").cloned().unwrap_or_else(|| json!(null)),
-            "error": r.get("error").cloned().unwrap_or_else(|| json!(null)),
+            "result": r.get("result").cloned().unwrap_or(Value::Null),
+            "error": r.get("error").cloned().unwrap_or(Value::Null),
         }));
     }
     json!({"accounts": results})
@@ -304,19 +331,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schedule_minute_within_range() {
-        let cfg = json!({"start_hour": 6, "end_hour": 12});
-        for _ in 0..100 {
-            let m = generate_schedule_minute(&cfg);
-            assert!((360..720).contains(&m), "minute {m} 超出 [6h,12h)");
-        }
+    fn checked_in_status_returns_already_without_submission() {
+        assert_eq!(
+            decide_from_status(&json!({"ok": true, "todayCheckedIn": true})),
+            StatusDecision::Already
+        );
     }
 
     #[test]
-    fn schedule_minute_end_after_start() {
-        let cfg = json!({"start_hour": 12, "end_hour": 6});
-        let m = generate_schedule_minute(&cfg);
-        assert!(m >= 720 && m < 840, "end_hour<=start_hour 时强制 end=start+1");
+    fn failed_status_returns_error_without_submission() {
+        assert_eq!(
+            decide_from_status(&json!({"ok": false, "error": "offline"})),
+            StatusDecision::Error("offline".to_string())
+        );
+    }
+
+    #[test]
+    fn unchecked_status_is_the_only_path_to_submission() {
+        assert_eq!(
+            decide_from_status(&json!({"ok": true, "todayCheckedIn": false})),
+            StatusDecision::Submit
+        );
+    }
+
+    #[test]
+    fn same_account_cannot_acquire_two_operation_guards() {
+        let account = json!({"id": "checkin-guard-test-account"});
+        let first = AccountRunGuard::try_acquire(&account).expect("first operation acquires guard");
+        assert!(AccountRunGuard::try_acquire(&account).is_none());
+        drop(first);
+        assert!(AccountRunGuard::try_acquire(&account).is_some());
+    }
+
+    #[tokio::test]
+    async fn manual_all_reports_busy_when_cycle_is_running() {
+        let _cycle_guard =
+            RunFlagGuard::try_acquire(&CHECKIN_RUNNING).expect("test acquires cycle guard");
+        let result = run_checkin_all().await;
+
+        assert_eq!(result["accounts"], json!([]));
+        assert_eq!(result["status"], "skipped");
+        assert_eq!(result["reason"], "already_running");
     }
 
     #[test]

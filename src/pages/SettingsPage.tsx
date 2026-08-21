@@ -94,6 +94,10 @@ function AutoCheckinCard() {
     setMsg(null);
     try {
       const res = await api.checkinAll();
+      if (res.status === "skipped" && res.reason === "already_running") {
+        setMsg({ type: "err", text: "签到任务正在进行，请稍后再试" });
+        return;
+      }
       const ok = res.accounts.filter((a) => a.result === "success").length;
       const already = res.accounts.filter((a) => a.result === "already").length;
       const err = res.accounts.filter((a) => a.result === "error").length;
@@ -126,7 +130,7 @@ function AutoCheckinCard() {
           自动签到
         </CardTitle>
         <CardDescription>
-          在指定时间段内为全部账号自动执行每日签到；后台每 30 秒检查一次，并每天自动保活 token。
+          开启后，启动时立即检查全部账号，运行期间每 30 分钟自动补签；并每天自动保活 token。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -136,7 +140,7 @@ function AutoCheckinCard() {
               <div>
                 <div className="text-sm font-medium">启用自动签到</div>
                 <div className="text-xs text-muted-foreground">
-                  开启后每天在下方时间段内随机时刻自动签到
+                  启动时立即核验服务端状态，未签到账号会自动补签
                 </div>
               </div>
               <Switch
@@ -145,29 +149,7 @@ function AutoCheckinCard() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="ac-start">开始时段（小时 0-23）</Label>
-                <Input
-                  id="ac-start"
-                  type="number"
-                  min={0}
-                  max={23}
-                  value={cfg.start_hour}
-                  onChange={(e) => setNum("start_hour", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ac-end">结束时段（小时 1-24）</Label>
-                <Input
-                  id="ac-end"
-                  type="number"
-                  min={1}
-                  max={24}
-                  value={cfg.end_hour}
-                  onChange={(e) => setNum("end_hour", e.target.value)}
-                />
-              </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="ac-keep">保活阈值（天，0=每天无条件刷新）</Label>
                 <Input

@@ -11,16 +11,25 @@ mod api;
 
 use serde_json::json;
 
-use wb_switch_core::modules::{
-    account, auth_file, config, process, rotate, update,
-};
+use wb_switch_core::modules::{account, auth_file, checkin, config, process, rotate, update};
 
 fn default_port() -> u16 {
     57890
 }
 
-/// 后台轮询任务：自动轮换（CodeBuddy CLI 账号）按配置间隔执行。
+/// 后台任务：自动签到启动即核验、每 30 分钟补签；自动轮换按配置间隔执行。
 fn spawn_background_loops() {
+    tokio::spawn(async move {
+        if let Err(error) = config::compact_checkin_logs() {
+            eprintln!("[签到] 历史日志整理失败: {error}");
+        }
+        let _ = checkin::run_checkin_cycle(checkin::CheckinCycleMode::StartupVerify).await;
+        loop {
+            tokio::time::sleep(checkin::CHECKIN_RECOVERY_INTERVAL).await;
+            let _ = checkin::run_checkin_cycle(checkin::CheckinCycleMode::PeriodicRecovery).await;
+        }
+    });
+
     tokio::spawn(async move {
         let mut last_cycle_at: i64 = 0;
         loop {

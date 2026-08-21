@@ -13,4 +13,3 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 chrono = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
-rand = "0.8"

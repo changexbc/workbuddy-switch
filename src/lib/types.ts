@@ -103,8 +103,9 @@ export interface SwitchResult {
 
 export interface CheckinConfig {
   enabled: boolean;
-  start_hour: number;
-  end_hour: number;
+  /** Legacy persisted fields; accepted by the backend but ignored by scheduling. */
+  start_hour?: number;
+  end_hour?: number;
   keepalive_days: number;
   lazy_refresh_hours: number;
 }

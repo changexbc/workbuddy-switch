@@ -6,6 +6,7 @@ import { AccountCard } from "@/components/account-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -19,7 +20,7 @@ import { ImportAccountsDialog } from "@/components/import-accounts-dialog";
 import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import * as api from "@/lib/api";
-import type { AccountMeta, AppStatus, CodeBuddyCliStatus, CreditExpiry } from "@/lib/types";
+import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CreditExpiry } from "@/lib/types";
 import { useAccountsStore } from "@/stores/accounts";
 
 function expiringSoonAmount(credit?: CreditExpiry): number {
@@ -80,6 +81,8 @@ export default function AccountsPage() {
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
   const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [autoCheckinConfig, setAutoCheckinConfig] = useState<CheckinConfig | null>(null);
+  const [autoCheckinSaving, setAutoCheckinSaving] = useState(false);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
@@ -93,6 +96,23 @@ export default function AccountsPage() {
   useEffect(() => {
     void fetchAll();
   }, [fetchAll]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getAutoCheckinConfig()
+      .then((config) => {
+        if (!cancelled) setAutoCheckinConfig(config);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setNotice({ type: "err", text: `自动签到配置加载失败：${api.asError(e)}` });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /** 首次启动自动导入本机账号（本会话只尝试一次，无本机账号时静默） */
   const autoImportTried = useRef(false);
@@ -155,6 +175,23 @@ export default function AccountsPage() {
       setNotice({ type: "err", text: api.asError(e) });
     } finally {
       setImporting(false);
+    }
+  }
+
+  async function onAutoCheckinChange(enabled: boolean) {
+    if (!autoCheckinConfig || autoCheckinSaving) return;
+    const previous = autoCheckinConfig;
+    const next = { ...previous, enabled };
+    setAutoCheckinConfig(next);
+    setAutoCheckinSaving(true);
+    setNotice(null);
+    try {
+      setAutoCheckinConfig(await api.saveAutoCheckinConfig(next));
+    } catch (e) {
+      setAutoCheckinConfig(previous);
+      setNotice({ type: "err", text: `自动签到设置保存失败：${api.asError(e)}` });
+    } finally {
+      setAutoCheckinSaving(false);
     }
   }
 
@@ -394,6 +431,22 @@ export default function AccountsPage() {
           <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
           刷新积分
         </Button>
+        <div className="flex min-h-9 items-center gap-3 rounded-md border bg-card px-3 py-1.5 sm:ml-auto">
+          <div>
+            <label htmlFor="accounts-auto-checkin" className="block text-sm font-medium">
+              自动签到
+            </label>
+            <p className="text-xs text-muted-foreground">启动检查，运行期间自动补签</p>
+          </div>
+          <Switch
+            id="accounts-auto-checkin"
+            checked={autoCheckinConfig?.enabled ?? false}
+            disabled={!autoCheckinConfig || autoCheckinSaving}
+            onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
+            aria-label="自动签到"
+          />
+          {autoCheckinSaving && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+        </div>
       </div>
 
       {notice && (

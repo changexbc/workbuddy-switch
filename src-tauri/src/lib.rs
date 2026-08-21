@@ -6,16 +6,28 @@ mod tray;
 use std::time::Duration;
 use wb_switch_core::modules;
 
-/// 后台循环：30 秒轮询自动签到与自动轮换；每天一次保活刷新（对照 server.py `_background_loops`）。
+/// 后台循环：自动签到启动即核验、每 30 分钟补签；自动轮换每 30 秒检查；每天一次保活。
 fn spawn_background_loops() {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = modules::config::compact_checkin_logs() {
+            eprintln!("[签到] 历史日志整理失败: {error}");
+        }
+        let _ =
+            modules::checkin::run_checkin_cycle(modules::checkin::CheckinCycleMode::StartupVerify)
+                .await;
+        loop {
+            tokio::time::sleep(modules::checkin::CHECKIN_RECOVERY_INTERVAL).await;
+            let _ = modules::checkin::run_checkin_cycle(
+                modules::checkin::CheckinCycleMode::PeriodicRecovery,
+            )
+            .await;
+        }
+    });
+
     tauri::async_runtime::spawn(async move {
         let mut last_keepalive_day = String::new();
         let mut last_rotate_at: i64 = 0;
         loop {
-            let cfg = modules::config::load_checkin_config();
-            if cfg.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
-                let _ = modules::checkin::run_checkin_cycle().await;
-            }
             // 自动轮换（CodeBuddy CLI）：按配置间隔执行
             let rotate_cfg = modules::config::load_auto_rotate_config();
             if rotate_cfg.get("enabled").and_then(|v| v.as_bool()) == Some(true) {

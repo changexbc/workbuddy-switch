@@ -237,13 +237,15 @@ export async function getCheckinStatus(accountId: string): Promise<{
       accounts: {
         accountId: string;
         email: string;
+        ok: boolean;
         todayCheckedIn: boolean;
         error?: string;
+        raw?: unknown;
       }[];
     }>("get_checkin_status");
     const one = all.accounts.find((a) => a.accountId === accountId);
     return one
-      ? { ok: true, todayCheckedIn: one.todayCheckedIn, error: one.error }
+      ? { ok: one.ok, todayCheckedIn: one.todayCheckedIn, error: one.error, raw: one.raw }
       : { ok: false, todayCheckedIn: false, error: "未找到账号" };
   }
   return call("get_checkin_status", { accountId });
@@ -259,6 +261,8 @@ export function checkin(accountId: string): Promise<CheckinResult> {
 
 export function checkinAll(): Promise<{
   accounts: { accountId: string; email: string; result: string; error?: string }[];
+  status?: string;
+  reason?: string;
 }> {
   return call("checkin_all");
 }
