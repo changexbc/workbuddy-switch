@@ -366,10 +366,102 @@ pub async fn check_update(proxy: Option<String>, force: Option<bool>) -> Value {
 #[tauri::command]
 pub fn relaunch_app() -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|e| format!("无法定位应用程序: {e}"))?;
-    let args = std::env::args_os().skip(1);
+    // 更新重启是普通启动路径；不要把系统自启专用参数带给新进程。
+    let args = std::env::args_os().skip(1).filter(|arg| {
+        #[cfg(desktop)]
+        {
+            should_forward_relaunch_arg(arg.as_os_str())
+        }
+        #[cfg(not(desktop))]
+        {
+            true
+        }
+    });
     std::process::Command::new(executable)
         .args(args)
         .spawn()
         .map_err(|e| format!("启动应用失败: {e}"))?;
     std::process::exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// 开机自启（仅桌面端；webui 不提供同名接口）
+// ---------------------------------------------------------------------------
+
+/// GET /api/launch-at-login —— 查询系统当前的开机自启注册状态。
+///
+/// 以 tauri-plugin-autostart 的 OS 状态为唯一事实来源，不另存本地布尔值。
+#[tauri::command]
+pub fn get_launch_at_login_enabled(_app: tauri::AppHandle) -> Result<bool, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        return _app
+            .autolaunch()
+            .is_enabled()
+            .map_err(|e| format!("查询开机自启状态失败：{e}"));
+    }
+    #[cfg(not(desktop))]
+    {
+        Err("当前平台不支持开机自启".to_string())
+    }
+}
+
+#[cfg(desktop)]
+fn should_forward_relaunch_arg(arg: &std::ffi::OsStr) -> bool {
+    arg != std::ffi::OsStr::new(crate::tray::SILENT_STARTUP_ARG)
+}
+
+#[cfg(all(test, desktop))]
+mod relaunch_tests {
+    use super::should_forward_relaunch_arg;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn update_relaunch_drops_only_the_exact_silent_startup_arg() {
+        assert!(!should_forward_relaunch_arg(OsStr::new("--hidden")));
+        assert!(should_forward_relaunch_arg(OsStr::new("--hidden-x")));
+        assert!(should_forward_relaunch_arg(OsStr::new("x--hidden")));
+        assert!(should_forward_relaunch_arg(OsStr::new("--debug")));
+    }
+}
+
+/// POST /api/launch-at-login —— 注册 / 移除系统开机自启，并回读权威状态。
+///
+/// 回读结果与请求值不一致时按失败处理并返回当前真实状态，避免假装设置成功。
+#[tauri::command]
+pub fn set_launch_at_login_enabled(_app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let autostart = _app.autolaunch();
+        let action = if enabled { "开启" } else { "关闭" };
+        let result = if enabled {
+            autostart.enable()
+        } else {
+            autostart.disable()
+        };
+        if let Err(e) = result {
+            return Err(format!("{action}开机自启失败：{e}"));
+        }
+        let authoritative = autostart
+            .is_enabled()
+            .map_err(|e| format!("开机自启设置后回读状态失败：{e}"))?;
+        if authoritative != enabled {
+            return Err(format!(
+                "{action}开机自启未生效（系统当前状态：{}），请稍后重试",
+                if authoritative {
+                    "已开启"
+                } else {
+                    "未开启"
+                }
+            ));
+        }
+        Ok(authoritative)
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = enabled;
+        Err("当前平台不支持开机自启".to_string())
+    }
 }

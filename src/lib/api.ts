@@ -35,6 +35,21 @@ export function isWebui(): boolean {
   return typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
 }
 
+/** Tauri mobile 也注入内部 API；用现有平台 UA 约定把桌面宿主与移动宿主区分开。 */
+function isMobilePlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return (
+    /Android|iPhone|iPad|iPod/i.test(ua) ||
+    (ua.includes("Macintosh") && navigator.maxTouchPoints > 1)
+  );
+}
+
+/** 是否为提供桌面专属能力的 Tauri 宿主。 */
+export function isDesktop(): boolean {
+  return !isWebui() && !isMobilePlatform();
+}
+
 type Route = { method: "GET" | "POST"; path: string };
 
 /** Tauri command → HTTP 路由映射（webui 模式）。 */
@@ -327,6 +342,22 @@ export function checkUpdate(proxy?: string, force?: boolean): Promise<UpdateInfo
 
 export function relaunchApp(): Promise<void> {
   return call("relaunch_app");
+}
+
+// ---------------------------------------------------------------------------
+// 开机自启（仅桌面端；webui 不提供同名接口，卡片也不在 webui 渲染）
+// ---------------------------------------------------------------------------
+
+/** 查询系统当前的开机自启注册状态（桌面端）。 */
+export function getLaunchAtLoginEnabled(): Promise<boolean> {
+  if (!isDesktop()) return Promise.resolve(false);
+  return call("get_launch_at_login_enabled");
+}
+
+/** 注册 / 移除系统开机自启，返回回读后的权威状态（桌面端）。 */
+export function setLaunchAtLoginEnabled(enabled: boolean): Promise<boolean> {
+  if (!isDesktop()) return Promise.resolve(false);
+  return call("set_launch_at_login_enabled", { enabled });
 }
 
 /** 把 Tauri command / HTTP 抛出的错误统一为 Error。 */

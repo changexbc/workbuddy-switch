@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeftRight, ArrowUpCircle, CalendarCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
+import { ArrowLeftRight, ArrowUpCircle, CalendarCheck, ExternalLink, Loader2, RefreshCw, Rocket, Save } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -762,6 +762,83 @@ function UpdateCard() {
   );
 }
 
+/** 开机自启（仅桌面端渲染）：开关直接反映系统自启注册状态，切换立即生效。 */
+function StartupCard() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getLaunchAtLoginEnabled()
+      .then((value) => {
+        if (!cancelled) setEnabled(value);
+      })
+      .catch((e) => {
+        if (!cancelled) setMsg({ type: "err", text: api.asError(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function onToggle(value: boolean) {
+    if (busy || enabled === null) return;
+    const previous = enabled;
+    setBusy(true);
+    setMsg(null);
+    try {
+      // 后端回读 OS 权威状态；即使与请求一致，也以回读值显示。
+      const authoritative = await api.setLaunchAtLoginEnabled(value);
+      setEnabled(authoritative);
+      setMsg({ type: "ok", text: authoritative ? "已开启开机自启" : "已关闭开机自启" });
+    } catch (e) {
+      // 失败时恢复到最后一次确认的状态，并显示可读错误。
+      setEnabled(previous);
+      setMsg({ type: "err", text: api.asError(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Rocket className="size-4" />
+          启动设置
+        </CardTitle>
+        <CardDescription>
+          开启后，登录系统时自动启动并静默进入托盘：主窗口和 Dock / 任务栏入口不出现，签到等后台任务继续运行；手动启动仍正常显示主窗口。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+          <div>
+            <div className="text-sm font-medium">开机时静默启动到托盘</div>
+            <div className="text-xs text-muted-foreground">
+              开关直接反映系统登录项状态；之后可从托盘「打开主界面」恢复
+            </div>
+          </div>
+          <Switch
+            checked={enabled ?? false}
+            disabled={busy || enabled === null}
+            onCheckedChange={(v) => void onToggle(v)}
+            aria-label="开机时静默启动到托盘"
+          />
+        </div>
+
+        {msg && (
+          <Alert variant={msg.type === "err" ? "destructive" : "default"}>
+            <AlertDescription>{msg.text}</AlertDescription>
+          </Alert>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 /** 设置页：自动签到配置 / 权限检测 / 更新配置。 */
 export default function SettingsPage() {
   return (
@@ -775,6 +852,7 @@ export default function SettingsPage() {
         <PermissionCheckCard />
         <AutoCheckinCard />
         <AutoRotateCard />
+        {api.isDesktop() ? <StartupCard /> : null}
         {api.isWebui() ? null : <UpdateCard />}
       </div>
     </div>

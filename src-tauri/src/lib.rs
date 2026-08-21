@@ -62,13 +62,25 @@ pub fn run() {
 
     #[cfg(desktop)]
     {
+        builder = builder.plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![tray::SILENT_STARTUP_ARG]),
+        ));
         builder = builder.on_window_event(tray::on_window_event);
     }
 
     let app = builder
         .setup(|app| {
             #[cfg(desktop)]
-            tray::setup(app)?;
+            {
+                tray::setup(app)?;
+                // 主窗口由配置创建为不可见；在事件循环呈现前决定本次启动是否静默。
+                // 仅系统自启（精确 `--hidden` 参数）进入静默托盘，普通启动立即显示主窗口。
+                tray::setup_startup_visibility(
+                    app.handle(),
+                    tray::is_silent_startup(std::env::args()),
+                );
+            }
             spawn_background_loops();
             Ok(())
         })
@@ -109,6 +121,8 @@ pub fn run() {
             commands::save_github_config,
             commands::check_update,
             commands::relaunch_app,
+            commands::get_launch_at_login_enabled,
+            commands::set_launch_at_login_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

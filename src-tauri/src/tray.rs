@@ -16,6 +16,9 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const DEFAULT_TOOLTIP: &str = "workbuddy-switch";
 const CHECKIN_TOOLTIP_RESTORE_SECS: u64 = 8;
 
+/// 系统自启注册的启动参数：仅携带该精确参数的启动进入静默托盘模式。
+pub const SILENT_STARTUP_ARG: &str = "--hidden";
+
 static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
 static CHECKIN_BUSY: AtomicBool = AtomicBool::new(false);
 static TOOLTIP_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -53,6 +56,34 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         let _ = window.hide();
         apply_dock_visible(window.app_handle(), false);
         emit_main_window_visible(window.app_handle(), false);
+    }
+}
+
+/// 判断本次启动是否携带精确的 `--hidden` 参数（系统自启触发）。
+///
+/// 必须整参相等，禁止子串匹配，避免 `--hidden-x`、`x--hidden` 等误入静默模式。
+pub fn is_silent_startup(args: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
+    args.into_iter()
+        .any(|arg| arg.as_ref() == SILENT_STARTUP_ARG)
+}
+
+/// 在事件循环呈现应用前决定首次启动的主窗口可见性。
+///
+/// `main` 窗口由 `tauri.conf.json` 配置创建为不可见，此处做出第一次
+/// show / hide 决策，静默启动不会先闪出主窗口：
+///
+/// - 普通启动（无 `--hidden`）：走既有 `show_main_window` 路径，
+///   先恢复 Regular / Dock，再 show / unminimize / focus。
+/// - 静默启动（`--hidden`）：窗口保持隐藏，隐藏 Dock / 任务栏入口，
+///   只保留托盘；不设置 `LIGHTWEIGHT_MODE`（WebView 仍然存在）。
+///
+/// 之后从托盘「打开主界面」仍走 `show_main_window`，与隐藏窗口完全一致。
+pub fn setup_startup_visibility<R: Runtime>(app: &AppHandle<R>, silent: bool) {
+    if silent {
+        apply_dock_visible(app, false);
+        emit_main_window_visible(app, false);
+    } else {
+        show_main_window(app);
     }
 }
 
@@ -474,13 +505,31 @@ fn format_checkin_tooltip(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_checkin_tooltip, should_keep_tray_alive};
+    use super::{format_checkin_tooltip, is_silent_startup, should_keep_tray_alive};
     use serde_json::json;
 
     #[test]
     fn runtime_exit_with_no_code_keeps_tray() {
         assert!(should_keep_tray_alive(None));
         assert!(!should_keep_tray_alive(Some(0)));
+    }
+
+    #[test]
+    fn silent_startup_matches_exact_hidden_arg() {
+        assert!(is_silent_startup(["--hidden"]));
+        assert!(is_silent_startup(["wb-switch-rust", "--hidden"]));
+        assert!(is_silent_startup(["wb-switch-rust", "--hidden", "--debug"]));
+    }
+
+    #[test]
+    fn silent_startup_rejects_unrelated_and_substring_args() {
+        assert!(!is_silent_startup(Vec::<&str>::new()));
+        assert!(!is_silent_startup(["wb-switch-rust"]));
+        assert!(!is_silent_startup(["wb-switch-rust", "--debug"]));
+        assert!(!is_silent_startup(["wb-switch-rust", "--hidden=true"]));
+        assert!(!is_silent_startup(["wb-switch-rust", "-hidden"]));
+        assert!(!is_silent_startup(["wb-switch-rust", "--hidden-x"]));
+        assert!(!is_silent_startup(["wb-switch-rust", "x--hidden"]));
     }
 
     #[test]
