@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountMeta,
+  AccountRecord,
   AppStatus,
   AutoRotateConfig,
   CodeBuddyCliInstallResult,
@@ -12,6 +13,8 @@ import type {
   CreditExpiry,
   CopyResult,
   GithubConfig,
+  ImportPreviewAccount,
+  ImportResult,
   ManualAddArgs,
   OAuthPollResult,
   OAuthStartResult,
@@ -47,6 +50,9 @@ const ROUTES: Record<string, Route> = {
   oauth_status: { method: "POST", path: "/api/oauth/status" },
   import_local: { method: "POST", path: "/api/import-local" },
   manual_add: { method: "POST", path: "/api/manual-add" },
+  export_accounts: { method: "POST", path: "/api/export-accounts" },
+  preview_import_accounts: { method: "POST", path: "/api/import/preview" },
+  import_accounts: { method: "POST", path: "/api/import" },
   switch_account: { method: "POST", path: "/api/switch" },
   list_sessions: { method: "GET", path: "/api/sessions" },
   copy_sessions: { method: "POST", path: "/api/sessions/copy" },
@@ -136,6 +142,20 @@ export function importLocal(): Promise<{ ok: boolean; account: AccountMeta }> {
 
 export function manualAdd(args: ManualAddArgs): Promise<{ ok: boolean; account: AccountMeta }> {
   return call("manual_add", args as unknown as Record<string, unknown>);
+}
+
+export function exportAccounts(accountIds: string[]): Promise<{ ok: boolean; accounts: AccountRecord[] }> {
+  return call("export_accounts", { accountIds });
+}
+
+export function previewImportAccounts(
+  fileText: string,
+): Promise<{ accounts: ImportPreviewAccount[]; total: number }> {
+  return call("preview_import_accounts", { fileText });
+}
+
+export function importAccounts(fileText: string, indexes: number[]): Promise<ImportResult> {
+  return call("import_accounts", { fileText, indexes });
 }
 
 export function switchAccount(args: {

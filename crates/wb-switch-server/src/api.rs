@@ -16,8 +16,8 @@ use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
-    account, auth_file, checkin, codebuddy_cli, config, credits, oauth, process, refresh, rotate,
-    session, switch, update,
+    account, auth_file, checkin, codebuddy_cli, config, credits, export_import, oauth, process,
+    refresh, rotate, session, switch, update,
 };
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
@@ -64,6 +64,9 @@ pub fn router() -> Router {
         .route("/api/oauth/status", post(api_oauth_status))
         .route("/api/import-local", post(api_import_local))
         .route("/api/manual-add", post(api_manual_add))
+        .route("/api/export-accounts", post(api_export_accounts))
+        .route("/api/import/preview", post(api_preview_import))
+        .route("/api/import", post(api_import))
         .route("/api/switch", post(api_switch))
         .route("/api/switch/progress", get(api_switch_progress))
         .route("/api/sessions", get(api_sessions))
@@ -175,6 +178,48 @@ async fn api_manual_add(Json(body): Json<Value>) -> Response {
         expires_at, refresh_expires_at,
     ) {
         Ok(acc) => json_ok(json!({ "ok": true, "account": acc })),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 导出 / 导入账号
+// ---------------------------------------------------------------------------
+
+async fn api_export_accounts(Json(body): Json<Value>) -> Response {
+    let ids: Vec<String> = body
+        .get("accountIds")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    match export_import::export_accounts(&ids) {
+        Ok(records) => json_ok(json!({ "ok": true, "accounts": records })),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_preview_import(Json(body): Json<Value>) -> Response {
+    let text = body.get("fileText").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    match export_import::preview_accounts(&text) {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_import(Json(body): Json<Value>) -> Response {
+    let text = body.get("fileText").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let indexes: Vec<usize> = body
+        .get("indexes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect())
+        .unwrap_or_default();
+    match export_import::import_accounts(&text, &indexes) {
+        Ok(result) => json_ok(json!({
+            "ok": true,
+            "imported": result.imported,
+            "skipped": result.skipped,
+            "overwritten": result.overwritten,
+        })),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
     }
 }

@@ -4,6 +4,7 @@ pub mod checkin;
 pub mod codebuddy_cli;
 pub mod config;
 pub mod credits;
+pub mod export_import;
 pub mod oauth;
 pub mod process;
 pub mod refresh;

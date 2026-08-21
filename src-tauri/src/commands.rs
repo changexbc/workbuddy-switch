@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use tauri::Emitter;
-use wb_switch_core::modules::{account, auth_file, checkin, codebuddy_cli, credits, oauth, process, refresh, rotate, session, switch, update};
+use wb_switch_core::modules::{account, auth_file, checkin, codebuddy_cli, credits, export_import, oauth, process, refresh, rotate, session, switch, update};
 
 #[derive(Serialize)]
 pub struct AppStatus {
@@ -123,6 +123,35 @@ pub fn manual_add(
         refresh_expires_at,
     )
     .map(|acc| json!({ "ok": true, "account": acc }))
+}
+
+// ---------------------------------------------------------------------------
+// 导出 / 导入账号
+// ---------------------------------------------------------------------------
+
+/// POST /api/export-accounts —— 按账号 id 列表导出完整记录（含 token）。
+#[tauri::command]
+pub fn export_accounts(account_ids: Vec<String>) -> Result<Value, String> {
+    export_import::export_accounts(&account_ids)
+        .map(|records| json!({ "ok": true, "accounts": records }))
+}
+
+/// POST /api/import/preview —— 解析导入文件并返回脱敏预览（含文件内索引）。
+#[tauri::command]
+pub fn preview_import_accounts(file_text: String) -> Result<Value, String> {
+    export_import::preview_accounts(&file_text)
+}
+
+/// POST /api/import —— 按选中索引把账号导入账号库，返回导入/跳过/覆盖计数。
+#[tauri::command]
+pub fn import_accounts(file_text: String, indexes: Vec<usize>) -> Result<Value, String> {
+    let result = export_import::import_accounts(&file_text, &indexes)?;
+    Ok(json!({
+        "ok": true,
+        "imported": result.imported,
+        "skipped": result.skipped,
+        "overwritten": result.overwritten,
+    }))
 }
 
 /// 打开系统设置授权面板。默认「完全磁盘访问」（该 anchor 各版本均有效）；

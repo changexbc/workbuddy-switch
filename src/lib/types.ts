@@ -50,6 +50,41 @@ export interface ManualAddArgs {
   refreshExpiresAt?: number;
 }
 
+/** 导出文件中的完整账号记录（含 token，仅导出命令返回；字段与账号库原始记录一致）。 */
+export interface AccountRecord {
+  id?: string;
+  uid?: string | null;
+  nickname?: string | null;
+  email?: string | null;
+  access_token?: string | null;
+  refresh_token?: string | null;
+  token_type?: string | null;
+  domain?: string | null;
+  expiresAt?: number | null;
+  refreshExpiresAt?: number | null;
+  auth_raw?: unknown;
+  profile_raw?: unknown;
+  createdAt?: number | null;
+  [key: string]: unknown;
+}
+
+/** 导入文件账号的脱敏预览（不含 token）。 */
+export interface ImportPreviewAccount {
+  index: number;
+  uid: string | null;
+  nickname: string | null;
+  email: string | null;
+  hasToken: boolean;
+}
+
+/** 导入结果计数。 */
+export interface ImportResult {
+  ok: boolean;
+  imported: number;
+  skipped: number;
+  overwritten: number;
+}
+
 export interface Session {
   id: string;
   title: string;

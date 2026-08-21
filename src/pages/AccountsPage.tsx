@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, Download, Loader2, Plus, QrCode, RefreshCw, Terminal } from "lucide-react";
+import { AppWindow, Download, FileDown, FileUp, Loader2, Plus, QrCode, RefreshCw, Terminal } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -13,6 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ExportAccountsDialog } from "@/components/export-accounts-dialog";
+import { ImportAccountsDialog } from "@/components/import-accounts-dialog";
 import { ManualAddDialog } from "@/components/manual-add-dialog";
 import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
@@ -74,6 +76,8 @@ export default function AccountsPage() {
   } = useAccountsStore();
   const [oauthOpen, setOauthOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
   const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -153,6 +157,24 @@ export default function AccountsPage() {
     } finally {
       setImporting(false);
     }
+  }
+
+  /** 导出完成提示（含安全提醒）。 */
+  function onExported(count: number) {
+    setNotice({
+      type: "ok",
+      text: `已导出 ${count} 个账号。文件含登录 token，等同密码，请勿上传网盘或发送给他人。`,
+    });
+  }
+
+  /** 导入完成提示：计数 + token 可能过期提醒，并刷新列表。 */
+  function onImported(result: { imported: number; skipped: number; overwritten: number }) {
+    void fetchAll();
+    const overwriteText = result.overwritten > 0 ? `（覆盖 ${result.overwritten} 个）` : "";
+    setNotice({
+      type: "ok",
+      text: `已导入 ${result.imported} 个${overwriteText}，跳过 ${result.skipped} 个。token 可能已过期，切换后可能需要重新登录。`,
+    });
   }
 
   async function onDelete(a: AccountMeta) {
@@ -363,6 +385,18 @@ export default function AccountsPage() {
           <Plus />
           手动添加
         </Button>
+        <Button
+          onClick={() => setExportOpen(true)}
+          disabled={accounts.length === 0}
+          variant="outline"
+        >
+          <FileDown />
+          导出账号
+        </Button>
+        <Button onClick={() => setImportOpen(true)} variant="outline">
+          <FileUp />
+          导入账号
+        </Button>
         <Button onClick={onRefreshCredits} disabled={refreshingCredits || accounts.length === 0} variant="outline">
           <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
           刷新积分
@@ -456,6 +490,17 @@ export default function AccountsPage() {
 
       <OAuthLoginDialog open={oauthOpen} onOpenChange={setOauthOpen} />
       <ManualAddDialog open={manualOpen} onOpenChange={setManualOpen} />
+      <ExportAccountsDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        accounts={accounts}
+        onExported={onExported}
+      />
+      <ImportAccountsDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={onImported}
+      />
       <SwitchAccountDialog
         open={switchAccount !== null}
         onOpenChange={(o) => {
