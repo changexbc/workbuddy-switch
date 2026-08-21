@@ -41,3 +41,6 @@ npm/platform/*/bin/
 # AI 工具本地配置
 .codebuddy/
 .cursor/
+.agents/
+.codex/
+.grok/
