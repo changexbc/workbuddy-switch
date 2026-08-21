@@ -1,7 +1,7 @@
 //! Tauri commands：前端调用的薄包装，对应 Python 版 HTTP API。
 //!
 //! 阶段 1 覆盖：get_status / get_accounts / delete_account / oauth_start /
-//! oauth_status / import_local / manual_add。
+//! oauth_status / import_local。
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -98,33 +98,6 @@ pub fn import_local() -> Result<Value, String> {
     account::import_local().map(|acc| json!({ "ok": true, "account": acc }))
 }
 
-/// POST /api/manual-add —— 手动添加账号。
-#[tauri::command(rename_all = "camelCase")]
-pub fn manual_add(
-    access_token: String,
-    uid: Option<String>,
-    nickname: Option<String>,
-    email: Option<String>,
-    refresh_token: Option<String>,
-    token_type: Option<String>,
-    domain: Option<String>,
-    expires_at: Option<i64>,
-    refresh_expires_at: Option<i64>,
-) -> Result<Value, String> {
-    account::manual_add(
-        &access_token,
-        uid,
-        nickname,
-        email,
-        refresh_token,
-        token_type,
-        domain,
-        expires_at,
-        refresh_expires_at,
-    )
-    .map(|acc| json!({ "ok": true, "account": acc }))
-}
-
 // ---------------------------------------------------------------------------
 // 导出 / 导入账号
 // ---------------------------------------------------------------------------
@@ -134,6 +107,16 @@ pub fn manual_add(
 pub fn export_accounts(account_ids: Vec<String>) -> Result<Value, String> {
     export_import::export_accounts(&account_ids)
         .map(|records| json!({ "ok": true, "accounts": records }))
+}
+
+/// POST /api/export-accounts-to-path —— 把勾选账号的完整记录写入用户选择的路径（保存对话框产物）。
+#[tauri::command]
+pub fn export_accounts_to_path(
+    account_ids: Vec<String>,
+    path: String,
+) -> Result<Value, String> {
+    export_import::export_accounts_to_path(&account_ids, &path)
+        .map(|path| json!({ "ok": true, "path": path }))
 }
 
 /// POST /api/import/preview —— 解析导入文件并返回脱敏预览（含文件内索引）。

@@ -15,7 +15,6 @@ import type {
   GithubConfig,
   ImportPreviewAccount,
   ImportResult,
-  ManualAddArgs,
   OAuthPollResult,
   OAuthStartResult,
   RotateLog,
@@ -49,8 +48,8 @@ const ROUTES: Record<string, Route> = {
   oauth_start: { method: "POST", path: "/api/oauth/start" },
   oauth_status: { method: "POST", path: "/api/oauth/status" },
   import_local: { method: "POST", path: "/api/import-local" },
-  manual_add: { method: "POST", path: "/api/manual-add" },
   export_accounts: { method: "POST", path: "/api/export-accounts" },
+  export_accounts_to_path: { method: "POST", path: "/api/export-accounts-to-path" },
   preview_import_accounts: { method: "POST", path: "/api/import/preview" },
   import_accounts: { method: "POST", path: "/api/import" },
   switch_account: { method: "POST", path: "/api/switch" },
@@ -140,12 +139,16 @@ export function importLocal(): Promise<{ ok: boolean; account: AccountMeta }> {
   return call("import_local");
 }
 
-export function manualAdd(args: ManualAddArgs): Promise<{ ok: boolean; account: AccountMeta }> {
-  return call("manual_add", args as unknown as Record<string, unknown>);
-}
-
 export function exportAccounts(accountIds: string[]): Promise<{ ok: boolean; accounts: AccountRecord[] }> {
   return call("export_accounts", { accountIds });
+}
+
+/** 桌面端：把完整记录写入用户选择的路径（系统保存对话框产物）。 */
+export function exportAccountsToPath(
+  accountIds: string[],
+  path: string,
+): Promise<{ ok: boolean; path: string }> {
+  return call("export_accounts_to_path", { accountIds, path });
 }
 
 export function previewImportAccounts(

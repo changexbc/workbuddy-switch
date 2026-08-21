@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
+import { Toaster } from "sonner";
 import { ArrowUpCircle, Loader2, RefreshCw, Settings } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -151,6 +152,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
+      <Toaster richColors position="bottom-right" />
     </BrowserRouter>
   );
 }

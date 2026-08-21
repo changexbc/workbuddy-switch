@@ -387,34 +387,5 @@ pub fn import_local() -> Result<Value, String> {
     Ok(account_meta(&saved))
 }
 
-/// 手动添加账号（token 方式）。
-pub fn manual_add(
-    access_token: &str,
-    uid: Option<String>,
-    nickname: Option<String>,
-    email: Option<String>,
-    refresh_token: Option<String>,
-    token_type: Option<String>,
-    domain: Option<String>,
-    expires_at: Option<i64>,
-    refresh_expires_at: Option<i64>,
-) -> Result<Value, String> {
-    if access_token.trim().is_empty() {
-        return Err("缺少 accessToken".to_string());
-    }
-    let acc = json!({
-        "id": uuid::Uuid::new_v4().to_string(),
-        "uid": uid,
-        "nickname": nickname,
-        "email": email.filter(|value| !value.trim().is_empty()),
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": token_type.unwrap_or_else(|| "Bearer".to_string()),
-        "domain": domain,
-        "expiresAt": expires_at,
-        "refreshExpiresAt": refresh_expires_at,
-        "createdAt": crate::modules::config::now_ms(),
-    });
-    let saved = save_collected_account(acc).map_err(|e| e.to_string())?;
-    Ok(account_meta(&saved))
-}
+// 手动添加账号（token 方式）已随 UI 入口「手动添加」一并下线；
+// `identity_email` 中的 "手动添加" 占位过滤保留，用于兼容历史手动添加的旧账号。

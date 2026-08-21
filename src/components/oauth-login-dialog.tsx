@@ -11,8 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import * as api from "@/lib/api";
 import type { AccountMeta } from "@/lib/types";
 import { useAccountsStore } from "@/stores/accounts";
@@ -31,7 +29,6 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
   const [uri, setUri] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<AccountMeta | null>(null);
-  const [manualToken, setManualToken] = useState("");
 
   // 打开时重置
   useEffect(() => {
@@ -41,7 +38,6 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
       setUri("");
       setError("");
       setResult(null);
-      setManualToken("");
     }
   }, [open]);
 
@@ -95,22 +91,6 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  /** 兜底：直接粘贴官方 access token 手动入库（对照 Python 版 manual-add 分支）。 */
-  async function submitManualToken() {
-    if (!manualToken.trim()) return;
-    setBusy(true);
-    setError("");
-    try {
-      const res = await api.manualAdd({ accessToken: manualToken.trim() });
-      await reconcileAccounts();
-      setResult(res.account);
-    } catch (e) {
-      setError(api.asError(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -125,26 +105,6 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
           <div className="space-y-3">
             <Button onClick={start} disabled={busy} className="w-full">
               {busy ? "正在发起登录…" : "开始扫码登录"}
-            </Button>
-            <div className="relative my-2">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs text-muted-foreground">
-                <span className="bg-background px-2">或直接粘贴 token</span>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="manual-token">Access Token</Label>
-              <Input
-                id="manual-token"
-                value={manualToken}
-                onChange={(e) => setManualToken(e.target.value)}
-                placeholder="粘贴 access token…"
-              />
-            </div>
-            <Button variant="outline" onClick={submitManualToken} disabled={busy} className="w-full">
-              手动入库
             </Button>
           </div>
         )}

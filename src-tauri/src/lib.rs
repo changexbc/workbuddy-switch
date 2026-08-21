@@ -45,7 +45,8 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_notification::init());
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init());
 
     #[cfg(desktop)]
     {
@@ -69,8 +70,8 @@ pub fn run() {
             commands::oauth_start,
             commands::oauth_status,
             commands::import_local,
-            commands::manual_add,
             commands::export_accounts,
+            commands::export_accounts_to_path,
             commands::preview_import_accounts,
             commands::import_accounts,
             commands::switch_account,

@@ -63,8 +63,8 @@ pub fn router() -> Router {
         .route("/api/oauth/start", post(api_oauth_start))
         .route("/api/oauth/status", post(api_oauth_status))
         .route("/api/import-local", post(api_import_local))
-        .route("/api/manual-add", post(api_manual_add))
         .route("/api/export-accounts", post(api_export_accounts))
+        .route("/api/export-accounts-to-path", post(api_export_accounts_to_path))
         .route("/api/import/preview", post(api_preview_import))
         .route("/api/import", post(api_import))
         .route("/api/switch", post(api_switch))
@@ -163,25 +163,6 @@ async fn api_import_local() -> Response {
     }
 }
 
-async fn api_manual_add(Json(body): Json<Value>) -> Response {
-    let access_token = body.get("accessToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let uid = body.get("uid").and_then(|v| v.as_str()).map(String::from);
-    let nickname = body.get("nickname").and_then(|v| v.as_str()).map(String::from);
-    let email = body.get("email").and_then(|v| v.as_str()).map(String::from);
-    let refresh_token = body.get("refreshToken").and_then(|v| v.as_str()).map(String::from);
-    let token_type = body.get("tokenType").and_then(|v| v.as_str()).map(String::from);
-    let domain = body.get("domain").and_then(|v| v.as_str()).map(String::from);
-    let expires_at = body.get("expiresAt").and_then(|v| v.as_i64());
-    let refresh_expires_at = body.get("refreshExpiresAt").and_then(|v| v.as_i64());
-    match account::manual_add(
-        &access_token, uid, nickname, email, refresh_token, token_type, domain,
-        expires_at, refresh_expires_at,
-    ) {
-        Ok(acc) => json_ok(json!({ "ok": true, "account": acc })),
-        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 导出 / 导入账号
 // ---------------------------------------------------------------------------
@@ -194,6 +175,19 @@ async fn api_export_accounts(Json(body): Json<Value>) -> Response {
         .unwrap_or_default();
     match export_import::export_accounts(&ids) {
         Ok(records) => json_ok(json!({ "ok": true, "accounts": records })),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_export_accounts_to_path(Json(body): Json<Value>) -> Response {
+    let ids: Vec<String> = body
+        .get("accountIds")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    match export_import::export_accounts_to_path(&ids, &path) {
+        Ok(path) => json_ok(json!({ "ok": true, "path": path })),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
     }
 }

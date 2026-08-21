@@ -38,18 +38,6 @@ export interface OAuthPollResult {
   error?: string;
 }
 
-export interface ManualAddArgs {
-  accessToken: string;
-  uid?: string;
-  nickname?: string;
-  email?: string;
-  refreshToken?: string;
-  tokenType?: string;
-  domain?: string;
-  expiresAt?: number;
-  refreshExpiresAt?: number;
-}
-
 /** 导出文件中的完整账号记录（含 token，仅导出命令返回；字段与账号库原始记录一致）。 */
 export interface AccountRecord {
   id?: string;

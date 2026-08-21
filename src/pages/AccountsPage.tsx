@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow, Download, FileDown, FileUp, Loader2, Plus, QrCode, RefreshCw, Terminal } from "lucide-react";
+import { toast } from "sonner";
+import { AppWindow, Download, FileDown, FileUp, Loader2, QrCode, RefreshCw, Terminal } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -15,7 +16,6 @@ import {
 } from "@/components/ui/dialog";
 import { ExportAccountsDialog } from "@/components/export-accounts-dialog";
 import { ImportAccountsDialog } from "@/components/import-accounts-dialog";
-import { ManualAddDialog } from "@/components/manual-add-dialog";
 import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import * as api from "@/lib/api";
@@ -75,7 +75,6 @@ export default function AccountsPage() {
     refreshCredits,
   } = useAccountsStore();
   const [oauthOpen, setOauthOpen] = useState(false);
-  const [manualOpen, setManualOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
@@ -161,20 +160,18 @@ export default function AccountsPage() {
 
   /** 导出完成提示（含安全提醒）。 */
   function onExported(count: number) {
-    setNotice({
-      type: "ok",
-      text: `已导出 ${count} 个账号。文件含登录 token，等同密码，请勿上传网盘或发送给他人。`,
-    });
+    const text = `已导出 ${count} 个账号。文件含登录 token，等同密码，请勿上传网盘或发送给他人。`;
+    toast.success("导出成功", { description: text });
+    setNotice({ type: "ok", text });
   }
 
   /** 导入完成提示：计数 + token 可能过期提醒，并刷新列表。 */
   function onImported(result: { imported: number; skipped: number; overwritten: number }) {
     void fetchAll();
     const overwriteText = result.overwritten > 0 ? `（覆盖 ${result.overwritten} 个）` : "";
-    setNotice({
-      type: "ok",
-      text: `已导入 ${result.imported} 个${overwriteText}，跳过 ${result.skipped} 个。token 可能已过期，切换后可能需要重新登录。`,
-    });
+    const text = `已导入 ${result.imported} 个${overwriteText}，跳过 ${result.skipped} 个。token 可能已过期，切换后可能需要重新登录。`;
+    toast.success("导入成功", { description: text });
+    setNotice({ type: "ok", text });
   }
 
   async function onDelete(a: AccountMeta) {
@@ -381,10 +378,6 @@ export default function AccountsPage() {
           <QrCode />
           OAuth 扫码登录
         </Button>
-        <Button onClick={() => setManualOpen(true)} variant="outline">
-          <Plus />
-          手动添加
-        </Button>
         <Button
           onClick={() => setExportOpen(true)}
           disabled={accounts.length === 0}
@@ -489,7 +482,6 @@ export default function AccountsPage() {
       )}
 
       <OAuthLoginDialog open={oauthOpen} onOpenChange={setOauthOpen} />
-      <ManualAddDialog open={manualOpen} onOpenChange={setManualOpen} />
       <ExportAccountsDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
