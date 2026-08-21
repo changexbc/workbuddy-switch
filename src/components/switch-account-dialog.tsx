@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Folder, Loader2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -33,6 +33,8 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [copySessions, setCopySessions] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** 展开的节点：任务 / 空间 / 文件夹。默认全部收起。 */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<SwitchResult | null>(null);
@@ -65,6 +67,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
     if (open && account) {
       setCopySessions(false);
       setSelected(new Set());
+      setExpanded(new Set());
       setError("");
       setResult(null);
       setLoadingSessions(true);
@@ -84,6 +87,25 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleFolder(ids: string[]) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allOn = ids.length > 0 && ids.every((id) => next.has(id));
+      if (allOn) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  function toggleExpanded(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -172,8 +194,11 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={!busy} className="min-w-0 overflow-x-hidden">
-        <DialogHeader>
+      <DialogContent
+        showCloseButton={!busy}
+        className="flex max-h-[min(90vh,calc(100vh-2rem))] min-w-0 flex-col overflow-hidden"
+      >
+        <DialogHeader className="shrink-0">
           <DialogTitle>切换到「{account?.nickname || account?.email || account?.uid || "该账号"}」</DialogTitle>
           <DialogDescription>
             切换会关闭并重启 WorkBuddy，认证文件将写入目标账号。
@@ -190,7 +215,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           </div>
         )}
 
-        <div className="space-y-3">
+        <div className="min-h-0 space-y-3 overflow-x-hidden overflow-y-auto">
           <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">复制会话到目标账号</div>
@@ -214,7 +239,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           {copySessions && (
             <>
               <Separator />
-              <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+              <div className="max-h-[min(20rem,45vh)] overflow-y-auto pr-1">
                 {loadingSessions ? (
                   <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
                     <Loader2 className="animate-spin" /> 加载会话…
@@ -224,80 +249,154 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
                     {currentUid ? "当前账号暂无会话" : "未检测到当前登录账号，无法列出会话"}
                   </p>
                 ) : (
-                  sessions.map((s) => (
-                    <label
-                      key={s.id}
-                      className="flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 hover:bg-accent/50"
-                    >
-                      <input
-                        type="checkbox"
-                        className="size-4 accent-primary"
-                        checked={selected.has(s.id)}
-                        onChange={() => toggleSession(s.id)}
-                      />
-                      <span className="min-w-0 flex-1 truncate text-sm">{s.title}</span>
-                      {s.hasHistory && <Badge variant="outline">有正文</Badge>}
-                    </label>
-                  ))
+                  buildSessionTree(sessions).map((kind) => {
+                    const kindOpen = expanded.has(kind.key);
+                    const kindSel = selectionState(kind.sessions, selected);
+                    return (
+                      <div key={kind.key} className="mb-0.5">
+                        <div className="sticky top-0 z-10 flex items-center gap-1.5 rounded-md bg-background px-1.5 py-1">
+                          <TreeCheckbox
+                            allOn={kindSel.allOn}
+                            someOn={kindSel.someOn}
+                            onChange={() => toggleFolder(kind.sessions.map((s) => s.id))}
+                            ariaLabel={`选择${kind.label}`}
+                          />
+                          <button
+                            type="button"
+                            className="flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-accent/50"
+                            onClick={() => toggleExpanded(kind.key)}
+                            aria-expanded={kindOpen}
+                            aria-label={`${kindOpen ? "折叠" : "展开"}${kind.label}`}
+                          >
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                              {kind.label}
+                              <span className="ml-1 font-normal text-muted-foreground">
+                                ({kind.count})
+                              </span>
+                            </span>
+                            {kindOpen ? (
+                              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                            ) : (
+                              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                            )}
+                          </button>
+                        </div>
+                        {kindOpen && kind.key === "task" &&
+                          kind.sessions.map((s) => (
+                            <SessionPickRow
+                              key={s.id}
+                              session={s}
+                              checked={selected.has(s.id)}
+                              indentClass="pl-7"
+                              onToggle={() => toggleSession(s.id)}
+                            />
+                          ))}
+                        {kindOpen &&
+                          kind.folders?.map((folder) => {
+                            const folderOpen = expanded.has(folder.key);
+                            const folderSel = selectionState(folder.sessions, selected);
+                            return (
+                              <div key={folder.key}>
+                                <div className="flex items-center gap-1.5 px-1.5 py-0.5 pl-7">
+                                  <TreeCheckbox
+                                    allOn={folderSel.allOn}
+                                    someOn={folderSel.someOn}
+                                    onChange={() => toggleFolder(folder.sessions.map((s) => s.id))}
+                                    ariaLabel={`选择文件夹 ${folder.label}`}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-accent/50"
+                                    onClick={() => toggleExpanded(folder.key)}
+                                    aria-expanded={folderOpen}
+                                    aria-label={`${folderOpen ? "折叠" : "展开"}文件夹 ${folder.label}`}
+                                  >
+                                    <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                                    <span className="min-w-0 flex-1 truncate text-sm">
+                                      {folder.label}
+                                    </span>
+                                    {folderOpen ? (
+                                      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                                    )}
+                                  </button>
+                                </div>
+                                {folderOpen &&
+                                  folder.sessions.map((s) => (
+                                    <SessionPickRow
+                                      key={s.id}
+                                      session={s}
+                                      checked={selected.has(s.id)}
+                                      indentClass="pl-12"
+                                      onToggle={() => toggleSession(s.id)}
+                                    />
+                                  ))}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </>
           )}
+
+          {error && (
+            <Alert variant={needsPermission ? "warning" : "destructive"} className="min-w-0 break-all">
+              <AlertDescription className="min-w-0 break-all">
+                <div className="min-w-0 break-all">{error}</div>
+                {needsPermission && (
+                  <div className="mt-2 space-y-2">
+                    <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">
+                      <p className="mb-1 font-medium text-foreground">如何授权（只需 3 步）：</p>
+                      <ol className="list-decimal space-y-1 pl-4">
+                        <li>点击下方「打开完全磁盘访问」</li>
+                        <li>
+                          把 <b>workbuddy-switch.app</b> 从 Finder 拖进面板列表（即使没提示框也直接拖），
+                          打开它的开关
+                        </li>
+                        <li>授权后这里会自动检测到，无需其他操作</li>
+                      </ol>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" size="sm" onClick={openPermissionSettings}>
+                        <ExternalLink />
+                        打开完全磁盘访问
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void api.revealAppInFinder()}
+                      >
+                        在 Finder 中显示
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={runPermissionCheck}>
+                        立即检测
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {permCheck && <div className="mt-2 text-xs">{permCheck}</div>}
+              </AlertDescription>
+            </Alert>
+          )}
+          {result && (
+            <Alert>
+              <AlertDescription>
+                已切换至「{result.account}」。
+                {result.sessionCopy
+                  ? ` 已复制 ${result.sessionCopy.copied.length} 个会话`
+                  : ""}
+                {result.backup ? ` 认证文件备份：${result.backup}` : ""}
+                {" CodeBuddy CLI 保持原当前账号；如需切换，请在对应账号卡片上单独点击 CLI 切换。"}
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
 
-        {error && (
-          <Alert variant={needsPermission ? "warning" : "destructive"} className="min-w-0 break-all">
-            <AlertDescription className="min-w-0 break-all">
-              <div className="min-w-0 break-all">{error}</div>
-              {needsPermission && (
-                <div className="mt-2 space-y-2">
-                  <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">
-                    <p className="mb-1 font-medium text-foreground">如何授权（只需 3 步）：</p>
-                    <ol className="list-decimal space-y-1 pl-4">
-                      <li>点击下方「打开完全磁盘访问」</li>
-                      <li>
-                        把 <b>workbuddy-switch.app</b> 从 Finder 拖进面板列表（即使没提示框也直接拖），
-                        打开它的开关
-                      </li>
-                      <li>授权后这里会自动检测到，无需其他操作</li>
-                    </ol>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" size="sm" onClick={openPermissionSettings}>
-                      <ExternalLink />
-                      打开完全磁盘访问
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void api.revealAppInFinder()}
-                    >
-                      在 Finder 中显示
-                    </Button>
-                    <Button variant="secondary" size="sm" onClick={runPermissionCheck}>
-                      立即检测
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {permCheck && <div className="mt-2 text-xs">{permCheck}</div>}
-            </AlertDescription>
-          </Alert>
-        )}
-        {result && (
-          <Alert>
-            <AlertDescription>
-              已切换至「{result.account}」。
-              {result.sessionCopy
-                ? ` 已复制 ${result.sessionCopy.copied.length} 个会话`
-                : ""}
-              {result.backup ? ` 认证文件备份：${result.backup}` : ""}
-              {" CodeBuddy CLI 保持原当前账号；如需切换，请在对应账号卡片上单独点击 CLI 切换。"}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             取消
           </Button>
@@ -310,4 +409,127 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       </DialogContent>
     </Dialog>
   );
+}
+
+type FolderGroup = { key: string; label: string; sessions: Session[] };
+type KindGroup = {
+  key: "task" | "space";
+  label: string;
+  count: number;
+  sessions: Session[];
+  folders?: FolderGroup[];
+};
+
+function selectionState(sessions: Session[], selected: Set<string>) {
+  const ids = sessions.map((s) => s.id);
+  const n = ids.filter((id) => selected.has(id)).length;
+  return { allOn: n === ids.length && ids.length > 0, someOn: n > 0 && n < ids.length };
+}
+
+function TreeCheckbox({
+  allOn,
+  someOn,
+  onChange,
+  ariaLabel,
+}: {
+  allOn: boolean;
+  someOn: boolean;
+  onChange: () => void;
+  ariaLabel: string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      className="size-3.5 shrink-0 accent-primary"
+      checked={allOn}
+      ref={(el) => {
+        if (el) el.indeterminate = someOn;
+      }}
+      onChange={onChange}
+      aria-label={ariaLabel}
+    />
+  );
+}
+
+function SessionPickRow({
+  session,
+  checked,
+  indentClass,
+  onToggle,
+}: {
+  session: Session;
+  checked: boolean;
+  indentClass: string;
+  onToggle: () => void;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer items-center gap-2.5 rounded-md py-1.5 pr-2 hover:bg-accent/50 ${indentClass}`}
+    >
+      <input
+        type="checkbox"
+        className="size-3.5 shrink-0 accent-primary"
+        checked={checked}
+        onChange={onToggle}
+      />
+      <span className="min-w-0 flex-1 truncate text-sm" title={session.title}>
+        {session.title}
+      </span>
+      {session.hasHistory && (
+        <Badge variant="outline" className="shrink-0 text-[10px]">
+          有正文
+        </Badge>
+      )}
+    </label>
+  );
+}
+
+/** WorkBuddy 侧栏文件夹名：cwd 最后一段。 */
+function sessionFolderLabel(cwd: string): string {
+  const normalized = cwd.trim().replace(/[\\/]+$/, "");
+  if (!normalized) return "未分组";
+  const parts = normalized.split(/[\\/]/);
+  return parts[parts.length - 1] || normalized;
+}
+
+/** 按工作目录分组，文件夹顺序跟会话一样按最近活动排。 */
+function groupSessionsByFolder(sessions: Session[]): FolderGroup[] {
+  const groups = new Map<string, Session[]>();
+  const order: string[] = [];
+  for (const session of sessions) {
+    const key = session.cwd.trim() || "__none__";
+    let list = groups.get(key);
+    if (!list) {
+      list = [];
+      groups.set(key, list);
+      order.push(key);
+    }
+    list.push(session);
+  }
+  return order.map((key) => ({
+    key,
+    label: key === "__none__" ? "未分组" : sessionFolderLabel(key),
+    sessions: groups.get(key) ?? [],
+  }));
+}
+
+/** 对齐 WorkBuddy 侧栏：任务（playground）平铺，空间按文件夹分组。 */
+function buildSessionTree(sessions: Session[]): KindGroup[] {
+  const tasks = sessions.filter((s) => s.isPlayground);
+  const spaces = sessions.filter((s) => !s.isPlayground);
+  const groups: KindGroup[] = [];
+  if (tasks.length > 0) {
+    groups.push({ key: "task", label: "任务", count: tasks.length, sessions: tasks });
+  }
+  if (spaces.length > 0) {
+    const folders = groupSessionsByFolder(spaces);
+    groups.push({
+      key: "space",
+      label: "空间",
+      count: folders.length,
+      sessions: spaces,
+      folders,
+    });
+  }
+  return groups;
 }

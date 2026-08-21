@@ -56,7 +56,43 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
         == 1
 }
 
+fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
+        return false;
+    };
+    let Ok(iter) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+        return false;
+    };
+    let names: Vec<String> = iter.flatten().collect();
+    names.iter().any(|name| name == column)
+}
+
+fn nonempty_text(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// WorkBuddy 侧栏展示名：优先 custom_title（用户改名 / 定时任务名），否则 title。
+fn session_display_title(title: Option<String>, custom_title: Option<String>) -> String {
+    nonempty_text(custom_title)
+        .or_else(|| nonempty_text(title))
+        .unwrap_or_else(|| "(无标题)".to_string())
+}
+
+/// Claw 是账号绑定的 IM 渠道工作区，复制会话行不够，目标账号也用不了。
+fn is_claw_workspace(cwd: &str) -> bool {
+    cwd.trim()
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("claw"))
+}
+
 /// 列出某账号未删除的会话（workbuddy.db sessions 表，db 为准）。
+///
+/// `title` 为 WorkBuddy 侧栏同款展示名；`isPlayground` 对应侧栏「任务」，
+/// 其余按 `cwd` 最后一段归入「空间」。
 pub fn list_sessions_for_user(uid: &str) -> Value {
     let db = workbuddy_db_path();
     if !db.is_file() {
@@ -68,10 +104,27 @@ pub fn list_sessions_for_user(uid: &str) -> Value {
     if !table_exists(&conn, "sessions") {
         return json!([]);
     }
-    let mut stmt = match conn.prepare(
-        "SELECT id, cwd, title, updated_at FROM sessions \
-         WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC",
-    ) {
+    let has_custom = column_exists(&conn, "sessions", "custom_title");
+    let has_playground = column_exists(&conn, "sessions", "is_playground");
+    let sql = match (has_custom, has_playground) {
+        (true, true) => {
+            "SELECT id, cwd, title, custom_title, updated_at, is_playground FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+        (true, false) => {
+            "SELECT id, cwd, title, custom_title, updated_at, 0 FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+        (false, true) => {
+            "SELECT id, cwd, title, NULL, updated_at, is_playground FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+        (false, false) => {
+            "SELECT id, cwd, title, NULL, updated_at, 0 FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+    };
+    let mut stmt = match conn.prepare(sql) {
         Ok(s) => s,
         Err(_) => return json!([]),
     };
@@ -80,21 +133,28 @@ pub fn list_sessions_for_user(uid: &str) -> Value {
             row.get::<_, Option<String>>(0)?,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
-            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
         ))
     });
 
     let mut sessions: Vec<Value> = Vec::new();
     if let Ok(iter) = rows {
         for r in iter.flatten() {
-            let (cid, cwd, title, updated_at) = r;
+            let (cid, cwd, title, custom_title, updated_at, is_playground) = r;
             let cid = cid.unwrap_or_default();
+            let cwd = cwd.unwrap_or_default();
+            if is_claw_workspace(&cwd) {
+                continue;
+            }
             sessions.push(json!({
                 "id": cid,
-                "title": title.unwrap_or_else(|| "(无标题)".to_string()),
-                "cwd": cwd.unwrap_or_default(),
+                "title": session_display_title(title, custom_title),
+                "cwd": cwd,
                 "updatedAt": updated_at.unwrap_or(0),
                 "hasHistory": find_project_jsonl(&cid).is_some(),
+                "isPlayground": is_playground.unwrap_or(0) != 0,
             }));
         }
     }
@@ -147,6 +207,18 @@ fn backup_workbuddy_db(backup_root: &Path) -> Option<PathBuf> {
 pub fn copy_session_to_user(cid: &str, source_uid: &str, target_uid: &str) -> Result<Value, String> {
     let new_cid = uuid::Uuid::new_v4().to_string();
     let db = workbuddy_db_path();
+    if let Some(conn) = open_db(&db, true) {
+        let cwd: Option<String> = conn
+            .query_row(
+                "SELECT cwd FROM sessions WHERE id = ?1 AND user_id = ?2",
+                rusqlite::params![cid, source_uid],
+                |r| r.get(0),
+            )
+            .ok();
+        if cwd.as_deref().is_some_and(is_claw_workspace) {
+            return Err("Claw 工作区绑定当前账号渠道，不支持复制".into());
+        }
+    }
 
     // 1) 复制正文 jsonl：{projects}/{ws}/{cid}.jsonl → {projects}/{ws}/{new_cid}.jsonl
     let mut jsonl_copied = false;
@@ -213,6 +285,13 @@ fn insert_session_copy(
             let v = row
                 .get::<_, rusqlite::types::Value>(i)
                 .unwrap_or(rusqlite::types::Value::Null);
+            if col == "cwd" {
+                if let rusqlite::types::Value::Text(ref path) = v {
+                    if is_claw_workspace(path) {
+                        return Err("Claw 工作区绑定当前账号渠道，不支持复制".into());
+                    }
+                }
+            }
             match col.as_str() {
                 "id" => vals.push(rusqlite::types::Value::Text(new_cid.to_string())),
                 "user_id" => {
@@ -421,5 +500,35 @@ mod tests {
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch("CREATE TABLE other (x INTEGER);").unwrap();
         assert!(!insert_edge_sync_mapping(&db, "new-1", "uid-b"));
+    }
+
+    #[test]
+    fn session_display_title_prefers_custom_title() {
+        assert_eq!(
+            session_display_title(Some("自动标题".into()), Some("美团每日自动领券".into())),
+            "美团每日自动领券"
+        );
+        assert_eq!(
+            session_display_title(None, Some("美团每日自动领券".into())),
+            "美团每日自动领券"
+        );
+        assert_eq!(
+            session_display_title(Some("汉字详情页".into()), None),
+            "汉字详情页"
+        );
+        assert_eq!(session_display_title(None, None), "(无标题)");
+        assert_eq!(
+            session_display_title(Some("  ".into()), Some("".into())),
+            "(无标题)"
+        );
+    }
+
+    #[test]
+    fn claw_workspace_detected_by_folder_name() {
+        assert!(is_claw_workspace("/Users/apple/WorkBuddy/Claw"));
+        assert!(is_claw_workspace("/Users/apple/WorkBuddy/claw/"));
+        assert!(is_claw_workspace(r"C:\Users\me\WorkBuddy\Claw"));
+        assert!(!is_claw_workspace("/Users/apple/WorkBuddy/ClawBot"));
+        assert!(!is_claw_workspace("/Users/apple/Documents/AI-PROJECT/LetterTotTown"));
     }
 }

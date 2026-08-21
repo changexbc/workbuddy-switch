@@ -79,6 +79,8 @@ export interface Session {
   cwd: string;
   updatedAt: number;
   hasHistory: boolean;
+  /** WorkBuddy playground（侧栏「任务」）；缺省视为空间会话。 */
+  isPlayground?: boolean;
 }
 
 export interface CopyResult {
