@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-switch-linux-arm64",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "workbuddy-switch platform binary (linux-arm64)",
   "os": ["linux"],
   "cpu": ["arm64"],
