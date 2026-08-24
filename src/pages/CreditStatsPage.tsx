@@ -25,8 +25,12 @@ import {
 import * as api from "@/lib/api";
 import type {
   CreditExpiry,
+  CreditOfficialUsage,
+  CreditOfficialUsageAccount,
+  CreditOfficialUsageRequest,
   CreditResource,
   CreditStatsAccount,
+  CreditStatsDailyPoint,
   CreditStatsEvent,
   CreditStatistics,
 } from "@/lib/types";
@@ -81,10 +85,21 @@ function accountLabel(account: CreditStatsAccount): string {
   return account.accountName || account.accountId;
 }
 
-function chartPoints(stats: CreditStatistics, range: RangeKey) {
+function isOfficialUsageAvailable(officialUsage?: CreditOfficialUsage): boolean {
+  return officialUsage?.status === "complete" || officialUsage?.status === "partial";
+}
+
+function officialAccountFor(
+  officialUsage: CreditOfficialUsage | undefined,
+  accountId: string,
+): CreditOfficialUsageAccount | undefined {
+  return officialUsage?.accounts.find((account) => account.accountId === accountId);
+}
+
+function chartPoints(daily: CreditStatsDailyPoint[], range: RangeKey) {
   const today = dateKey(new Date());
   const firstDate = range === "today" ? today : range === "7d" ? dateDaysAgo(6) : dateDaysAgo(29);
-  return stats.daily.filter((point) => {
+  return daily.filter((point) => {
     if (range === "month") {
       return point.date.startsWith(`${today.slice(0, 7)}-`);
     }
@@ -92,16 +107,20 @@ function chartPoints(stats: CreditStatistics, range: RangeKey) {
   });
 }
 
-function rangeUsage(stats: CreditStatistics, range: RangeKey): number {
+function rangeUsage(
+  summary: CreditStatistics["summary"] | CreditOfficialUsage["summary"],
+  daily: CreditStatsDailyPoint[],
+  range: RangeKey,
+): number {
   switch (range) {
     case "today":
-      return stats.summary.usageToday;
+      return summary.usageToday;
     case "7d":
-      return stats.summary.usage7Days;
+      return summary.usage7Days;
     case "month":
-      return stats.summary.usageThisMonth;
+      return summary.usageThisMonth;
     case "30d":
-      return stats.daily
+      return daily
         .filter((point) => point.date >= dateDaysAgo(29) && point.date <= dateKey(new Date()))
         .reduce((sum, point) => sum + point.usage, 0);
   }
@@ -166,16 +185,23 @@ function StatCard({
 
 function TrendChart({
   stats,
+  officialUsage,
   range,
   onRangeChange,
 }: {
   stats: CreditStatistics;
+  officialUsage?: CreditOfficialUsage;
   range: RangeKey;
   onRangeChange: (range: RangeKey) => void;
 }) {
-  const points = chartPoints(stats, range);
+  const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
+  const officialAvailable = Boolean(official);
+  const daily = official ? official.daily : stats.daily;
+  const summary = official ? official.summary : stats.summary;
+  const points = chartPoints(daily, range);
   const maxUsage = Math.max(1, ...points.map((point) => point.usage));
   const hasObservedUsage = points.some((point) => point.usage > 0);
+  const hasDataSource = officialAvailable || Boolean(stats.coverageStartAt);
 
   return (
     <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
@@ -184,10 +210,12 @@ function TrendChart({
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-2 text-sm">
               <TrendingDown className="size-4 text-primary" />
-              观察到的积分消耗
+              {officialAvailable ? "官方积分消耗" : "本地观察积分消耗"}
             </CardTitle>
             <CardDescription className="mt-1 text-xs">
-              只统计连续快照中余额下降的正差值，不代表服务端官方账单。
+              {officialAvailable
+                ? `来自 WorkBuddy 官方请求用量 · ${official?.rangeStart} 至 ${official?.rangeEnd}`
+                : "只统计连续快照中余额下降的正差值；官方用量暂不可用时保留此口径。"}
             </CardDescription>
           </div>
           <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
@@ -210,7 +238,7 @@ function TrendChart({
         </div>
       </CardHeader>
       <CardContent className="min-w-0 px-4 py-5 sm:px-5">
-        {!stats.coverageStartAt ? (
+        {!hasDataSource ? (
           <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
             尚无积分快照。首次成功采集后，统计会从该时刻开始累计。
           </div>
@@ -247,8 +275,14 @@ function TrendChart({
               </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span>{hasObservedUsage ? `当前口径合计 ${formatCredits(rangeUsage(stats, range))} 积分` : "已采集快照，暂未观察到余额下降"}</span>
-              <span>数据覆盖至 {formatDate(stats.generatedAt)}</span>
+              <span>
+                {hasObservedUsage
+                  ? `当前口径合计 ${formatCredits(rangeUsage(summary, daily, range))} 积分`
+                  : officialAvailable
+                    ? "官方已返回明细，当前范围暂无积分消耗"
+                    : "已采集快照，暂未观察到余额下降"}
+              </span>
+              <span>{officialAvailable ? `数据更新于 ${formatDateTime(stats.generatedAt)}` : `数据覆盖至 ${formatDate(stats.generatedAt)}`}</span>
             </div>
             <p className="sr-only">
               {points.map((point) => `${point.date} 消耗 ${formatCredits(point.usage)} 积分`).join("；")}
@@ -262,13 +296,17 @@ function TrendChart({
 
 function AccountTable({
   stats,
+  officialUsage,
   selectedId,
   onSelect,
 }: {
   stats: CreditStatistics;
+  officialUsage?: CreditOfficialUsage;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
+
   return (
     <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
       <CardHeader className="border-b px-4 py-4 sm:px-5">
@@ -277,7 +315,7 @@ function AccountTable({
           账号积分明细
         </CardTitle>
         <CardDescription className="mt-1 text-xs">
-          账号 ID 是统计关联键，名称只用于展示；点击一行查看资源包和事件。
+          账号 ID 是统计关联键，名称只用于展示；官方用量优先，点击一行查看积分明细和事件。
         </CardDescription>
       </CardHeader>
       {stats.accounts.length === 0 ? (
@@ -298,6 +336,10 @@ function AccountTable({
             <tbody>
               {stats.accounts.map((account) => {
                 const selected = account.accountId === selectedId;
+                const officialAccount = officialAccountFor(official, account.accountId);
+                const usageToday = official ? officialAccount?.usageToday : account.usageToday;
+                const usage7Days = official ? officialAccount?.usage7Days : account.usage7Days;
+                const usageThisMonth = official ? officialAccount?.usageThisMonth : account.usageThisMonth;
                 return (
                   <tr
                     key={account.accountId}
@@ -316,6 +358,14 @@ function AccountTable({
                               历史
                             </Badge>
                           )}
+                          {official && account.isCurrent && (
+                            <Badge
+                              variant={officialAccount?.ok ? "success" : "warning"}
+                              className="shrink-0 px-1.5 py-0 text-[10px]"
+                            >
+                              {officialAccount?.ok ? "官方" : "不可用"}
+                            </Badge>
+                          )}
                         </span>
                         <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                           {account.accountId}
@@ -325,9 +375,9 @@ function AccountTable({
                     <td className="px-3 py-3 text-right font-medium">
                       {formatCredits(account.currentRemaining)}
                     </td>
-                    <td className="px-3 py-3 text-right">{formatCredits(account.usageToday)}</td>
-                    <td className="px-3 py-3 text-right">{formatCredits(account.usage7Days)}</td>
-                    <td className="px-3 py-3 text-right">{formatCredits(account.usageThisMonth)}</td>
+                    <td className="px-3 py-3 text-right">{formatCredits(usageToday)}</td>
+                    <td className="px-3 py-3 text-right">{formatCredits(usage7Days)}</td>
+                    <td className="px-3 py-3 text-right">{formatCredits(usageThisMonth)}</td>
                     <td className="px-4 py-3 text-right sm:px-5">
                       <Badge variant={checkinBadgeVariant(account.checkinStatusToday)}>
                         {checkinLabel(account.checkinStatusToday)}
@@ -397,6 +447,113 @@ function ResourceBreakdown({ credit, loading }: { credit?: CreditExpiry; loading
   );
 }
 
+function OfficialUsageMetric({ label, value }: { label: string; value: number | null | undefined }) {
+  return (
+    <div className="min-w-0 rounded-lg bg-muted/45 px-3 py-2.5">
+      <div className="truncate text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate text-base font-semibold tracking-tight">{formatCredits(value)}</div>
+    </div>
+  );
+}
+
+function OfficialRequestRow({ request }: { request: CreditOfficialUsageRequest }) {
+  return (
+    <tr className="border-t border-border/60 align-top">
+      <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{request.requestTime}</td>
+      <td className="whitespace-nowrap px-3 py-3 text-right font-medium text-primary">
+        {formatCredits(request.credit)}
+      </td>
+      <td className="max-w-[180px] truncate px-3 py-3" title={request.model}>
+        {request.model}
+      </td>
+      <td className="max-w-[120px] truncate px-3 py-3 text-muted-foreground" title={request.client}>
+        {request.client}
+      </td>
+      <td className="max-w-[170px] truncate px-3 py-3 font-mono text-[10px] text-muted-foreground" title={request.requestId}>
+        {request.requestId}
+      </td>
+    </tr>
+  );
+}
+
+function OfficialUsageBreakdown({
+  officialUsage,
+  account,
+}: {
+  officialUsage?: CreditOfficialUsage;
+  account?: CreditOfficialUsageAccount;
+}) {
+  const officialAvailable = isOfficialUsageAvailable(officialUsage);
+
+  if (!officialAvailable || !officialUsage) {
+    return (
+      <div className="flex items-start gap-2 px-4 py-8 text-sm text-muted-foreground sm:px-5">
+        <CircleAlert className="mt-0.5 size-4 shrink-0" />
+        <span>官方请求用量暂不可用；总览已回退到本地观察数据，请稍后刷新重试。</span>
+      </div>
+    );
+  }
+
+  if (!account) {
+    return <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">该账号暂无官方用量记录。</div>;
+  }
+
+  if (!account.ok) {
+    return (
+      <div className="flex items-start gap-2 px-4 py-8 text-sm text-destructive sm:px-5">
+        <CircleAlert className="mt-0.5 size-4 shrink-0" />
+        <span>{account.error || "该账号的官方请求用量查询失败"}</span>
+      </div>
+    );
+  }
+
+  const requests = officialUsage.requests.filter((request) => request.accountId === account.accountId);
+  const totalRequests = account.reportedTotal ?? account.requestCount;
+
+  return (
+    <div className="min-w-0">
+      <div className="grid grid-cols-2 gap-2 border-b px-4 py-3 sm:grid-cols-4 sm:px-5">
+        <OfficialUsageMetric label="今日消耗" value={account.usageToday} />
+        <OfficialUsageMetric label="近 7 天" value={account.usage7Days} />
+        <OfficialUsageMetric label="本月消耗" value={account.usageThisMonth} />
+        <OfficialUsageMetric label="官方请求数" value={totalRequests} />
+      </div>
+      {account.detailTruncated && (
+        <div className="flex items-start gap-2 border-b bg-amber-500/[0.06] px-4 py-2.5 text-xs text-amber-800 sm:px-5">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            仅展示最近 {officialUsage.detailLimitPerAccount} 条请求明细；上方统计使用官方返回的全部 {formatCredits(totalRequests)} 条请求。
+          </span>
+        </div>
+      )}
+      {requests.length === 0 ? (
+        <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">
+          {totalRequests > 0 ? "官方返回了请求总数，但明细未通过格式校验。" : "官方暂无请求用量。"}
+        </div>
+      ) : (
+        <div className="min-w-0 overflow-x-auto">
+          <table className="w-full min-w-[700px] text-left text-[11px]">
+            <thead className="bg-muted/45 text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2.5 font-medium">请求时间</th>
+                <th className="px-3 py-2.5 text-right font-medium">消耗</th>
+                <th className="px-3 py-2.5 font-medium">模型</th>
+                <th className="px-3 py-2.5 font-medium">客户端</th>
+                <th className="px-3 py-2.5 font-medium">请求 ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map((request) => (
+                <OfficialRequestRow key={`${request.requestId}-${request.requestTime}`} request={request} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EventRow({ event }: { event: CreditStatsEvent }) {
   if (event.kind === "usage") {
     return (
@@ -446,12 +603,20 @@ function SelectedAccountDetails({
   credit,
   creditLoading,
   events,
+  officialUsage,
 }: {
   account: CreditStatsAccount | null;
   credit?: CreditExpiry;
   creditLoading?: boolean;
   events: CreditStatsEvent[];
+  officialUsage?: CreditOfficialUsage;
 }) {
+  const [detailTab, setDetailTab] = useState<"credits" | "requests">("credits");
+
+  useEffect(() => {
+    setDetailTab("credits");
+  }, [account?.accountId]);
+
   if (!account) {
     return (
       <Card className="min-w-0 rounded-xl shadow-none">
@@ -460,19 +625,60 @@ function SelectedAccountDetails({
     );
   }
 
+  const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
+  const officialAccount = officialAccountFor(official, account.accountId);
+
   return (
     <div className="grid min-w-0 gap-4 lg:grid-cols-2">
       <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
         <CardHeader className="border-b px-4 py-4 sm:px-5">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <CreditCard className="size-4 text-primary" />
-            当前资源包
-          </CardTitle>
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <CardTitle className="flex min-w-0 items-center gap-2 text-sm">
+              <CreditCard className="size-4 shrink-0 text-primary" />
+              <span className="truncate">积分明细</span>
+            </CardTitle>
+            {official ? (
+              <Badge variant={officialAccount?.ok ? "success" : "warning"} className="shrink-0">
+                {officialAccount?.ok ? "官方已同步" : "官方不可用"}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="shrink-0">
+                本地观察
+              </Badge>
+            )}
+          </div>
           <CardDescription className="mt-1 truncate text-xs" title={account.accountId}>
             {accountLabel(account)} · 最近采集 {formatDateTime(account.lastSnapshotAt)}
           </CardDescription>
+          <div className="mt-3 flex max-w-full gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label="积分详情类型">
+            {(
+              [
+                ["credits", "积分明细"],
+                ["requests", "请求用量"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={detailTab === value}
+                className={`min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                  detailTab === value
+                    ? "bg-background font-medium text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => setDetailTab(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </CardHeader>
-        <ResourceBreakdown credit={credit} loading={creditLoading} />
+        {detailTab === "credits" ? (
+          <ResourceBreakdown credit={credit} loading={creditLoading} />
+        ) : (
+          <OfficialUsageBreakdown officialUsage={officialUsage} account={officialAccount} />
+        )}
       </Card>
       <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
         <CardHeader className="border-b px-4 py-4 sm:px-5">
@@ -480,7 +686,7 @@ function SelectedAccountDetails({
             <Database className="size-4 text-primary" />
             最近事件
           </CardTitle>
-          <CardDescription className="mt-1 text-xs">签到与积分观察分开记录，签到不会计入消耗。</CardDescription>
+          <CardDescription className="mt-1 text-xs">签到单独记录，不会计入官方请求用量。</CardDescription>
         </CardHeader>
         <CardContent className="max-h-[340px] min-w-0 overflow-y-auto px-4 py-1 sm:px-5">
           {events.length === 0 ? (
@@ -575,6 +781,8 @@ export default function CreditStatsPage() {
     () => stats?.events.filter((event) => event.accountId === selectedId).slice(0, 50) ?? [],
     [selectedId, stats],
   );
+  const officialUsage = stats?.officialUsage;
+  const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
 
   return (
     <div className="mx-auto w-full max-w-[1180px] min-w-0 px-4 py-6 sm:px-8 sm:py-9">
@@ -582,7 +790,7 @@ export default function CreditStatsPage() {
         <div className="min-w-0">
           <h1 className="text-[28px] font-semibold tracking-tight">积分统计</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            用本地积分快照追踪账号余额变化，并把签到记录作为独立事件查看。
+            优先展示 WorkBuddy 官方请求用量；接口不可用时保留本地积分快照，并把签到记录作为独立事件查看。
           </p>
         </div>
         <Button
@@ -625,15 +833,34 @@ export default function CreditStatsPage() {
             </Alert>
           )}
 
+          {officialUsage && officialUsage.status !== "complete" && (
+            <Alert variant="warning" className="mb-5">
+              <CircleAlert />
+              <AlertTitle>
+                {officialUsage.status === "partial" ? "部分账号官方用量未同步" : "官方用量暂不可用"}
+              </AlertTitle>
+              <AlertDescription>
+                {officialUsage.status === "partial"
+                  ? `已同步 ${officialUsage.accounts.filter((account) => account.ok).length}/${officialUsage.accounts.length} 个当前账号；失败账号的官方数值显示为“—”。`
+                  : "今日、近 7 天和本月消耗将使用本地观察口径；官方接口恢复后刷新即可重新同步。"}
+                {officialUsage.errors.length > 0 && (
+                  <span className="text-xs text-amber-900/75">
+                    {officialUsage.errors.map((item) => `${item.accountName}: ${item.error}`).join("；")}
+                  </span>
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
+
           <section className="mb-5 grid min-w-0 grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:grid-cols-5" aria-label="积分总览">
             <StatCard icon={<CreditCard className="size-3.5" />} label="当前剩余积分" value={formatCredits(stats.summary.currentRemaining)} />
-            <StatCard icon={<TrendingDown className="size-3.5" />} label="今日观察消耗" value={formatCredits(stats.summary.usageToday)} />
-            <StatCard icon={<TrendingDown className="size-3.5" />} label="近 7 天消耗" value={formatCredits(stats.summary.usage7Days)} />
-            <StatCard icon={<TrendingDown className="size-3.5" />} label="本月观察消耗" value={formatCredits(stats.summary.usageThisMonth)} />
+            <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "今日官方消耗" : "今日观察消耗"} value={formatCredits(official ? official.summary.usageToday : stats.summary.usageToday)} />
+            <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "近 7 天官方消耗" : "近 7 天观察消耗"} value={formatCredits(official ? official.summary.usage7Days : stats.summary.usage7Days)} />
+            <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "本月官方消耗" : "本月观察消耗"} value={formatCredits(official ? official.summary.usageThisMonth : stats.summary.usageThisMonth)} />
             <StatCard icon={<CalendarCheck className="size-3.5" />} label="今日签到账号" value={`${stats.summary.todayCheckedInAccounts}`} hint={`成功 ${stats.summary.todaySuccess} · 已签 ${stats.summary.todayAlready}`} />
           </section>
 
-          {!stats.coverageStartAt && stats.events.some((event) => event.kind === "checkin") && (
+          {!official && !stats.coverageStartAt && stats.events.some((event) => event.kind === "checkin") && (
             <Alert className="mb-5">
               <CalendarCheck />
               <AlertTitle>目前只有签到记录</AlertTitle>
@@ -642,11 +869,11 @@ export default function CreditStatsPage() {
           )}
 
           <div className="mb-5">
-            <TrendChart stats={stats} range={range} onRangeChange={setRange} />
+            <TrendChart stats={stats} officialUsage={officialUsage} range={range} onRangeChange={setRange} />
           </div>
 
           <div className="mb-5">
-          <AccountTable stats={stats} selectedId={selectedId} onSelect={setSelectedId} />
+            <AccountTable stats={stats} officialUsage={officialUsage} selectedId={selectedId} onSelect={setSelectedId} />
           </div>
 
           {!selectedAccount && stats.events.length > 0 && <UnselectedRecentEvents events={stats.events} />}
@@ -656,6 +883,7 @@ export default function CreditStatsPage() {
             credit={selectedId ? creditMap[selectedId] : undefined}
             creditLoading={selectedId ? creditLoadingMap[selectedId] : undefined}
             events={selectedEvents}
+            officialUsage={officialUsage}
           />
         </>
       ) : (

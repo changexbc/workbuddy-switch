@@ -203,6 +203,34 @@ fn is_unauthorized(response: &Value) -> bool {
         .any(|keyword| message.contains(keyword))
 }
 
+/// 发起需要账号身份的 JSON POST 请求。
+///
+/// 资源查询和官方用量查询必须共用这条链路：先按现有惰性策略保证 token
+/// 新鲜，遇到未授权时使用 refresh token 重试一次。调用方只拿到上游 JSON，
+/// 不会把认证字段拼进返回值。
+pub async fn authenticated_post(account: &Value, url: &str, body: Value) -> Value {
+    let config = load_checkin_config();
+    let mut working_account = ensure_fresh_token(account.clone(), &config).await;
+    let mut response = {
+        let headers = build_auth_headers(&working_account);
+        http_request(url, "POST", Some(body.clone()), Some(&headers)).await
+    };
+
+    if is_unauthorized(&response)
+        && !working_account
+            .get("refresh_token")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .is_empty()
+    {
+        working_account = refresh_account_token(working_account).await;
+        let headers = build_auth_headers(&working_account);
+        response = http_request(url, "POST", Some(body), Some(&headers)).await;
+    }
+
+    response
+}
+
 async fn fetch_user_resource(account: &Value) -> Value {
     let now = Local::now();
     let begin = now.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -218,28 +246,14 @@ async fn fetch_user_resource(account: &Value) -> Value {
         "PackageEndTimeRangeEnd": end,
     });
     let url = format!("{WORKBUDDY_API_ENDPOINT}{USER_RESOURCE_PATH}");
-    let headers = build_auth_headers(account);
-    http_request(&url, "POST", Some(body), Some(&headers)).await
+    authenticated_post(account, &url, body).await
 }
 
 /// 查询单账号的积分资源及到期时间。
 pub async fn get_credit_expiry(account: &Value) -> Value {
-    let config = load_checkin_config();
-    let mut working_account = ensure_fresh_token(account.clone(), &config).await;
-    let mut response = fetch_user_resource(&working_account).await;
+    let response = fetch_user_resource(account).await;
 
-    if is_unauthorized(&response)
-        && !working_account
-            .get("refresh_token")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .is_empty()
-    {
-        working_account = refresh_account_token(working_account).await;
-        response = fetch_user_resource(&working_account).await;
-    }
-
-    let account_id = working_account
+    let account_id = account
         .get("id")
         .cloned()
         .unwrap_or(Value::Null);
@@ -247,7 +261,7 @@ pub async fn get_credit_expiry(account: &Value) -> Value {
         return json!({
             "ok": false,
             "accountId": account_id,
-            "accountName": account_display_name(&working_account),
+            "accountName": account_display_name(account),
             "error": response_error(&response),
         });
     }
@@ -318,7 +332,7 @@ pub async fn get_credit_expiry(account: &Value) -> Value {
         })
         .filter_map(|resource| resource.get("remaining").and_then(|value| value.as_f64()))
         .sum();
-    let account_name = account_display_name(&working_account);
+    let account_name = account_display_name(account);
     if let Some(account_id) = account_id.as_str() {
         let _ = credit_usage::record_snapshot(
             account_id,

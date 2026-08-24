@@ -234,6 +234,56 @@ export interface CreditStatsCheckinEvent {
 
 export type CreditStatsEvent = CreditStatsUsageEvent | CreditStatsCheckinEvent;
 
+export type CreditOfficialUsageStatus = "complete" | "partial" | "unavailable";
+
+export interface CreditOfficialUsageSummary {
+  usageToday: number;
+  usage7Days: number;
+  usageThisMonth: number;
+}
+
+export interface CreditOfficialUsageAccount {
+  accountId: string;
+  accountName: string;
+  ok: boolean;
+  requestCount: number;
+  detailTruncated: boolean;
+  usageToday: number | null;
+  usage7Days: number | null;
+  usageThisMonth: number | null;
+  error?: string | null;
+  reportedTotal?: number | null;
+  fetchedCount?: number;
+}
+
+export interface CreditOfficialUsageRequest {
+  accountId: string;
+  accountName: string;
+  requestId: string;
+  credit: number;
+  model: string;
+  client: string;
+  requestTime: string;
+}
+
+export interface CreditOfficialUsageError {
+  accountId: string;
+  accountName: string;
+  error: string;
+}
+
+export interface CreditOfficialUsage {
+  status: CreditOfficialUsageStatus;
+  rangeStart: string;
+  rangeEnd: string;
+  summary: CreditOfficialUsageSummary;
+  daily: CreditStatsDailyPoint[];
+  accounts: CreditOfficialUsageAccount[];
+  requests: CreditOfficialUsageRequest[];
+  detailLimitPerAccount: number;
+  errors: CreditOfficialUsageError[];
+}
+
 export interface CreditStatistics {
   generatedAt: number;
   retentionDays: number;
@@ -242,6 +292,8 @@ export interface CreditStatistics {
   daily: CreditStatsDailyPoint[];
   accounts: CreditStatsAccount[];
   events: CreditStatsEvent[];
+  /** 官方接口不可用时仍使用上述本地观察字段；缺省兼容旧后端。 */
+  officialUsage?: CreditOfficialUsage;
 }
 
 export interface CodeBuddyCliStatus {

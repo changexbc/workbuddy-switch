@@ -15,6 +15,7 @@ use crate::modules::config::{
     atomic_write, credit_usage_snapshots_file, load_checkin_logs, now_ms, store_dir,
     CHECKIN_LOG_KEEP_DAYS,
 };
+use crate::modules::official_usage;
 
 pub const CREDIT_SNAPSHOT_RETENTION_DAYS: i64 = 90;
 pub const CREDIT_SNAPSHOT_MAX_RECORDS: usize = 5_000;
@@ -524,14 +525,18 @@ fn build_statistics(
     })
 }
 
-/// 返回当前本地快照、账号列表和签到日志的统一统计投影。
-pub fn get_statistics() -> Value {
-    build_statistics(
+/// 返回本地快照、账号列表、签到日志与官方请求用量的统一统计投影。
+pub async fn get_statistics() -> Value {
+    let at_ms = now_ms();
+    let accounts = load_accounts();
+    let mut statistics = build_statistics(
         &load_snapshots(),
         &load_checkin_logs(),
-        &load_accounts(),
-        now_ms(),
-    )
+        &accounts,
+        at_ms,
+    );
+    statistics["officialUsage"] = official_usage::collect_official_usage(&accounts, at_ms).await;
+    statistics
 }
 
 #[cfg(test)]

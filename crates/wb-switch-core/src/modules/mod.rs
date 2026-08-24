@@ -7,6 +7,7 @@ pub mod credits;
 pub mod credit_usage;
 pub mod export_import;
 pub mod oauth;
+pub mod official_usage;
 pub mod process;
 pub mod refresh;
 pub mod rotate;

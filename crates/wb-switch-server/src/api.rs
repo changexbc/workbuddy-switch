@@ -347,7 +347,7 @@ async fn api_credits(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_credit_statistics() -> Response {
-    json_ok(credit_usage::get_statistics())
+    json_ok(credit_usage::get_statistics().await)
 }
 
 async fn api_checkin(Json(body): Json<Value>) -> Response {

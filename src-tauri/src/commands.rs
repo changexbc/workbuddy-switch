@@ -263,10 +263,10 @@ pub async fn get_credit_expiry(account_id: String) -> Result<Value, String> {
     Ok(credits::get_credit_expiry(&acc).await)
 }
 
-/// GET /api/credits/stats —— 本地积分观察统计。
+/// GET /api/credits/stats —— 本地快照与官方请求用量统计。
 #[tauri::command]
-pub fn get_credit_statistics() -> Value {
-    credit_usage::get_statistics()
+pub async fn get_credit_statistics() -> Value {
+    credit_usage::get_statistics().await
 }
 
 /// POST /api/checkin —— 单账号立即签到。
