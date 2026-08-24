@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  CalendarCheck,
+  CircleCheck,
   Download,
   FileDown,
   FileUp,
@@ -12,10 +12,10 @@ import {
 } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
-import { CodeBuddyMark, StatusDot, WorkBuddyMark } from "@/components/product-marks";
+import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -407,57 +407,60 @@ export default function AccountsPage() {
   return (
     <div className="mx-auto w-full max-w-[1080px] px-6 py-8 sm:px-8 sm:py-9">
       <header className="mb-6">
-        <h1 className="text-[28px] font-semibold tracking-tight">账号管理</h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          统一管理 WorkBuddy 与 CodeBuddy CLI 账号、积分和签到状态。
-        </p>
-        <div className="mt-5 flex items-center gap-3">
-          <label htmlFor="accounts-auto-checkin" className="text-sm">
-            自动签到
-          </label>
-          <Switch
-            id="accounts-auto-checkin"
-            checked={autoCheckinConfig?.enabled ?? false}
-            disabled={!autoCheckinConfig || autoCheckinSaving}
-            onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
-            aria-label="自动签到"
-          />
-          {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-[28px] font-semibold tracking-tight">账号管理</h1>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              统一管理 WorkBuddy 与 CodeBuddy CLI 账号、积分和签到状态。
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-4 pt-1">
+            <div className="flex items-center gap-2">
+              <label htmlFor="accounts-auto-checkin" className="flex items-center gap-1.5 text-sm">
+                <CircleCheck className="size-4 text-muted-foreground" />
+                自动签到
+              </label>
+              <Switch
+                id="accounts-auto-checkin"
+                checked={autoCheckinConfig?.enabled ?? false}
+                disabled={!autoCheckinConfig || autoCheckinSaving}
+                onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
+                aria-label="自动签到"
+              />
+              {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+            </div>
+            <div className="flex items-center gap-2.5">
+              <span className="group relative inline-flex cursor-default">
+                <span
+                  className={
+                    status?.running
+                      ? "inline-flex rounded-[22%] bg-emerald-500 p-[2px] shadow-sm shadow-emerald-500/40"
+                      : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
+                  }
+                >
+                  <WorkBuddyMark size={28} />
+                </span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
+                  WorkBuddy：{status?.running ? "运行中" : "未运行"} · 当前账号：{workbuddyCurrentName}
+                </span>
+              </span>
+              <span className="group relative inline-flex cursor-default">
+                <span
+                  className={
+                    codebuddyCli?.configured
+                      ? "inline-flex rounded-[22%] bg-emerald-500 p-[2px] shadow-sm shadow-emerald-500/40"
+                      : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
+                  }
+                >
+                  <CodeBuddyMark size={28} />
+                </span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
+                  CodeBuddy CLI：{codebuddyCli?.configured ? "已接入" : "未接入"} · 当前账号：{codebuddyCurrentName}
+                </span>
+              </span>
+            </div>
+          </div>
         </div>
-        <Card className="mt-6 min-w-0 gap-0 overflow-hidden rounded-[12px] py-0 shadow-none">
-          <CardContent className="min-w-0 p-0">
-            <div className="flex min-w-0 items-center justify-between gap-3 border-b px-5 py-4">
-              <div className="flex min-w-0 items-center gap-3">
-                <WorkBuddyMark size={36} />
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold">WorkBuddy</div>
-                  <div className="mt-0.5 truncate text-sm text-muted-foreground">
-                    当前账号：{workbuddyCurrentName}
-                  </div>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
-                <StatusDot on={Boolean(status?.running)} />
-                {status?.running ? "运行中" : "未运行"}
-              </div>
-            </div>
-            <div className="flex min-w-0 items-center justify-between gap-3 px-5 py-4">
-              <div className="flex min-w-0 items-center gap-3">
-                <CodeBuddyMark size={36} />
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold">CodeBuddy CLI</div>
-                  <div className="mt-0.5 truncate text-sm text-muted-foreground">
-                    当前账号：{codebuddyCurrentName}
-                  </div>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
-                <StatusDot on={Boolean(codebuddyCli?.configured)} />
-                {codebuddyCli?.configured ? "已接入" : "未接入"}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
       </header>
 
       <div className="mb-6 flex flex-wrap items-center gap-2.5">
@@ -497,7 +500,7 @@ export default function AccountsPage() {
           disabled={refreshingCheckin || accounts.length === 0}
           variant="outline"
         >
-          {refreshingCheckin ? <Loader2 className="animate-spin" /> : <CalendarCheck />}
+          {refreshingCheckin ? <Loader2 className="animate-spin" /> : <CircleCheck />}
           刷新签到状态
         </Button>
       </div>

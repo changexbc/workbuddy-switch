@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  CalendarCheck,
-  CheckCircle2,
   CircleAlert,
+  CircleCheck,
   CreditCard,
   Database,
   Loader2,
@@ -149,9 +148,8 @@ function checkinBadgeVariant(
 ): "success" | "warning" | "destructive" | "outline" {
   switch (result) {
     case "success":
-      return "success";
     case "already":
-      return "warning";
+      return "success";
     case "error":
       return "destructive";
     default:
@@ -696,7 +694,7 @@ function EventRow({ event }: { event: CreditStatsEvent }) {
           isError ? "bg-destructive/10 text-destructive" : isAlready ? "bg-amber-500/10 text-amber-700" : "bg-emerald-500/10 text-emerald-700"
         }`}
       >
-        {isError ? <XCircle className="size-3.5" /> : isAlready ? <CalendarCheck className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
+        {isError ? <XCircle className="size-3.5" /> : <CircleCheck className="size-3.5" />}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs">
@@ -970,12 +968,12 @@ export default function CreditStatsPage() {
             <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "今日官方消耗" : "今日观察消耗"} value={formatCredits(official ? official.summary.usageToday : stats.summary.usageToday)} />
             <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "近 7 天官方消耗" : "近 7 天观察消耗"} value={formatCredits(official ? official.summary.usage7Days : stats.summary.usage7Days)} />
             <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "本月官方消耗" : "本月观察消耗"} value={formatCredits(official ? official.summary.usageThisMonth : stats.summary.usageThisMonth)} />
-            <StatCard icon={<CalendarCheck className="size-3.5" />} label="今日签到账号" value={`${stats.summary.todayCheckedInAccounts}`} hint={`成功 ${stats.summary.todaySuccess} · 已签 ${stats.summary.todayAlready}`} />
+            <StatCard icon={<CircleCheck className="size-3.5" />} label="今日签到账号" value={`${stats.summary.todayCheckedInAccounts}`} hint={`成功 ${stats.summary.todaySuccess} · 已签 ${stats.summary.todayAlready}`} />
           </section>
 
           {!official && !stats.coverageStartAt && stats.events.some((event) => event.kind === "checkin") && (
             <Alert className="mb-5">
-              <CalendarCheck />
+              <CircleCheck />
               <AlertTitle>目前只有签到记录</AlertTitle>
               <AlertDescription>签到不会被计入积分消耗。首次成功采集积分资源后，趋势统计才会开始累计。</AlertDescription>
             </Alert>

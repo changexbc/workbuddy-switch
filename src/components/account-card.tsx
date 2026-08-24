@@ -1,4 +1,4 @@
-import { CalendarCheck, CircleDot, Coins, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { CircleCheck, CircleDot, Coins, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -144,7 +144,7 @@ const chipClass = "rounded-md px-1.5 py-0 text-[11px] font-medium";
 
 function CurrentChip() {
   return (
-    <span className="ml-auto inline-flex items-center gap-0.5 rounded-full bg-background/70 px-1.5 py-px text-[11px] font-medium text-muted-foreground">
+    <span className="ml-auto inline-flex items-center gap-0.5 rounded-full border border-transparent bg-emerald-500/15 px-1.5 py-px text-[11px] font-medium text-emerald-700">
       <CircleDot className="size-3" />
       当前
     </span>
@@ -224,12 +224,18 @@ export function AccountCard({
               </div>
               {(todayCheckedIn !== undefined || account.needsRelogin || expired) && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {todayCheckedIn !== undefined && (
-                    <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>
-                      <CalendarCheck />
-                      {todayCheckedIn ? "已签到" : "未签到"}
-                    </Badge>
-                  )}
+                  {todayCheckedIn !== undefined &&
+                    (todayCheckedIn ? (
+                      <Badge variant="success" className={chipClass}>
+                        <CircleCheck />
+                        已签到
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>
+                        <CircleCheck />
+                        未签到
+                      </Badge>
+                    ))}
                   {(account.needsRelogin || expired) && (
                     <Badge variant="warning" className={chipClass}>
                       {account.needsRelogin ? "需重新登录" : "Token 已过期"}
@@ -293,7 +299,7 @@ export function AccountCard({
                 disabled={featuresDisabled || !onCheckin}
                 onClick={() => onCheckin?.(account)}
               >
-                <CalendarCheck />
+                <CircleCheck />
                 签到
               </Button>
             )}

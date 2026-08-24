@@ -9,7 +9,7 @@ import type { UpdateInfo } from "@/lib/types";
 import AccountsPage from "@/pages/AccountsPage";
 import CreditStatsPage from "@/pages/CreditStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
-import { StatusDot, WorkBuddyMark } from "@/components/product-marks";
+import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useAccountsStore } from "@/stores/accounts";
@@ -82,7 +82,7 @@ function Layout() {
     <div className="flex h-screen min-h-0 overflow-hidden bg-background">
       <aside className="flex min-h-0 w-[220px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4">
         <div className="flex items-center gap-2.5 px-1 pb-6">
-          <WorkBuddyMark size={32} />
+          <AppIconMark size={32} />
           <div className="min-w-0 truncate text-[13px] font-semibold tracking-tight">workbuddy-switch</div>
         </div>
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5" aria-label="主导航">

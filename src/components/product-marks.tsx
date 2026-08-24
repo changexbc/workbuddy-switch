@@ -18,6 +18,19 @@ export function WorkBuddyMark({ size = 32, className }: MarkProps) {
   );
 }
 
+/** 应用自身的图标（public/icon.png，与 App 图标一致）。 */
+export function AppIconMark({ size = 32, className }: MarkProps) {
+  return (
+    <span
+      aria-hidden
+      className={cn("inline-flex shrink-0 overflow-hidden rounded-[22%]", className)}
+      style={{ width: size, height: size }}
+    >
+      <img src="/icon.png" alt="" className="size-full object-cover" />
+    </span>
+  );
+}
+
 export function CodeBuddyMark({ size = 32, className }: MarkProps) {
   const icon = Math.max(10, Math.round(size * 0.68));
   return (
@@ -45,11 +58,11 @@ export function CodeBuddyMark({ size = 32, className }: MarkProps) {
   );
 }
 
-export function StatusDot({ on }: { on: boolean }) {
+export function StatusDot({ on, className }: { on: boolean; className?: string }) {
   return (
     <span
       aria-hidden
-      className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-emerald-500" : "bg-muted-foreground/35")}
+      className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-emerald-500" : "bg-muted-foreground/35", className)}
     />
   );
 }

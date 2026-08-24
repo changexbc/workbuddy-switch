@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowUpCircle, CalendarCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
+import { ArrowUpCircle, CircleCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -236,7 +236,7 @@ function AutoCheckinCard() {
                 保存配置
               </Button>
               <Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy}>
-                {busy ? <Loader2 className="animate-spin" /> : <CalendarCheck />}
+                {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}
                 全部立即签到
               </Button>
             </div>
