@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use tauri::Emitter;
-use wb_switch_core::modules::{account, auth_file, checkin, codebuddy_cli, credits, export_import, oauth, process, refresh, rotate, session, switch, update};
+use wb_switch_core::modules::{account, auth_file, checkin, codebuddy_cli, credit_usage, credits, export_import, oauth, process, refresh, rotate, session, switch, update};
 
 #[derive(Serialize)]
 pub struct AppStatus {
@@ -261,6 +261,12 @@ pub async fn get_checkin_status(account_id: String) -> Result<Value, String> {
 pub async fn get_credit_expiry(account_id: String) -> Result<Value, String> {
     let acc = account::find_account(&account_id).ok_or("账号不存在")?;
     Ok(credits::get_credit_expiry(&acc).await)
+}
+
+/// GET /api/credits/stats —— 本地积分观察统计。
+#[tauri::command]
+pub fn get_credit_statistics() -> Value {
+    credit_usage::get_statistics()
 }
 
 /// POST /api/checkin —— 单账号立即签到。

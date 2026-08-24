@@ -16,8 +16,8 @@ use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
-    account, auth_file, checkin, codebuddy_cli, config, credits, export_import, oauth, process,
-    refresh, rotate, session, switch, update,
+    account, auth_file, checkin, codebuddy_cli, config, credit_usage, credits, export_import,
+    oauth, process, refresh, rotate, session, switch, update,
 };
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
@@ -73,6 +73,7 @@ pub fn router() -> Router {
         .route("/api/sessions/copy", post(api_copy_sessions))
         .route("/api/checkin/status", get(api_checkin_status))
         .route("/api/credits", post(api_credits))
+        .route("/api/credits/stats", get(api_credit_statistics))
         .route("/api/checkin", post(api_checkin))
         .route("/api/checkin/all", post(api_checkin_all))
         .route("/api/checkin/config", get(api_checkin_config).post(api_save_checkin_config))
@@ -343,6 +344,10 @@ async fn api_credits(Json(body): Json<Value>) -> Response {
         return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
     };
     json_ok(credits::get_credit_expiry(&acc).await)
+}
+
+async fn api_credit_statistics() -> Response {
+    json_ok(credit_usage::get_statistics())
 }
 
 async fn api_checkin(Json(body): Json<Value>) -> Response {

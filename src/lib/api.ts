@@ -11,6 +11,7 @@ import type {
   CheckinLog,
   CheckinResult,
   CreditExpiry,
+  CreditStatistics,
   CopyResult,
   GithubConfig,
   ImportPreviewAccount,
@@ -72,6 +73,7 @@ const ROUTES: Record<string, Route> = {
   copy_sessions: { method: "POST", path: "/api/sessions/copy" },
   get_checkin_status: { method: "GET", path: "/api/checkin/status" },
   get_credit_expiry: { method: "POST", path: "/api/credits" },
+  get_credit_statistics: { method: "GET", path: "/api/credits/stats" },
   checkin: { method: "POST", path: "/api/checkin" },
   checkin_all: { method: "POST", path: "/api/checkin/all" },
   get_auto_checkin_config: { method: "GET", path: "/api/checkin/config" },
@@ -268,6 +270,10 @@ export async function getCheckinStatus(accountId: string): Promise<{
 
 export function getCreditExpiry(accountId: string): Promise<CreditExpiry> {
   return call("get_credit_expiry", { accountId });
+}
+
+export function getCreditStatistics(): Promise<CreditStatistics> {
+  return call("get_credit_statistics");
 }
 
 export function checkin(accountId: string): Promise<CheckinResult> {

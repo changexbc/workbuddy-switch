@@ -54,6 +54,10 @@ pub fn checkin_logs_file() -> PathBuf {
     store_dir().join("auto_checkin_logs.json")
 }
 
+pub fn credit_usage_snapshots_file() -> PathBuf {
+    store_dir().join("credit_usage_snapshots.json")
+}
+
 pub fn auto_rotate_config_file() -> PathBuf {
     store_dir().join("auto_rotate_config.json")
 }

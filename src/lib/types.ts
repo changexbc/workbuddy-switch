@@ -169,6 +169,7 @@ export interface CreditExpiry {
   accountId?: string | null;
   accountName?: string;
   updatedAt?: number;
+  totalCapacity?: number;
   totalRemaining?: number;
   expiringSoonRemaining?: number;
   expiredRemaining?: number;
@@ -177,6 +178,70 @@ export interface CreditExpiry {
   expired?: boolean;
   resources?: CreditResource[];
   error?: string;
+}
+
+export interface CreditStatsSummary {
+  currentRemaining: number;
+  currentCapacity: number;
+  usageToday: number;
+  usage7Days: number;
+  usageThisMonth: number;
+  todayCheckedInAccounts: number;
+  todaySuccess: number;
+  todayAlready: number;
+  todayFailed: number;
+}
+
+export interface CreditStatsDailyPoint {
+  date: string;
+  usage: number;
+}
+
+export interface CreditStatsAccount {
+  accountId: string;
+  accountName: string;
+  isCurrent: boolean;
+  currentRemaining: number | null;
+  totalCapacity: number | null;
+  lastSnapshotAt: number | null;
+  usageToday: number;
+  usage7Days: number;
+  usageThisMonth: number;
+  checkedInToday: boolean | null;
+  checkinStatusToday: string | null;
+  lastCheckinAt: number | null;
+  lastCheckinResult: string | null;
+}
+
+export interface CreditStatsUsageEvent {
+  kind: "usage";
+  ts: number;
+  date: string;
+  accountId: string;
+  accountName: string;
+  amount: number;
+}
+
+export interface CreditStatsCheckinEvent {
+  kind: "checkin";
+  ts: number;
+  date: string;
+  accountId: string | null;
+  accountName: string;
+  result: string;
+  error?: string | null;
+}
+
+export type CreditStatsEvent = CreditStatsUsageEvent | CreditStatsCheckinEvent;
+
+export interface CreditStatistics {
+  generatedAt: number;
+  retentionDays: number;
+  coverageStartAt: number | null;
+  summary: CreditStatsSummary;
+  daily: CreditStatsDailyPoint[];
+  accounts: CreditStatsAccount[];
+  events: CreditStatsEvent[];
 }
 
 export interface CodeBuddyCliStatus {

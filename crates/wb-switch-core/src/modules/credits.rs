@@ -10,6 +10,7 @@ use crate::modules::account::{account_display_name, build_auth_headers};
 use crate::modules::config::{
     http_request, load_checkin_config, now_ms, WORKBUDDY_API_ENDPOINT,
 };
+use crate::modules::credit_usage;
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 
 const USER_RESOURCE_PATH: &str = "/v2/billing/meter/get-user-resource";
@@ -160,13 +161,26 @@ fn response_error(response: &Value) -> String {
         .unwrap_or_else(|| format!("积分查询失败（code={code}）"))
 }
 
+fn response_code(response: &Value) -> Option<i64> {
+    response.get("code").and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|text| text.trim().parse::<i64>().ok()))
+    })
+}
+
 fn is_success(response: &Value) -> bool {
     if !response.is_object() {
         return false;
     }
-    match response.get("code").and_then(|value| value.as_i64()) {
-        Some(0) | Some(200) | None => true,
+    match response_code(response) {
+        Some(0) | Some(200) => true,
         Some(_) => false,
+        None => {
+            response.get("data").is_some()
+                && response.get("ok").and_then(Value::as_bool) != Some(false)
+                && response.get("success").and_then(Value::as_bool) != Some(false)
+        }
     }
 }
 
@@ -228,7 +242,7 @@ pub async fn get_credit_expiry(account: &Value) -> Value {
     let account_id = working_account
         .get("id")
         .cloned()
-        .unwrap_or_else(|| Value::Null);
+        .unwrap_or(Value::Null);
     if !is_success(&response) {
         return json!({
             "ok": false,
@@ -246,6 +260,10 @@ pub async fn get_credit_expiry(account: &Value) -> Value {
     let total_remaining: f64 = resources
         .iter()
         .filter_map(|resource| resource.get("remaining").and_then(|value| value.as_f64()))
+        .sum();
+    let total_capacity: f64 = resources
+        .iter()
+        .filter_map(|resource| resource.get("total").and_then(|value| value.as_f64()))
         .sum();
     let soonest_expire_at = resources
         .iter()
@@ -300,12 +318,22 @@ pub async fn get_credit_expiry(account: &Value) -> Value {
         })
         .filter_map(|resource| resource.get("remaining").and_then(|value| value.as_f64()))
         .sum();
+    let account_name = account_display_name(&working_account);
+    if let Some(account_id) = account_id.as_str() {
+        let _ = credit_usage::record_snapshot(
+            account_id,
+            &account_name,
+            total_capacity,
+            total_remaining,
+        );
+    }
 
     json!({
         "ok": true,
         "accountId": account_id,
-        "accountName": account_display_name(&working_account),
+        "accountName": account_name,
         "updatedAt": now,
+        "totalCapacity": total_capacity,
         "totalRemaining": total_remaining,
         "expiringSoonRemaining": expiring_soon_remaining,
         "expiredRemaining": expired_remaining,
@@ -370,6 +398,10 @@ mod tests {
     #[test]
     fn accepts_object_response_without_code() {
         assert!(is_success(&json!({"data": {"Response": {"Data": {}}}})));
+        assert!(is_success(&json!({"data": {"Response": {"Data": {"Accounts": []}}}})));
+        assert!(is_success(&json!({"code": "0", "data": {}})));
+        assert!(!is_success(&json!({"message": "failed"})));
+        assert!(!is_success(&json!({"data": {}, "ok": false})));
         assert!(!is_success(&Value::Null));
         assert!(!is_success(&json!({"code": 500, "message": "failed"})));
     }

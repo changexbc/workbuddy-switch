@@ -106,6 +106,7 @@ pub fn run() {
             commands::reveal_app_in_finder,
             commands::get_checkin_status,
             commands::get_credit_expiry,
+            commands::get_credit_statistics,
             commands::checkin,
             commands::checkin_all,
             commands::get_auto_checkin_config,

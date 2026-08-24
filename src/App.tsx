@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
-import { ArrowUpCircle, Loader2, Settings, User } from "lucide-react";
+import { ArrowUpCircle, ChartBar, Loader2, Settings, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
 import type { UpdateInfo } from "@/lib/types";
 import AccountsPage from "@/pages/AccountsPage";
+import CreditStatsPage from "@/pages/CreditStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, WorkBuddyMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
@@ -87,6 +88,7 @@ function Layout() {
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5" aria-label="主导航">
           <NavLink
             to="/"
+            end
             className={({ isActive }) =>
               cn(
                 "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50",
@@ -98,6 +100,20 @@ function Layout() {
           >
             <User className="size-4" />
             账号管理
+          </NavLink>
+          <NavLink
+            to="/credit-stats"
+            className={({ isActive }) =>
+              cn(
+                "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50",
+                isActive
+                  ? "bg-foreground/[0.06] font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
+              )
+            }
+          >
+            <ChartBar className="size-4" />
+            积分统计
           </NavLink>
           <NavLink
             to="/settings"
@@ -129,6 +145,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<AccountsPage />} />
+          <Route path="/credit-stats" element={<CreditStatsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
