@@ -1,4 +1,5 @@
 import { CalendarCheck, CircleDot, Coins, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,22 +60,37 @@ function creditResources(credit: CreditExpiry): CreditResource[] {
     .map(({ resource }) => resource);
 }
 
-function CreditSummary({ credit, loading }: { credit?: CreditExpiry; loading?: boolean }) {
+function CreditSummary({
+  credit,
+  loading,
+  actions,
+}: {
+  credit?: CreditExpiry;
+  loading?: boolean;
+  /** 右侧头部操作（刷新/删除），各状态均渲染 */
+  actions?: ReactNode;
+}) {
   if (loading) {
     return (
-      <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" />
-        积分查询中…
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" />
+          积分查询中…
+        </div>
+        {actions}
       </div>
     );
   }
-  if (!credit) return null;
+  if (!credit) return <div className="flex min-w-0 items-start justify-between gap-3">{actions}</div>;
 
   if (!credit.ok) {
     return (
-      <div className="flex items-center gap-1.5 text-sm text-destructive" title={credit.error}>
-        <Coins className="size-3.5 shrink-0" />
-        积分查询失败
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-sm text-destructive" title={credit.error}>
+          <Coins className="size-3.5 shrink-0" />
+          积分查询失败
+        </div>
+        {actions}
       </div>
     );
   }
@@ -82,13 +98,18 @@ function CreditSummary({ credit, loading }: { credit?: CreditExpiry; loading?: b
   const resources = creditResources(credit);
 
   return (
-    <div className="min-w-0 flex-1">
-      <div className="text-xs text-muted-foreground">总积分</div>
-      <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="text-[28px] font-semibold leading-none tabular-nums tracking-tight">
-          {formatCredits(credit.totalRemaining ?? 0)}
-        </span>
-        <span className="text-sm text-muted-foreground">积分 · {resources.length} 项</span>
+    <div className="min-w-0">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs text-muted-foreground">总积分</div>
+          <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="text-[28px] font-semibold leading-none tabular-nums tracking-tight">
+              {formatCredits(credit.totalRemaining ?? 0)}
+            </span>
+            <span className="text-sm text-muted-foreground">积分 · {resources.length} 项</span>
+          </div>
+        </div>
+        {actions}
       </div>
 
       {resources.length > 0 ? (
@@ -98,20 +119,15 @@ function CreditSummary({ credit, loading }: { credit?: CreditExpiry; loading?: b
             return (
               <div
                 key={`${resource.packageCode ?? "resource"}-${resource.expireAt ?? "none"}-${index}`}
-                className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-6 text-[13px]"
+                className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 text-[13px]"
                 title={`${name} · ${formatCredits(resource.remaining)} 积分 · ${formatCreditExpiry(resource.expireAt)}`}
               >
                 <span className="min-w-0 truncate text-muted-foreground">{name}</span>
-                <span className="shrink-0 tabular-nums text-foreground">
+                <span className="shrink-0 whitespace-nowrap tabular-nums text-foreground">
                   {formatCredits(resource.remaining)} 积分
-                </span>
-                <span
-                  className={cn(
-                    "shrink-0",
-                    expiryClass(resource.expired, resource.expiringSoon),
-                  )}
-                >
-                  {formatCreditExpiry(resource.expireAt)}
+                  <span className={cn("ml-2", expiryClass(resource.expired, resource.expiringSoon))}>
+                    · {formatCreditExpiry(resource.expireAt)}
+                  </span>
                 </span>
               </div>
             );
@@ -285,32 +301,35 @@ export function AccountCard({
         </section>
 
         <section className="min-w-0 border-t pt-5 md:border-l md:border-t-0 md:pl-6 md:pt-0">
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <CreditSummary credit={credit} loading={creditLoading} />
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                variant="outline"
-                size="icon"
-                className="size-9 rounded-lg text-muted-foreground hover:text-foreground"
-                disabled={featuresDisabled || !onRefresh}
-                onClick={() => onRefresh?.(account)}
-                aria-label="刷新账号"
-                title="刷新账号 token"
-              >
-                <RefreshCw />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                className="size-9 rounded-lg text-destructive hover:bg-destructive/5 hover:text-destructive"
-                onClick={() => onDelete(account)}
-                aria-label="删除账号"
-                title="删除账号"
-              >
-                <Trash2 />
-              </Button>
-            </div>
-          </div>
+          <CreditSummary
+            credit={credit}
+            loading={creditLoading}
+            actions={
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="size-9 rounded-lg text-muted-foreground hover:text-foreground"
+                  disabled={featuresDisabled || !onRefresh}
+                  onClick={() => onRefresh?.(account)}
+                  aria-label="刷新账号"
+                  title="刷新账号 token"
+                >
+                  <RefreshCw />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="size-9 rounded-lg text-destructive hover:bg-destructive/5 hover:text-destructive"
+                  onClick={() => onDelete(account)}
+                  aria-label="删除账号"
+                  title="删除账号"
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            }
+          />
         </section>
       </div>
     </article>
