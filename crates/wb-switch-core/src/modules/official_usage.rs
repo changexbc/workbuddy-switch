@@ -298,6 +298,52 @@ fn aggregate_rows(
     (today_usage, week_usage, month_usage, daily)
 }
 
+fn model_name(model: &str) -> String {
+    let model = model.trim();
+    if model.is_empty() || model == "—" {
+        "未知模型".to_string()
+    } else {
+        model.to_string()
+    }
+}
+
+fn add_model_usage(usage: &mut HashMap<String, (usize, f64)>, row: &RequestRow) {
+    let entry = usage.entry(model_name(&row.model)).or_insert((0, 0.0));
+    entry.0 += 1;
+    entry.1 += row.credit;
+}
+
+fn model_usage_values(usage: HashMap<String, (usize, f64)>) -> Vec<Value> {
+    let mut models: Vec<(String, (usize, f64))> = usage.into_iter().collect();
+    models.sort_by(
+        |(left_name, (left_count, left_credit)), (right_name, (right_count, right_credit))| {
+            right_credit
+                .partial_cmp(left_credit)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right_count.cmp(left_count))
+                .then_with(|| left_name.cmp(right_name))
+        },
+    );
+    models
+        .into_iter()
+        .map(|(model, (request_count, credit))| {
+            json!({
+                "model": model,
+                "requestCount": request_count,
+                "credit": credit,
+            })
+        })
+        .collect()
+}
+
+fn aggregate_models(rows: &[RequestRow]) -> Vec<Value> {
+    let mut usage = HashMap::new();
+    for row in rows {
+        add_model_usage(&mut usage, row);
+    }
+    model_usage_values(usage)
+}
+
 fn request_value(account_id: &str, account_name: &str, row: &RequestRow) -> Value {
     json!({
         "accountId": account_id,
@@ -326,6 +372,7 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
     let mut total_week = 0.0;
     let mut total_month = 0.0;
     let mut recent_requests: Vec<(i64, Value)> = Vec::new();
+    let mut model_totals: HashMap<String, (usize, f64)> = HashMap::new();
 
     for (index, account) in accounts.iter().enumerate() {
         let account_id = get_str(account, "id").unwrap_or_else(|| format!("unknown-{index}"));
@@ -338,6 +385,9 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
                 total_today += usage_today;
                 total_week += usage_week;
                 total_month += usage_month;
+                for row in &result.rows {
+                    add_model_usage(&mut model_totals, row);
+                }
                 for (date, amount) in daily {
                     *daily_totals.entry(date).or_insert(0.0) += amount;
                 }
@@ -362,6 +412,7 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
                     "error": Value::Null,
                     "reportedTotal": result.reported_total,
                     "fetchedCount": result.fetched_raw,
+                    "models": aggregate_models(&result.rows),
                 }));
             }
             Err(error) => {
@@ -382,6 +433,7 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
                     "error": errors.last().and_then(|item| item.get("error")).cloned().unwrap_or(Value::Null),
                     "reportedTotal": Value::Null,
                     "fetchedCount": 0,
+                    "models": [],
                 }));
             }
         }
@@ -425,6 +477,7 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
         "daily": daily,
         "accounts": account_rows,
         "requests": requests,
+        "models": model_usage_values(model_totals),
         "detailLimitPerAccount": OFFICIAL_USAGE_DETAIL_LIMIT,
         "errors": errors,
     })
@@ -546,6 +599,25 @@ mod tests {
         assert_eq!(month_usage, 3.5);
         assert_eq!(daily[&today], 1.5);
         assert_eq!(daily[&yesterday], 2.0);
+    }
+
+    #[test]
+    fn model_aggregation_sorts_by_credit_and_groups_requests() {
+        let (today, today_ts) = local_date(0, 12);
+        let mut first = row(today, today_ts, 1.0);
+        first.model = "model-a".to_string();
+        let mut second = row(today, today_ts + 1, 4.0);
+        second.model = "model-b".to_string();
+        let mut third = row(today, today_ts + 2, 2.0);
+        third.model = "model-a".to_string();
+
+        let models = aggregate_models(&[first, second, third]);
+        assert_eq!(models[0]["model"], "model-b");
+        assert_eq!(models[0]["requestCount"], 1);
+        assert_eq!(models[0]["credit"], 4.0);
+        assert_eq!(models[1]["model"], "model-a");
+        assert_eq!(models[1]["requestCount"], 2);
+        assert_eq!(models[1]["credit"], 3.0);
     }
 
     #[test]

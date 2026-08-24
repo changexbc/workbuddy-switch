@@ -27,6 +27,7 @@ import type {
   CreditExpiry,
   CreditOfficialUsage,
   CreditOfficialUsageAccount,
+  CreditOfficialUsageModel,
   CreditOfficialUsageRequest,
   CreditResource,
   CreditStatsAccount,
@@ -79,6 +80,10 @@ function formatDate(ts: number | null | undefined): string {
     month: "2-digit",
     day: "2-digit",
   });
+}
+
+function formatChartDate(date: string): string {
+  return date.slice(5).replace("-", "/");
 }
 
 function accountLabel(account: CreditStatsAccount): string {
@@ -199,9 +204,15 @@ function TrendChart({
   const daily = official ? official.daily : stats.daily;
   const summary = official ? official.summary : stats.summary;
   const points = chartPoints(daily, range);
+  const [activePointDate, setActivePointDate] = useState<string | null>(null);
+  const activePoint = points.find((point) => point.date === activePointDate) ?? points[points.length - 1];
   const maxUsage = Math.max(1, ...points.map((point) => point.usage));
   const hasObservedUsage = points.some((point) => point.usage > 0);
   const hasDataSource = officialAvailable || Boolean(stats.coverageStartAt);
+
+  useEffect(() => {
+    setActivePointDate(null);
+  }, [official?.rangeEnd, range]);
 
   return (
     <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
@@ -261,19 +272,42 @@ function TrendChart({
                     <div key={point.date} className="flex h-full min-w-3 flex-1 flex-col justify-end gap-1">
                       <div className="flex min-h-0 flex-1 items-end justify-center">
                         <div
-                          className="w-full max-w-6 rounded-t bg-primary/75 transition-[height] hover:bg-primary"
+                          className="w-full max-w-6 cursor-pointer rounded-t bg-primary/75 transition-[height,background-color] hover:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1"
                           style={{ height: `${height}%` }}
-                          title={`${point.date}：${formatCredits(point.usage)} 积分`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`${formatChartDate(point.date)} 消耗 ${formatCredits(point.usage)} 积分`}
+                          title={`${formatChartDate(point.date)}：${formatCredits(point.usage)} 积分`}
+                          onMouseEnter={() => setActivePointDate(point.date)}
+                          onFocus={() => setActivePointDate(point.date)}
+                          onClick={() => setActivePointDate(point.date)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              setActivePointDate(point.date);
+                            }
+                          }}
                         />
                       </div>
-                      <span className="h-4 text-center text-[10px] text-muted-foreground">
-                        {showLabel ? point.date.slice(5) : ""}
+                      <span className="inline-block h-4 min-w-max whitespace-nowrap text-center text-[10px] text-muted-foreground">
+                        {showLabel ? formatChartDate(point.date) : ""}
                       </span>
                     </div>
                   );
                 })}
               </div>
             </div>
+            {activePoint && (
+              <div
+                className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/15 bg-primary/[0.04] px-3 py-2.5 text-xs"
+                aria-live="polite"
+              >
+                <span className="text-muted-foreground">
+                  当天消耗 · <span className="font-medium text-foreground">{formatChartDate(activePoint.date)}</span>
+                </span>
+                <span className="font-semibold text-primary">{formatCredits(activePoint.usage)} 积分</span>
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>
                 {hasObservedUsage
@@ -447,6 +481,72 @@ function ResourceBreakdown({ credit, loading }: { credit?: CreditExpiry; loading
   );
 }
 
+function ModelBreakdownRows({ models }: { models: CreditOfficialUsageModel[] }) {
+  const totalCredit = models.reduce((sum, model) => sum + model.credit, 0);
+  const totalRequests = models.reduce((sum, model) => sum + model.requestCount, 0);
+
+  return (
+    <div className="space-y-3">
+      {models.slice(0, 8).map((model) => {
+        const ratio = totalCredit > 0 ? model.credit / totalCredit : totalRequests > 0 ? model.requestCount / totalRequests : 0;
+        const label = model.model === "—" ? "未知模型" : model.model;
+        return (
+          <div key={model.model} className="min-w-0">
+            <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
+              <span className="min-w-0 truncate font-medium" title={label}>
+                {label}
+              </span>
+              <span className="shrink-0 text-muted-foreground">
+                {formatCredits(model.credit)} 积分 · {formatCredits(model.requestCount)} 次
+              </span>
+            </div>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+              <div className="h-full rounded-full bg-primary/75" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ModelBreakdown({ officialUsage }: { officialUsage: CreditOfficialUsage }) {
+  const models = officialUsage.models ?? [];
+  const totalCredit = models.reduce((sum, model) => sum + model.credit, 0);
+  const totalRequests = models.reduce((sum, model) => sum + model.requestCount, 0);
+
+  return (
+    <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+      <CardHeader className="border-b px-4 py-4 sm:px-5">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Activity className="size-4 text-primary" />
+            按模型分类
+          </CardTitle>
+          <Badge variant="outline" className="shrink-0">
+            {models.length} 个模型
+          </Badge>
+        </div>
+        <CardDescription className="mt-1 text-xs">
+          按官方返回的全部有效请求汇总，不受最近 {officialUsage.detailLimitPerAccount} 条明细展示上限影响。
+        </CardDescription>
+      </CardHeader>
+      {models.length === 0 ? (
+        <CardContent className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">官方暂无可用的模型消耗明细。</CardContent>
+      ) : (
+        <CardContent className="px-4 py-4 sm:px-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>共 {formatCredits(totalRequests)} 次请求</span>
+            <span className="font-medium text-foreground">合计 {formatCredits(totalCredit)} 积分</span>
+          </div>
+          <ModelBreakdownRows models={models} />
+          {models.length > 8 && <p className="mt-3 text-[11px] text-muted-foreground">已展示消耗最高的 8 个模型，其余模型仍计入上方合计。</p>}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 function OfficialUsageMetric({ label, value }: { label: string; value: number | null | undefined }) {
   return (
     <div className="min-w-0 rounded-lg bg-muted/45 px-3 py-2.5">
@@ -526,6 +626,19 @@ function OfficialUsageBreakdown({
           </span>
         </div>
       )}
+      <div className="border-b px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="font-medium">按模型分类</span>
+          <span className="text-muted-foreground">{account.models?.length ?? 0} 个模型</span>
+        </div>
+        {account.models && account.models.length > 0 ? (
+          <div className="mt-3">
+            <ModelBreakdownRows models={account.models} />
+          </div>
+        ) : (
+          <div className="mt-2 text-xs text-muted-foreground">该账号暂无可用的模型消耗明细。</div>
+        )}
+      </div>
       {requests.length === 0 ? (
         <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">
           {totalRequests > 0 ? "官方返回了请求总数，但明细未通过格式校验。" : "官方暂无请求用量。"}
@@ -871,6 +984,12 @@ export default function CreditStatsPage() {
           <div className="mb-5">
             <TrendChart stats={stats} officialUsage={officialUsage} range={range} onRangeChange={setRange} />
           </div>
+
+          {official && (
+            <div className="mb-5">
+              <ModelBreakdown officialUsage={official} />
+            </div>
+          )}
 
           <div className="mb-5">
             <AccountTable stats={stats} officialUsage={officialUsage} selectedId={selectedId} onSelect={setSelectedId} />

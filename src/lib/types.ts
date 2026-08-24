@@ -242,6 +242,12 @@ export interface CreditOfficialUsageSummary {
   usageThisMonth: number;
 }
 
+export interface CreditOfficialUsageModel {
+  model: string;
+  requestCount: number;
+  credit: number;
+}
+
 export interface CreditOfficialUsageAccount {
   accountId: string;
   accountName: string;
@@ -254,6 +260,8 @@ export interface CreditOfficialUsageAccount {
   error?: string | null;
   reportedTotal?: number | null;
   fetchedCount?: number;
+  /** 缺省兼容旧后端响应。 */
+  models?: CreditOfficialUsageModel[];
 }
 
 export interface CreditOfficialUsageRequest {
@@ -280,6 +288,8 @@ export interface CreditOfficialUsage {
   daily: CreditStatsDailyPoint[];
   accounts: CreditOfficialUsageAccount[];
   requests: CreditOfficialUsageRequest[];
+  /** 官方全部有效请求按模型汇总；不受 requests 明细上限影响。 */
+  models?: CreditOfficialUsageModel[];
   detailLimitPerAccount: number;
   errors: CreditOfficialUsageError[];
 }
