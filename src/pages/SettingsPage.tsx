@@ -230,7 +230,7 @@ function AutoCheckinCard() {
               />
             </SettingsFieldRow>
 
-            <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
+            <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
               <Button size="sm" onClick={save} disabled={saving}>
                 {saving ? <Loader2 className="animate-spin" /> : <Save />}
                 保存配置
@@ -484,7 +484,7 @@ function AutoRotateCard() {
               切换时机：目标账号剩余到期时间少于「紧迫阈值」且比当前账号早超过「差异阈值」，且最近「活跃保护」分钟内 CLI 无对话、目标剩余积分不低于「最小剩余积分」。
             </p>
 
-            <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
+            <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
               <Button size="sm" onClick={save} disabled={saving}>
                 {saving ? <Loader2 className="animate-spin" /> : <Save />}
                 保存配置
@@ -587,7 +587,7 @@ function PermissionCheckCard() {
         <div className="break-all border-b border-border/60 bg-muted/25 px-4 py-3 font-mono text-[11px] leading-5 text-muted-foreground sm:px-5">
           {authFile || "认证文件路径未获取"}
         </div>
-        <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
           <Button size="sm" onClick={runCheck} disabled={checking}>
             {checking ? "检测中…" : "检测权限"}
           </Button>
@@ -759,7 +759,7 @@ function UpdateCard() {
           </Button>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
           <Button size="sm" variant="outline" onClick={check} disabled={checking}>
             {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             检查更新
