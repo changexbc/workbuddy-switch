@@ -31,12 +31,12 @@ interface SettingsGroupProps {
 
 function SettingsGroup({ id, title, description, children }: SettingsGroupProps) {
   return (
-    <section className="space-y-2.5" aria-labelledby={id}>
+    <section className="min-w-0 space-y-2.5" aria-labelledby={id}>
       <div className="px-1">
-        <h2 id={id} className="text-sm font-semibold leading-5">
+        <h2 id={id} className="text-[13px] font-medium leading-5">
           {title}
         </h2>
-        <p className="mt-1 text-[13px] leading-5 text-muted-foreground">{description}</p>
+        <p className="mt-0.5 text-xs leading-4 text-muted-foreground/80">{description}</p>
       </div>
       <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">{children}</Card>
     </section>
@@ -47,12 +47,46 @@ function SettingsRow({ children, className }: { children: ReactNode; className?:
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center justify-between gap-4 border-b px-4 py-4 sm:px-5",
+        "mx-4 flex min-w-0 items-center justify-between gap-3 border-b border-border/50 px-0 py-2.5 sm:mx-5",
         className,
       )}
     >
       {children}
     </div>
+  );
+}
+
+interface SettingsFieldRowProps {
+  label: ReactNode;
+  description?: ReactNode;
+  htmlFor?: string;
+  children: ReactNode;
+  className?: string;
+}
+
+function SettingsFieldRow({
+  label,
+  description,
+  htmlFor,
+  children,
+  className,
+}: SettingsFieldRowProps) {
+  return (
+    <SettingsRow className={cn("flex-col items-stretch gap-2 sm:flex-row sm:items-center", className)}>
+      <div className="min-w-0 flex-1">
+        {htmlFor ? (
+          <Label htmlFor={htmlFor} className="text-[13px] leading-4">
+            {label}
+          </Label>
+        ) : (
+          <div className="text-[13px] font-medium leading-4">{label}</div>
+        )}
+        {description && (
+          <p className="mt-0.5 text-xs leading-4 text-muted-foreground/75">{description}</p>
+        )}
+      </div>
+      <div className="flex min-w-0 w-full shrink-0 justify-end sm:w-auto">{children}</div>
+    </SettingsRow>
   );
 }
 
@@ -160,45 +194,46 @@ function AutoCheckinCard() {
       <CardContent className="space-y-0 p-0">
         {cfg ? (
           <>
-            <SettingsRow>
-              <div className="min-w-0">
-                <div className="text-sm font-medium">启用自动签到</div>
-                <div className="text-xs text-muted-foreground">
-                  启动时立即核验服务端状态，未签到账号会自动补签
-                </div>
-              </div>
+            <SettingsFieldRow
+              label="启用自动签到"
+              description="启动时立即核验服务端状态，未签到账号会自动补签"
+              htmlFor="ac-enabled"
+            >
               <Switch
+                id="ac-enabled"
                 checked={cfg.enabled}
                 onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })}
               />
-            </SettingsRow>
+            </SettingsFieldRow>
 
-            <div className="grid grid-cols-1 gap-x-4 gap-y-3 border-b px-4 py-4 sm:grid-cols-2 sm:px-5">
-              <div className="space-y-1.5">
-                <Label htmlFor="ac-keep">保活阈值（天，0=每天无条件刷新）</Label>
-                <Input
-                  id="ac-keep"
-                  type="number"
-                  min={0}
-                  max={90}
-                  value={cfg.keepalive_days}
-                  onChange={(e) => setNum("keepalive_days", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ac-lazy">惰性刷新（小时）</Label>
-                <Input
-                  id="ac-lazy"
-                  type="number"
-                  min={1}
-                  max={72}
-                  value={cfg.lazy_refresh_hours}
-                  onChange={(e) => setNum("lazy_refresh_hours", e.target.value)}
-                />
-              </div>
-            </div>
+            <SettingsFieldRow
+              label="保活阈值"
+              description="天；0 表示每天无条件刷新"
+              htmlFor="ac-keep"
+            >
+              <Input
+                id="ac-keep"
+                className="w-full sm:w-48"
+                type="number"
+                min={0}
+                max={90}
+                value={cfg.keepalive_days}
+                onChange={(e) => setNum("keepalive_days", e.target.value)}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label="惰性刷新" description="小时" htmlFor="ac-lazy">
+              <Input
+                id="ac-lazy"
+                className="w-full sm:w-48"
+                type="number"
+                min={1}
+                max={72}
+                value={cfg.lazy_refresh_hours}
+                onChange={(e) => setNum("lazy_refresh_hours", e.target.value)}
+              />
+            </SettingsFieldRow>
 
-            <div className="flex flex-wrap gap-2 border-b px-4 py-3.5 sm:px-5">
+            <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
               <Button size="sm" onClick={save} disabled={saving}>
                 {saving ? <Loader2 className="animate-spin" /> : <Save />}
                 保存配置
@@ -210,7 +245,7 @@ function AutoCheckinCard() {
             </div>
           </>
         ) : (
-          <p className="px-4 py-4 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
+          <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
         )}
 
         {msg && (
@@ -222,7 +257,7 @@ function AutoCheckinCard() {
           </Alert>
         )}
 
-        <div className="px-4 py-4 sm:px-5">
+        <div className="px-4 py-3 sm:px-5">
           <p className="mb-2 text-[13px] font-medium">签到日志（最近 30 天）</p>
           {logs.length === 0 ? (
             <p className="py-3 text-center text-sm text-muted-foreground">暂无签到记录</p>
@@ -233,7 +268,7 @@ function AutoCheckinCard() {
                 return (
                   <div
                     key={i}
-                    className="flex items-center justify-between border-b py-2 text-xs last:border-b-0"
+                    className="flex items-center justify-between border-b border-border/60 py-2 text-xs last:border-b-0"
                   >
                     <div className="min-w-0 flex-1 truncate">
                       <span className="font-medium">{l.email}</span>
@@ -357,7 +392,7 @@ function AutoRotateCard() {
     >
       <CardContent className="space-y-0 p-0">
         {status && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b bg-muted/25 px-4 py-3 text-xs text-muted-foreground sm:px-5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/60 bg-muted/25 px-4 py-3 text-xs text-muted-foreground sm:px-5">
             <span>
               当前 CLI 账号：
               <b className="text-foreground">{status.activeAccountName ?? "未配置"}</b>
@@ -372,91 +407,88 @@ function AutoRotateCard() {
 
         {cfg ? (
           <>
-            <SettingsRow>
-              <div className="min-w-0">
-                <div className="text-sm font-medium">启用自动轮换</div>
-                <div className="text-xs text-muted-foreground">
-                  开启后按下方间隔自动检查并切换 CodeBuddy CLI 账号
-                </div>
-              </div>
+            <SettingsFieldRow
+              label="启用自动轮换"
+              description="开启后按下方间隔自动检查并切换 CodeBuddy CLI 账号"
+              htmlFor="ar-enabled"
+            >
               <Switch
+                id="ar-enabled"
                 checked={cfg.enabled}
                 onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })}
               />
-            </SettingsRow>
+            </SettingsFieldRow>
 
-            <div className="grid grid-cols-1 gap-x-4 gap-y-3 border-b px-4 py-4 sm:grid-cols-2 lg:grid-cols-3 sm:px-5">
-              <div className="space-y-1.5">
-                <Label htmlFor="ar-interval">检查间隔（分钟）</Label>
-                <Input
-                  id="ar-interval"
-                  type="number"
-                  min={1}
-                  max={1440}
-                  value={cfg.check_interval_minutes}
-                  onChange={(e) => setNum("check_interval_minutes", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ar-cooldown">切换冷却（分钟）</Label>
-                <Input
-                  id="ar-cooldown"
-                  type="number"
-                  min={1}
-                  max={1440}
-                  value={cfg.cooldown_minutes}
-                  onChange={(e) => setNum("cooldown_minutes", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ar-gap">到期差异阈值（小时）</Label>
-                <Input
-                  id="ar-gap"
-                  type="number"
-                  min={0}
-                  max={720}
-                  value={cfg.min_gap_hours}
-                  onChange={(e) => setNum("min_gap_hours", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ar-urgency">到期紧迫阈值（小时）</Label>
-                <Input
-                  id="ar-urgency"
-                  type="number"
-                  min={0}
-                  max={720}
-                  value={cfg.min_urgency_hours}
-                  onChange={(e) => setNum("min_urgency_hours", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ar-guard">活跃保护（分钟）</Label>
-                <Input
-                  id="ar-guard"
-                  type="number"
-                  min={0}
-                  max={1440}
-                  value={cfg.active_guard_minutes}
-                  onChange={(e) => setNum("active_guard_minutes", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ar-min">最小剩余积分</Label>
-                <Input
-                  id="ar-min"
-                  type="number"
-                  min={0}
-                  value={cfg.min_remaining_credits}
-                  onChange={(e) => setNum("min_remaining_credits", e.target.value)}
-                />
-              </div>
-            </div>
-            <p className="border-b px-4 py-3.5 text-[13px] leading-5 text-muted-foreground sm:px-5">
+            <SettingsFieldRow label="检查间隔" description="分钟" htmlFor="ar-interval">
+              <Input
+                id="ar-interval"
+                className="w-full sm:w-48"
+                type="number"
+                min={1}
+                max={1440}
+                value={cfg.check_interval_minutes}
+                onChange={(e) => setNum("check_interval_minutes", e.target.value)}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label="切换冷却" description="分钟" htmlFor="ar-cooldown">
+              <Input
+                id="ar-cooldown"
+                className="w-full sm:w-48"
+                type="number"
+                min={1}
+                max={1440}
+                value={cfg.cooldown_minutes}
+                onChange={(e) => setNum("cooldown_minutes", e.target.value)}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label="到期差异阈值" description="小时" htmlFor="ar-gap">
+              <Input
+                id="ar-gap"
+                className="w-full sm:w-48"
+                type="number"
+                min={0}
+                max={720}
+                value={cfg.min_gap_hours}
+                onChange={(e) => setNum("min_gap_hours", e.target.value)}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label="到期紧迫阈值" description="小时" htmlFor="ar-urgency">
+              <Input
+                id="ar-urgency"
+                className="w-full sm:w-48"
+                type="number"
+                min={0}
+                max={720}
+                value={cfg.min_urgency_hours}
+                onChange={(e) => setNum("min_urgency_hours", e.target.value)}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label="活跃保护" description="分钟" htmlFor="ar-guard">
+              <Input
+                id="ar-guard"
+                className="w-full sm:w-48"
+                type="number"
+                min={0}
+                max={1440}
+                value={cfg.active_guard_minutes}
+                onChange={(e) => setNum("active_guard_minutes", e.target.value)}
+              />
+            </SettingsFieldRow>
+            <SettingsFieldRow label="最小剩余积分" description="低于此值时不切换" htmlFor="ar-min">
+              <Input
+                id="ar-min"
+                className="w-full sm:w-48"
+                type="number"
+                min={0}
+                value={cfg.min_remaining_credits}
+                onChange={(e) => setNum("min_remaining_credits", e.target.value)}
+              />
+            </SettingsFieldRow>
+            <p className="border-b border-border/60 px-4 py-3 text-[13px] leading-5 text-muted-foreground sm:px-5">
               切换时机：目标账号剩余到期时间少于「紧迫阈值」且比当前账号早超过「差异阈值」，且最近「活跃保护」分钟内 CLI 无对话、目标剩余积分不低于「最小剩余积分」。
             </p>
 
-            <div className="flex flex-wrap gap-2 border-b px-4 py-3.5 sm:px-5">
+            <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
               <Button size="sm" onClick={save} disabled={saving}>
                 {saving ? <Loader2 className="animate-spin" /> : <Save />}
                 保存配置
@@ -468,7 +500,7 @@ function AutoRotateCard() {
             </div>
           </>
         ) : (
-          <p className="px-4 py-4 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
+          <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
         )}
 
         {msg && (
@@ -480,7 +512,7 @@ function AutoRotateCard() {
           </Alert>
         )}
 
-        <div className="px-4 py-4 sm:px-5">
+        <div className="px-4 py-3 sm:px-5">
           <p className="mb-2 text-[13px] font-medium">轮换日志（最近 200 条）</p>
           {logs.length === 0 ? (
             <p className="py-3 text-center text-sm text-muted-foreground">暂无轮换记录</p>
@@ -491,7 +523,7 @@ function AutoRotateCard() {
                 return (
                   <div
                     key={i}
-                    className="flex items-center justify-between border-b py-2 text-xs last:border-b-0"
+                    className="flex items-center justify-between border-b border-border/60 py-2 text-xs last:border-b-0"
                   >
                     <div className="min-w-0 flex-1 truncate">
                       {l.action === "switched" && l.from && l.to && (
@@ -557,10 +589,10 @@ function PermissionCheckCard() {
       description="切换账号需要写入 WorkBuddy 认证文件，macOS 要求授权。此处可随时检测权限是否生效。"
     >
       <CardContent className="space-y-0 p-0">
-        <div className="break-all border-b bg-muted/25 px-4 py-3 font-mono text-[11px] leading-5 text-muted-foreground sm:px-5">
+        <div className="break-all border-b border-border/60 bg-muted/25 px-4 py-3 font-mono text-[11px] leading-5 text-muted-foreground sm:px-5">
           {authFile || "认证文件路径未获取"}
         </div>
-        <div className="flex flex-wrap gap-2 border-b px-4 py-3.5 sm:px-5">
+        <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
           <Button size="sm" onClick={runCheck} disabled={checking}>
             {checking ? "检测中…" : "检测权限"}
           </Button>
@@ -690,11 +722,11 @@ function UpdateCard() {
       description="检查公开 GitHub Releases 新版本，整包更新经签名校验后自动安装。"
     >
       <CardContent className="space-y-0 p-0">
-        <div className="border-b px-4 py-3.5 text-sm sm:px-5">
+        <div className="border-b border-border/60 px-4 py-3 text-sm sm:px-5">
           当前版本：<span className="font-mono">v{version || "?"}</span>
         </div>
 
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b bg-muted/25 px-4 py-3.5 text-sm sm:px-5">
+        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/60 bg-muted/25 px-4 py-3 text-sm sm:px-5">
           <div className="min-w-0 flex-1">
             <div className="font-medium">公开更新源</div>
             <div className="truncate text-xs text-muted-foreground">{GITHUB_REPOSITORY_URL}</div>
@@ -709,31 +741,31 @@ function UpdateCard() {
           </Button>
         </div>
 
-        <div className="space-y-2 border-b bg-muted/25 px-4 py-4 sm:px-5">
-          <div>
-            <Label htmlFor="update-proxy">更新代理地址</Label>
-            <p className="mt-1 text-xs text-muted-foreground">
-              仅用于 GitHub 更新检查和安装包下载；留空表示关闭显式代理。
-            </p>
-          </div>
-          <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
-            <Input
-              id="update-proxy"
-              className="sm:flex-1"
-              value={proxyUrl}
-              onChange={(event) => setProxyUrl(event.target.value)}
-              placeholder="例如 http://127.0.0.1:7897"
-              spellCheck={false}
-              autoComplete="off"
-            />
-            <Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
-              {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
-              保存代理
-            </Button>
-          </div>
+        <SettingsFieldRow
+          label="更新代理地址"
+          description="仅用于 GitHub 更新检查和安装包下载；留空表示关闭显式代理。"
+          htmlFor="update-proxy"
+          className="bg-muted/25"
+        >
+          <Input
+            id="update-proxy"
+            className="w-full sm:w-80"
+            value={proxyUrl}
+            onChange={(event) => setProxyUrl(event.target.value)}
+            placeholder="例如 http://127.0.0.1:7897"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsFieldRow>
+
+        <div className="flex flex-wrap gap-2 border-b border-border/60 bg-muted/25 px-4 py-3 sm:px-5">
+          <Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
+            {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
+            保存代理
+          </Button>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-b px-4 py-3.5 sm:px-5">
+        <div className="flex flex-wrap gap-2 border-b border-border/60 px-4 py-3 sm:px-5">
           <Button size="sm" variant="outline" onClick={check} disabled={checking}>
             {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             检查更新
@@ -833,20 +865,20 @@ function StartupCard() {
       description="开启后，登录系统时自动启动并静默进入托盘：主窗口和 Dock / 任务栏入口不出现，签到等后台任务继续运行；手动启动仍正常显示主窗口。"
     >
       <CardContent className="space-y-0 p-0">
-        <SettingsRow className="border-b-0">
-          <div className="min-w-0">
-            <div className="text-sm font-medium">开机时静默启动到托盘</div>
-            <div className="text-xs text-muted-foreground">
-              开关直接反映系统登录项状态；之后可从托盘「打开主界面」恢复
-            </div>
-          </div>
+        <SettingsFieldRow
+          className="border-b-0"
+          label="开机时静默启动到托盘"
+          description="开关直接反映系统登录项状态；之后可从托盘「打开主界面」恢复"
+          htmlFor="startup-silent"
+        >
           <Switch
+            id="startup-silent"
             checked={enabled ?? false}
             disabled={busy || enabled === null}
             onCheckedChange={(v) => void onToggle(v)}
             aria-label="开机时静默启动到托盘"
           />
-        </SettingsRow>
+        </SettingsFieldRow>
 
         {msg && (
           <Alert
@@ -864,13 +896,13 @@ function StartupCard() {
 /** 设置页：自动签到配置 / 权限检测 / 更新配置。 */
 export default function SettingsPage() {
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
-      <header className="mb-8">
+    <div className="mx-auto min-w-0 w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
+      <header className="mb-10 sm:mb-12">
         <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">自动签到、权限检测与自动更新配置。</p>
       </header>
 
-      <div className="space-y-8">
+      <div className="min-w-0 space-y-12">
         <PermissionCheckCard />
         <AutoCheckinCard />
         <AutoRotateCard />
