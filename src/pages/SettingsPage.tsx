@@ -25,18 +25,16 @@ import { useAccountsStore } from "@/stores/accounts";
 interface SettingsGroupProps {
   id: string;
   title: string;
-  description: string;
   children: ReactNode;
 }
 
-function SettingsGroup({ id, title, description, children }: SettingsGroupProps) {
+function SettingsGroup({ id, title, children }: SettingsGroupProps) {
   return (
     <section className="min-w-0 space-y-2.5" aria-labelledby={id}>
       <div className="px-1">
         <h2 id={id} className="text-[13px] font-medium leading-5">
           {title}
         </h2>
-        <p className="mt-0.5 text-xs leading-4 text-muted-foreground/80">{description}</p>
       </div>
       <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">{children}</Card>
     </section>
@@ -189,7 +187,6 @@ function AutoCheckinCard() {
     <SettingsGroup
       id="settings-auto-checkin"
       title="自动签到"
-      description="开启后，启动时立即检查全部账号，运行期间每 30 分钟自动补签；并每天自动保活 token。"
     >
       <CardContent className="space-y-0 p-0">
         {cfg ? (
@@ -388,7 +385,6 @@ function AutoRotateCard() {
     <SettingsGroup
       id="settings-auto-rotate"
       title="CodeBuddy CLI 自动轮换"
-      description="定期把 CodeBuddy CLI 切到积分最紧迫（最早到期）的账号，防止积分过期浪费；正在使用时不切，所有账号到期还早时也不切。"
     >
       <CardContent className="space-y-0 p-0">
         {status && (
@@ -586,7 +582,6 @@ function PermissionCheckCard() {
     <SettingsGroup
       id="settings-permission"
       title="权限检测"
-      description="切换账号需要写入 WorkBuddy 认证文件，macOS 要求授权。此处可随时检测权限是否生效。"
     >
       <CardContent className="space-y-0 p-0">
         <div className="break-all border-b border-border/60 bg-muted/25 px-4 py-3 font-mono text-[11px] leading-5 text-muted-foreground sm:px-5">
@@ -719,7 +714,6 @@ function UpdateCard() {
     <SettingsGroup
       id="settings-updates"
       title="自动更新"
-      description="检查公开 GitHub Releases 新版本，整包更新经签名校验后自动安装。"
     >
       <CardContent className="space-y-0 p-0">
         <div className="border-b border-border/60 px-4 py-3 text-sm sm:px-5">
@@ -862,7 +856,6 @@ function StartupCard() {
     <SettingsGroup
       id="settings-startup"
       title="启动设置"
-      description="开启后，登录系统时自动启动并静默进入托盘：主窗口和 Dock / 任务栏入口不出现，签到等后台任务继续运行；手动启动仍正常显示主窗口。"
     >
       <CardContent className="space-y-0 p-0">
         <SettingsFieldRow
