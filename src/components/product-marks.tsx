@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import workbuddyIcon from "@/assets/workbuddy-icon-BujKiC6G.svg";
 
 interface MarkProps {
   size?: number;
@@ -12,18 +13,18 @@ export function WorkBuddyMark({ size = 32, className }: MarkProps) {
       className={cn("inline-flex shrink-0 overflow-hidden rounded-[22%]", className)}
       style={{ width: size, height: size }}
     >
-      <img src="/icon.png" alt="" className="size-full object-cover" />
+      <img src={workbuddyIcon} alt="" className="size-full object-cover" />
     </span>
   );
 }
 
 export function CodeBuddyMark({ size = 32, className }: MarkProps) {
-  const icon = Math.max(10, Math.round(size * 0.56));
+  const icon = Math.max(10, Math.round(size * 0.68));
   return (
     <span
       aria-hidden
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-[22%] bg-teal-100 text-teal-700",
+        "inline-flex shrink-0 items-center justify-center rounded-[22%] border border-white/10 bg-zinc-950 text-zinc-50 shadow-sm",
         className,
       )}
       style={{ width: size, height: size, fontSize: icon }}
@@ -32,18 +33,13 @@ export function CodeBuddyMark({ size = 32, className }: MarkProps) {
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.8"
+        strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
         className="size-[1em]"
       >
-        <path d="M12 3v2" />
-        <circle cx="12" cy="2.5" r=".7" fill="currentColor" stroke="none" />
-        <rect x="4.5" y="6.5" width="15" height="12" rx="4" />
-        <path d="M4.5 11H3.3M20.5 11h1.2" />
-        <circle cx="9" cy="12" r="1" fill="currentColor" stroke="none" />
-        <circle cx="15" cy="12" r="1" fill="currentColor" stroke="none" />
-        <path d="M9 15.5c1.7 1 4.3 1 6 0" />
+        <path d="m7 9.5 2.5 2.5L7 14.5" />
+        <path d="M12.5 14.5h4" />
       </svg>
     </span>
   );
