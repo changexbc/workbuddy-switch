@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AppWindow, CalendarCheck, Download, FileDown, FileUp, Loader2, QrCode, RefreshCw, Terminal } from "lucide-react";
+import {
+  CalendarCheck,
+  Download,
+  FileDown,
+  FileUp,
+  Loader2,
+  QrCode,
+  RefreshCw,
+  Terminal,
+} from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
+import { CodeBuddyMark, StatusDot, WorkBuddyMark } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -388,82 +398,79 @@ export default function AccountsPage() {
   const cliCurrentAccountId = codebuddyCli?.activeAccountId;
   const workbuddyCurrentName = current
     ? current.nickname || current.email || current.uid || "未知账号"
-    : "未检测到当前登录账号";
+    : "未登录";
   const codebuddyCurrentName = codebuddyCli?.configured
-    ? codebuddyCli.activeAccountName || "已接入，未检测到当前账号"
-    : "尚未接入 CodeBuddy CLI";
+    ? codebuddyCli.activeAccountName || "未检测到"
+    : "尚未接入";
+  const toolbarBtn = "h-10 rounded-lg px-4";
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-6">
+    <div className="mx-auto w-full max-w-[1080px] px-6 py-8 sm:px-8 sm:py-9">
       <header className="mb-6">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h1 className="text-xl font-semibold">账号管理</h1>
-          {codebuddyCli?.configured && <Badge variant="success">CodeBuddy CLI 已接入</Badge>}
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="accounts-auto-checkin" className="text-xs text-muted-foreground">
-              {autoCheckinConfig?.enabled ? "自动签到已开启" : "自动签到已关闭"}
-            </label>
-            <Switch
-              id="accounts-auto-checkin"
-              checked={autoCheckinConfig?.enabled ?? false}
-              disabled={!autoCheckinConfig || autoCheckinSaving}
-              onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
-              aria-label="自动签到"
-            />
-            {autoCheckinSaving && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
-          </div>
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          WorkBuddy 与 CodeBuddy CLI 共用同一份账号库和积分；两侧当前账号互不影响，可分别切换。
+        <h1 className="text-[28px] font-semibold tracking-tight">账号管理</h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          统一管理 WorkBuddy 与 CodeBuddy CLI 账号、积分和签到状态。
         </p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border bg-card p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="flex size-7 items-center justify-center rounded-md bg-sky-100 text-sky-700">
-                  <AppWindow className="size-4" />
-                </span>
-                <span className="text-sm font-semibold">WorkBuddy</span>
-              </div>
-              <Badge variant={current ? "success" : "outline"}>{current ? "已登录" : "未登录"}</Badge>
-            </div>
-            <div className="mt-3 truncate text-sm font-medium">{workbuddyCurrentName}</div>
-            <div className="mt-1 truncate text-xs text-muted-foreground">
-              {status?.authFile ? `认证文件：${status.authFile}` : "通过本应用切换账号"}
-            </div>
-          </div>
-          <div className="rounded-xl border bg-card p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="flex size-7 items-center justify-center rounded-md bg-violet-100 text-violet-700">
-                  <Terminal className="size-4" />
-                </span>
-                <span className="text-sm font-semibold">CodeBuddy CLI</span>
-              </div>
-              <Badge variant={codebuddyCli?.configured ? "success" : "outline"}>
-                {codebuddyCli?.configured ? "已接入" : "未接入"}
-              </Badge>
-            </div>
-            <div className="mt-3 truncate text-sm font-medium">{codebuddyCurrentName}</div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {codebuddyCli?.configured
-                ? "在账号卡片上点击「切换 CodeBuddy CLI」生效"
-                : "接入 apiKeyHelper 后即可从本应用切换"}
-            </div>
-          </div>
+        <div className="mt-5 flex items-center gap-3">
+          <label htmlFor="accounts-auto-checkin" className="text-sm">
+            自动签到
+          </label>
+          <Switch
+            id="accounts-auto-checkin"
+            checked={autoCheckinConfig?.enabled ?? false}
+            disabled={!autoCheckinConfig || autoCheckinSaving}
+            onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
+            aria-label="自动签到"
+          />
+          {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
         </div>
+        <Card className="mt-6 min-w-0 gap-0 overflow-hidden rounded-[12px] py-0 shadow-none">
+          <CardContent className="min-w-0 p-0">
+            <div className="flex min-w-0 items-center justify-between gap-3 border-b px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <WorkBuddyMark size={36} />
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">WorkBuddy</div>
+                  <div className="mt-0.5 truncate text-sm text-muted-foreground">
+                    当前账号：{workbuddyCurrentName}
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
+                <StatusDot on={Boolean(status?.running)} />
+                {status?.running ? "运行中" : "未运行"}
+              </div>
+            </div>
+            <div className="flex min-w-0 items-center justify-between gap-3 px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <CodeBuddyMark size={36} />
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">CodeBuddy CLI</div>
+                  <div className="mt-0.5 truncate text-sm text-muted-foreground">
+                    当前账号：{codebuddyCurrentName}
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground">
+                <StatusDot on={Boolean(codebuddyCli?.configured)} />
+                {codebuddyCli?.configured ? "已接入" : "未接入"}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </header>
 
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <Button onClick={onImport} disabled={importing} variant="outline">
-          {importing ? <Loader2 className="animate-spin" /> : <Download />}
-          导入本机账号
-        </Button>
-        <Button onClick={() => setOauthOpen(true)}>
+      <div className="mb-6 flex flex-wrap items-center gap-2.5">
+        <Button className={toolbarBtn} onClick={() => setOauthOpen(true)}>
           <QrCode />
           OAuth 扫码登录
         </Button>
+        <Button className={toolbarBtn} onClick={onImport} disabled={importing} variant="outline">
+          {importing ? <Loader2 className="animate-spin" /> : <Download />}
+          导入本机账号
+        </Button>
         <Button
+          className={toolbarBtn}
           onClick={() => setExportOpen(true)}
           disabled={accounts.length === 0}
           variant="outline"
@@ -471,15 +478,21 @@ export default function AccountsPage() {
           <FileDown />
           导出账号
         </Button>
-        <Button onClick={() => setImportOpen(true)} variant="outline">
+        <Button className={toolbarBtn} onClick={() => setImportOpen(true)} variant="outline">
           <FileUp />
           导入账号
         </Button>
-        <Button onClick={onRefreshCredits} disabled={refreshingCredits || accounts.length === 0} variant="outline">
+        <Button
+          className={toolbarBtn}
+          onClick={onRefreshCredits}
+          disabled={refreshingCredits || accounts.length === 0}
+          variant="outline"
+        >
           <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
           刷新积分
         </Button>
         <Button
+          className={toolbarBtn}
           onClick={() => void onRefreshCheckin()}
           disabled={refreshingCheckin || accounts.length === 0}
           variant="outline"
@@ -540,39 +553,44 @@ export default function AccountsPage() {
         </Alert>
       )}
 
-      {loading && accounts.length === 0 ? (
-        <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
-          <Loader2 className="animate-spin" />
-          加载账号…
-        </div>
-      ) : accounts.length === 0 ? (
-        <div className="rounded-lg border border-dashed py-16 text-center text-sm text-muted-foreground">
-          暂无账号。点击上方按钮导入本机账号或扫码登录。
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {orderedAccounts.map((a) => (
-            <AccountCard
-              key={a.id}
-              account={a}
-              onDelete={onDelete}
-              onSwitch={setSwitchAccount}
-              onCheckin={onCheckin}
-              onRefresh={onRefresh}
-              todayCheckedIn={checkinMap[a.id]}
-              credit={creditMap[a.id]}
-              creditLoading={creditLoadingMap[a.id]}
-              creditPriority={a.id === priorityAccountId}
-              workbuddyActive={isWorkbuddyCurrent(a, current)}
-              codebuddyCliConfigured={codebuddyCli?.configured}
-              codebuddyCliActive={a.id === cliCurrentAccountId}
-              onSwitchCodebuddyCli={onSwitchCodebuddyCli}
-              codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
-              featuresDisabled={false}
-            />
-          ))}
-        </div>
-      )}
+      <section className="mt-7 min-w-0" aria-labelledby="accounts-list-title">
+        <h2 id="accounts-list-title" className="mb-3 text-base font-semibold">
+          账号
+        </h2>
+        {loading && accounts.length === 0 ? (
+          <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
+            <Loader2 className="animate-spin" />
+            加载账号…
+          </div>
+        ) : accounts.length === 0 ? (
+          <div className="rounded-xl border border-dashed px-4 py-16 text-center text-sm text-muted-foreground">
+            暂无账号。点击上方按钮导入本机账号或扫码登录。
+          </div>
+        ) : (
+          <Card className="min-w-0 gap-0 overflow-hidden rounded-[12px] py-0 shadow-none">
+            {orderedAccounts.map((a) => (
+              <AccountCard
+                key={a.id}
+                account={a}
+                onDelete={onDelete}
+                onSwitch={setSwitchAccount}
+                onCheckin={onCheckin}
+                onRefresh={onRefresh}
+                todayCheckedIn={checkinMap[a.id]}
+                credit={creditMap[a.id]}
+                creditLoading={creditLoadingMap[a.id]}
+                creditPriority={a.id === priorityAccountId}
+                workbuddyActive={isWorkbuddyCurrent(a, current)}
+                codebuddyCliConfigured={codebuddyCli?.configured}
+                codebuddyCliActive={a.id === cliCurrentAccountId}
+                onSwitchCodebuddyCli={onSwitchCodebuddyCli}
+                codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
+                featuresDisabled={false}
+              />
+            ))}
+          </Card>
+        )}
+      </section>
 
       <OAuthLoginDialog open={oauthOpen} onOpenChange={setOauthOpen} />
       <ExportAccountsDialog

@@ -1,31 +1,26 @@
-import {
-  CalendarCheck,
-  Clock3,
-  Coins,
-  Loader2,
-  LogIn,
-  RefreshCw,
-  Terminal,
-  Trash2,
-} from "lucide-react";
+import { CalendarCheck, CircleDot, Coins, Loader2, RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
+import { cn } from "@/lib/utils";
 import type { AccountMeta, CreditExpiry, CreditResource } from "@/lib/types";
 
-function formatTime(ts: number | null): string {
-  if (!ts) return "—";
-  try {
-    return new Date(ts).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return String(ts);
+const AVATAR_TONES = [
+  { bg: "bg-emerald-100", fg: "text-emerald-800" },
+  { bg: "bg-violet-100", fg: "text-violet-800" },
+  { bg: "bg-sky-100", fg: "text-sky-800" },
+  { bg: "bg-amber-100", fg: "text-amber-800" },
+  { bg: "bg-rose-100", fg: "text-rose-800" },
+  { bg: "bg-teal-100", fg: "text-teal-800" },
+] as const;
+
+function avatarTone(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
   }
+  return AVATAR_TONES[hash % AVATAR_TONES.length];
 }
 
 function formatCredits(value: number): string {
@@ -34,47 +29,25 @@ function formatCredits(value: number): string {
 }
 
 function formatCreditExpiry(ts: number | null): string {
-  if (!ts) return "未提供到期时间";
-  const dateText = new Date(ts).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const days = Math.ceil((ts - Date.now()) / (24 * 3600 * 1000));
-  if (days <= 0) return `已到期（${dateText}）`;
-  if (days <= 7) return `${days} 天后到期（${dateText}）`;
-  return `到期 ${dateText}`;
+  if (!ts) return "长期有效";
+  try {
+    const date = new Date(ts);
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${month}/${day} 到期`;
+  } catch {
+    return "长期有效";
+  }
 }
 
-const creditTextClass = (expired: boolean, expiringSoon: boolean) =>
-  expired ? "font-medium text-destructive" : expiringSoon ? "font-medium text-amber-700" : "text-foreground";
+function expiryClass(expired: boolean, expiringSoon: boolean): string {
+  if (expired) return "text-destructive";
+  if (expiringSoon) return "text-orange-500";
+  return "text-muted-foreground";
+}
 
-function CreditSummary({ credit, loading }: { credit?: CreditExpiry; loading?: boolean }) {
-  if (loading) {
-    return (
-      <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" />
-        积分查询中…
-      </div>
-    );
-  }
-  if (!credit) return null;
-
-  if (!credit.ok) {
-    return (
-      <div
-        className="mt-3 flex items-center gap-1.5 text-xs text-destructive"
-        title={credit.error}
-      >
-        <Coins className="size-3.5 shrink-0" />
-        积分查询失败
-      </div>
-    );
-  }
-
-  const MAX_VISIBLE_RESOURCES = 3;
-  const resources = (credit.resources ?? [])
+function creditResources(credit: CreditExpiry): CreditResource[] {
+  return (credit.resources ?? [])
     .filter((resource) => resource.remaining > 0)
     .map((resource, index) => ({ resource, index }))
     .sort((left, right) => {
@@ -84,61 +57,87 @@ function CreditSummary({ credit, loading }: { credit?: CreditExpiry; loading?: b
       return left.index - right.index;
     })
     .map(({ resource }) => resource);
-  const visibleResources = resources.slice(0, MAX_VISIBLE_RESOURCES);
-  const hiddenResources = resources.slice(MAX_VISIBLE_RESOURCES);
-  const hiddenRemaining = hiddenResources.reduce(
-    (sum, resource) => sum + (resource.remaining ?? 0),
-    0,
-  );
+}
+
+function CreditSummary({ credit, loading }: { credit?: CreditExpiry; loading?: boolean }) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" />
+        积分查询中…
+      </div>
+    );
+  }
+  if (!credit) return null;
+
+  if (!credit.ok) {
+    return (
+      <div className="flex items-center gap-1.5 text-sm text-destructive" title={credit.error}>
+        <Coins className="size-3.5 shrink-0" />
+        积分查询失败
+      </div>
+    );
+  }
+
+  const resources = creditResources(credit);
 
   return (
-    <div className="mt-3 rounded-md border bg-muted/40 px-3 py-2.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-        <span className={creditTextClass(credit.expired ?? false, credit.expiringSoon ?? false)}>
-          <Coins className="mr-1 inline size-3.5" />
-          剩余 {formatCredits(credit.totalRemaining ?? 0)} 积分
+    <div className="min-w-0 flex-1">
+      <div className="text-xs text-muted-foreground">总积分</div>
+      <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="text-[28px] font-semibold leading-none tabular-nums tracking-tight">
+          {formatCredits(credit.totalRemaining ?? 0)}
         </span>
-        {credit.soonestExpireAt != null && (
-          <span className={creditTextClass(credit.expired ?? false, credit.expiringSoon ?? false)}>
-            <Clock3 className="mr-1 inline size-3.5" />
-            {formatCreditExpiry(credit.soonestExpireAt)}
-          </span>
-        )}
-        {(credit.expiringSoonRemaining ?? 0) > 0 && (
-          <span className="font-medium text-amber-700">
-            其中 {formatCredits(credit.expiringSoonRemaining ?? 0)} 积分 7 天内到期
-          </span>
-        )}
+        <span className="text-sm text-muted-foreground">积分 · {resources.length} 项</span>
       </div>
-      {visibleResources.length > 0 ? (
-        <div className="mt-1.5 flex flex-col gap-1 border-t pt-1.5 text-xs text-muted-foreground">
-          {visibleResources.map((resource: CreditResource, index) => (
-            <div
-              key={`${resource.packageCode ?? "resource"}-${resource.expireAt ?? "none"}-${index}`}
-              className={
-                resource.expired
-                  ? "font-medium text-destructive"
-                  : resource.expiringSoon
-                    ? "font-medium text-amber-700"
-                    : undefined
-              }
-            >
-              {resource.packageName || resource.packageCode || "积分包"}：{formatCredits(resource.remaining)} 积分 ·{" "}
-              {formatCreditExpiry(resource.expireAt)}
-            </div>
-          ))}
-          {hiddenResources.length > 0 && (
-            <div className="text-muted-foreground">
-              另有 {hiddenResources.length} 个积分包（合计 {formatCredits(hiddenRemaining)} 积分）
-            </div>
-          )}
+
+      {resources.length > 0 ? (
+        <div className="mt-4 max-h-20 space-y-2.5 overflow-y-auto">
+          {resources.map((resource, index) => {
+            const name = resource.packageName || resource.packageCode || "积分包";
+            return (
+              <div
+                key={`${resource.packageCode ?? "resource"}-${resource.expireAt ?? "none"}-${index}`}
+                className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-6 text-[13px]"
+                title={`${name} · ${formatCredits(resource.remaining)} 积分 · ${formatCreditExpiry(resource.expireAt)}`}
+              >
+                <span className="min-w-0 truncate text-muted-foreground">{name}</span>
+                <span className="shrink-0 tabular-nums text-foreground">
+                  {formatCredits(resource.remaining)} 积分
+                </span>
+                <span
+                  className={cn(
+                    "shrink-0",
+                    expiryClass(resource.expired, resource.expiringSoon),
+                  )}
+                >
+                  {formatCreditExpiry(resource.expireAt)}
+                </span>
+              </div>
+            );
+          })}
         </div>
       ) : (
-        <div className="mt-1.5 border-t pt-1.5 text-xs text-muted-foreground">暂无可用积分</div>
+        <div className="mt-4 text-[13px] text-muted-foreground">暂无可用积分</div>
       )}
     </div>
   );
 }
+
+const chipClass = "rounded-md px-1.5 py-0 text-[11px] font-medium";
+
+function CurrentChip() {
+  return (
+    <span className="ml-auto inline-flex items-center gap-0.5 rounded-full bg-background/70 px-1.5 py-px text-[11px] font-medium text-muted-foreground">
+      <CircleDot className="size-3" />
+      当前
+    </span>
+  );
+}
+
+const switchBtnClass = "h-9 w-full justify-start rounded-full px-3";
+const switchCurrentClass =
+  "disabled:opacity-100 cursor-not-allowed bg-muted text-muted-foreground shadow-none hover:bg-muted hover:text-muted-foreground";
 
 interface Props {
   account: AccountMeta;
@@ -176,7 +175,7 @@ export function AccountCard({
   todayCheckedIn,
   credit,
   creditLoading,
-  creditPriority,
+  creditPriority: _creditPriority,
   workbuddyActive,
   codebuddyCliConfigured,
   codebuddyCliActive,
@@ -184,110 +183,136 @@ export function AccountCard({
   codebuddyCliLoading,
   featuresDisabled = true,
 }: Props) {
-  const name = account.nickname || account.email || account.uid || "未命名账号";
+  const name = account.nickname || account.uid || "未命名账号";
   const expired =
     account.expiresAt != null && typeof account.expiresAt === "number" && account.expiresAt < Date.now();
+  const tone = avatarTone(name);
 
   return (
-    <Card className={creditPriority ? "border-amber-300" : undefined}>
-      <CardContent className="px-5 py-4">
-        {/* 身份信息 */}
-        <div className="flex items-start gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-base font-semibold text-primary">
-            {name.charAt(0).toUpperCase()}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-baseline gap-x-2">
-              <span className="truncate font-medium">{name}</span>
-              {account.email && account.email !== name && (
-                <span className="truncate text-sm text-muted-foreground">{account.email}</span>
+    <article className="min-w-0 border-b last:border-b-0">
+      <div className="grid min-w-0 gap-5 p-5 md:grid-cols-[236px_minmax(0,1fr)] md:gap-0 md:p-6">
+        <section className="min-w-0 md:pr-6">
+          <div className="flex min-w-0 items-start gap-3">
+            <div
+              className={cn(
+                "flex size-12 shrink-0 items-center justify-center rounded-full text-base font-semibold",
+                tone.bg,
+                tone.fg,
               )}
-            </div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-              {account.uid && <span className="font-mono">uid: {account.uid.slice(0, 8)}…</span>}
-              {account.enterpriseName && <span>{account.enterpriseName}</span>}
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <Badge variant={account.needsRelogin ? "warning" : expired ? "destructive" : "success"}>
-                {account.needsRelogin
-                  ? "需重新登录"
-                  : expired
-                    ? "Token 已过期"
-                    : `Token 有效至 ${formatTime(account.expiresAt)}`}
-              </Badge>
-              {todayCheckedIn !== undefined && (
-                <Badge variant={todayCheckedIn ? "success" : "outline"}>
-                  {todayCheckedIn ? "今日已签到" : "今日未签到"}
-                </Badge>
-              )}
-              {creditPriority && <Badge variant="warning">建议优先使用</Badge>}
-              {workbuddyActive && <Badge variant="outline">WorkBuddy 当前</Badge>}
-              {codebuddyCliConfigured && codebuddyCliActive && (
-                <Badge variant="outline">CodeBuddy CLI 当前</Badge>
-              )}
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="-mr-1.5 -mt-1.5 shrink-0 text-muted-foreground hover:text-destructive"
-            onClick={() => onDelete(account)}
-          >
-            <Trash2 />
-          </Button>
-        </div>
-
-        {/* 积分摘要 */}
-        <CreditSummary credit={credit} loading={creditLoading} />
-
-        {/* 操作栏 */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
-          <Button
-            variant={creditPriority && !workbuddyActive ? "default" : "outline"}
-            size="sm"
-            disabled={featuresDisabled || !onSwitch || workbuddyActive}
-            onClick={() => onSwitch?.(account)}
-            title="切换 WorkBuddy 当前登录账号（会重启 WorkBuddy）"
-          >
-            <LogIn />
-            切换 WorkBuddy
-          </Button>
-          {codebuddyCliConfigured && onSwitchCodebuddyCli && (
-            <Button
-              variant={creditPriority && !codebuddyCliActive ? "default" : "outline"}
-              size="sm"
-              disabled={featuresDisabled || codebuddyCliActive || codebuddyCliLoading}
-              onClick={() => onSwitchCodebuddyCli(account)}
-              title="只切换 CodeBuddy CLI 的当前账号，不重启 WorkBuddy"
             >
-              {codebuddyCliLoading ? <Loader2 className="animate-spin" /> : <Terminal />}
-              切换 CodeBuddy CLI
+              {name.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium" title={name}>
+                {name}
+              </div>
+              {(todayCheckedIn !== undefined || account.needsRelogin || expired) && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {todayCheckedIn !== undefined && (
+                    <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>
+                      <CalendarCheck />
+                      {todayCheckedIn ? "已签到" : "未签到"}
+                    </Badge>
+                  )}
+                  {(account.needsRelogin || expired) && (
+                    <Badge variant="warning" className={chipClass}>
+                      {account.needsRelogin ? "需重新登录" : "Token 已过期"}
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 flex min-w-0 flex-col gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(switchBtnClass, workbuddyActive && switchCurrentClass)}
+              disabled={featuresDisabled || !onSwitch || workbuddyActive}
+              onClick={() => onSwitch?.(account)}
+              title={
+                workbuddyActive
+                  ? "当前已是 WorkBuddy 登录账号"
+                  : "切换 WorkBuddy 当前登录账号（会重启 WorkBuddy）"
+              }
+            >
+              <WorkBuddyMark size={18} className={workbuddyActive ? "opacity-50" : undefined} />
+              <span className="min-w-0 flex-1 truncate text-left">切换 WorkBuddy</span>
+              {workbuddyActive && <CurrentChip />}
             </Button>
-          )}
-          <div className="ml-auto flex items-center gap-1">
-            {todayCheckedIn !== true && (
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(switchBtnClass, codebuddyCliActive && switchCurrentClass)}
+              disabled={
+                featuresDisabled ||
+                !codebuddyCliConfigured ||
+                !onSwitchCodebuddyCli ||
+                codebuddyCliActive ||
+                codebuddyCliLoading
+              }
+              onClick={() => onSwitchCodebuddyCli?.(account)}
+              title={
+                codebuddyCliActive
+                  ? "当前已是 CodeBuddy CLI 账号"
+                  : codebuddyCliConfigured
+                    ? "只切换 CodeBuddy CLI 的当前账号，不重启 WorkBuddy"
+                    : "请先接入 CodeBuddy CLI"
+              }
+            >
+              {codebuddyCliLoading ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <CodeBuddyMark size={18} className={codebuddyCliActive ? "opacity-50" : undefined} />
+              )}
+              <span className="min-w-0 flex-1 truncate text-left">切换 CodeBuddy CLI</span>
+              {codebuddyCliActive && <CurrentChip />}
+            </Button>
+            {todayCheckedIn === false && (
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={featuresDisabled || !onCheckin || todayCheckedIn !== false}
+                className="h-8 w-full justify-start px-2 text-xs text-muted-foreground"
+                disabled={featuresDisabled || !onCheckin}
                 onClick={() => onCheckin?.(account)}
               >
                 <CalendarCheck />
                 签到
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={featuresDisabled || !onRefresh}
-              onClick={() => onRefresh?.(account)}
-            >
-              <RefreshCw />
-              刷新
-            </Button>
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        </section>
+
+        <section className="min-w-0 border-t pt-5 md:border-l md:border-t-0 md:pl-6 md:pt-0">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <CreditSummary credit={credit} loading={creditLoading} />
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-9 rounded-lg text-muted-foreground hover:text-foreground"
+                disabled={featuresDisabled || !onRefresh}
+                onClick={() => onRefresh?.(account)}
+                aria-label="刷新账号"
+                title="刷新账号 token"
+              >
+                <RefreshCw />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-9 rounded-lg text-destructive hover:bg-destructive/5 hover:text-destructive"
+                onClick={() => onDelete(account)}
+                aria-label="删除账号"
+                title="删除账号"
+              >
+                <Trash2 />
+              </Button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </article>
   );
 }

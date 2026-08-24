@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
-import { ArrowUpCircle, Loader2, RefreshCw, Settings, Users } from "lucide-react";
+import { ArrowUpCircle, Loader2, Settings, User } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
 import type { UpdateInfo } from "@/lib/types";
-import { Separator } from "@/components/ui/separator";
 import AccountsPage from "@/pages/AccountsPage";
 import SettingsPage from "@/pages/SettingsPage";
+import { StatusDot, WorkBuddyMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useAccountsStore } from "@/stores/accounts";
@@ -47,37 +46,24 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
 
   return (
     <>
-      <div className="border-t px-3 py-3 text-xs text-muted-foreground">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div>WorkBuddy：{running ? "运行中" : "未运行"}</div>
-            <div className="mt-1 font-mono text-[11px]">v{version || "?"}</div>
-          </div>
-          {hasUpdate ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 shrink-0 px-2 text-xs"
-              onClick={() => setDialogOpen(true)}
-            >
-              <ArrowUpCircle />
-              升级
-            </Button>
-          ) : checking ? (
-            <Loader2 className="mt-0.5 size-4 animate-spin" />
-          ) : null}
+      <section className="mt-auto border-t border-sidebar-border px-2 pt-3 text-xs">
+        <div className="flex items-center gap-1.5 text-[13px] text-sidebar-foreground">
+          <StatusDot on={Boolean(running)} />
+          <span>WorkBuddy：{running ? "运行中" : "未运行"}</span>
+          {checking && <Loader2 className="size-3 animate-spin text-sidebar-foreground/40" aria-label="检查更新中" />}
         </div>
+        <div className="mt-1 text-sidebar-foreground/50">v{version || "?"}</div>
         {hasUpdate && (
           <button
             type="button"
-            className="mt-2 flex w-full items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1.5 text-left text-primary transition-colors hover:bg-primary/15"
+            className="mt-3 flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 text-left text-[13px] text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
             onClick={() => setDialogOpen(true)}
           >
             <ArrowUpCircle className="size-3.5" />
             发现新版本 v{info?.latest}
           </button>
         )}
-      </div>
+      </section>
       <UpdateInstallDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
@@ -92,41 +78,35 @@ function Layout() {
   useCreditAutoRefresh();
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <aside className="flex w-52 shrink-0 flex-col border-r bg-sidebar">
-        <div className="flex items-center gap-2 px-4 pt-5 pb-4">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <RefreshCw className="size-4" />
-          </span>
-          <div className="leading-tight">
-            <div className="text-sm font-semibold">workbuddy-switch</div>
-            <div className="text-xs text-muted-foreground">WorkBuddy / CodeBuddy 账号</div>
-          </div>
+    <div className="flex h-screen min-h-0 overflow-hidden bg-background">
+      <aside className="flex min-h-0 w-[220px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4">
+        <div className="flex items-center gap-2.5 px-1 pb-6">
+          <WorkBuddyMark size={32} />
+          <div className="min-w-0 truncate text-[13px] font-semibold tracking-tight">workbuddy-switch</div>
         </div>
-        <Separator />
-        <nav className="flex flex-1 flex-col gap-1 px-2 py-3">
+        <nav className="flex min-h-0 flex-1 flex-col gap-0.5" aria-label="主导航">
           <NavLink
             to="/"
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+                "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50",
                 isActive
-                  ? "bg-accent font-medium text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                  ? "bg-foreground/[0.06] font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
               )
             }
           >
-            <Users className="size-4" />
+            <User className="size-4" />
             账号管理
           </NavLink>
           <NavLink
             to="/settings"
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+                "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50",
                 isActive
-                  ? "bg-accent font-medium text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                  ? "bg-foreground/[0.06] font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
               )
             }
           >
@@ -136,7 +116,7 @@ function Layout() {
         </nav>
         {api.isWebui() ? null : <UpdateCenter running={running} />}
       </aside>
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto bg-background overscroll-contain">
         <Outlet />
       </main>
     </div>
