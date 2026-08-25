@@ -6,6 +6,7 @@ import {
   FileDown,
   FileUp,
   Loader2,
+  MoreHorizontal,
   QrCode,
   RefreshCw,
   Terminal,
@@ -15,7 +16,7 @@ import { AccountCard } from "@/components/account-card";
 import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -113,7 +114,6 @@ export default function AccountsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
   const [importing, setImporting] = useState(false);
-  const [notice, setNotice] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [autoCheckinConfig, setAutoCheckinConfig] = useState<CheckinConfig | null>(null);
   const [autoCheckinSaving, setAutoCheckinSaving] = useState(false);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
@@ -140,7 +140,7 @@ export default function AccountsPage() {
       })
       .catch((e) => {
         if (!cancelled) {
-          setNotice({ type: "err", text: `自动签到配置加载失败：${api.asError(e)}` });
+          toast.error("自动签到配置加载失败", { description: api.asError(e) });
         }
       });
     return () => {
@@ -197,12 +197,11 @@ export default function AccountsPage() {
 
   async function onImport() {
     setImporting(true);
-    setNotice(null);
     try {
       const acc = await importLocal();
-      setNotice({ type: "ok", text: `已导入：${acc.nickname || acc.email || acc.id}` });
+      toast.success("账号已导入", { description: acc.nickname || acc.email || acc.id });
     } catch (e) {
-      setNotice({ type: "err", text: api.asError(e) });
+      toast.error("导入失败", { description: api.asError(e) });
     } finally {
       setImporting(false);
     }
@@ -214,12 +213,11 @@ export default function AccountsPage() {
     const next = { ...previous, enabled };
     setAutoCheckinConfig(next);
     setAutoCheckinSaving(true);
-    setNotice(null);
     try {
       setAutoCheckinConfig(await api.saveAutoCheckinConfig(next));
     } catch (e) {
       setAutoCheckinConfig(previous);
-      setNotice({ type: "err", text: `自动签到设置保存失败：${api.asError(e)}` });
+      toast.error("自动签到设置保存失败", { description: api.asError(e) });
     } finally {
       setAutoCheckinSaving(false);
     }
@@ -229,7 +227,6 @@ export default function AccountsPage() {
   function onExported(count: number) {
     const text = `已导出 ${count} 个账号。文件含登录 token，等同密码，请勿上传网盘或发送给他人。`;
     toast.success("导出成功", { description: text });
-    setNotice({ type: "ok", text });
   }
 
   /** 导入完成提示：计数 + token 可能过期提醒，并刷新列表。 */
@@ -238,7 +235,6 @@ export default function AccountsPage() {
     const overwriteText = result.overwritten > 0 ? `（覆盖 ${result.overwritten} 个）` : "";
     const text = `已导入 ${result.imported} 个${overwriteText}，跳过 ${result.skipped} 个。token 可能已过期，切换后可能需要重新登录。`;
     toast.success("导入成功", { description: text });
-    setNotice({ type: "ok", text });
   }
 
   async function onDelete(a: AccountMeta) {
@@ -250,17 +246,15 @@ export default function AccountsPage() {
     if (!deleteTarget) return;
     const a = deleteTarget;
     setDeleteTarget(null);
-    setNotice(null);
     try {
       await deleteAccount(a.id);
-      setNotice({ type: "ok", text: "已删除" });
+      toast.success("账号已删除");
     } catch (e) {
-      setNotice({ type: "err", text: api.asError(e) });
+      toast.error("删除失败", { description: api.asError(e) });
     }
   }
 
   async function onCheckin(a: AccountMeta) {
-    setNotice(null);
     try {
       const res = await api.checkin(a.id);
       const label =
@@ -269,10 +263,9 @@ export default function AccountsPage() {
           : res.result === "already"
             ? "今天已签到"
             : "签到失败";
-      setNotice({
-        type: res.result === "error" ? "err" : "ok",
-        text: `${a.nickname || a.email || a.id}：${label}${res.error ? `（${res.error}）` : ""}`,
-      });
+      const description = `${a.nickname || a.email || a.id}${res.error ? `：${res.error}` : ""}`;
+      if (res.result === "error") toast.error(label, { description });
+      else toast.success(label, { description });
       // 刷新该账号的今日签到状态
       try {
         const st = await api.getCheckinStatus(a.id);
@@ -282,46 +275,40 @@ export default function AccountsPage() {
       }
       void fetchAll();
     } catch (e) {
-      setNotice({ type: "err", text: api.asError(e) });
+      toast.error("签到失败", { description: api.asError(e) });
     }
   }
 
   async function onRefresh(a: AccountMeta) {
-    setNotice(null);
     try {
       const res = await api.refreshAccountToken(a.id);
       const label = a.nickname || a.email || a.id;
       if (res.needsRelogin) {
-        setNotice({
-          type: "err",
-          text: `${label}：刷新失败，需重新登录${res.needsReloginReason ? `（${res.needsReloginReason}）` : ""}`,
-        });
+        toast.error("Token 刷新失败", { description: `${label}：需重新登录${res.needsReloginReason ? `（${res.needsReloginReason}）` : ""}` });
       } else {
-        setNotice({ type: "ok", text: `${label}：token 已刷新` });
+        toast.success("Token 已刷新", { description: label });
       }
       void fetchAll();
     } catch (e) {
-      setNotice({ type: "err", text: api.asError(e) });
+      toast.error("Token 刷新失败", { description: api.asError(e) });
     }
   }
 
   async function onRefreshCredits() {
     if (!accounts.length || refreshingCredits) return;
-    setNotice(null);
     await refreshCredits(accounts.map((account) => account.id));
-    setNotice({ type: "ok", text: "积分到期情况已刷新" });
+    toast.success("积分到期情况已刷新");
   }
 
   async function onRefreshCheckin() {
     if (!accounts.length || refreshingCheckin) return;
     setRefreshingCheckin(true);
-    setNotice(null);
     try {
       const next = await fetchTodayCheckinMap(accounts.map((account) => account.id));
       setCheckinMap((prev) => ({ ...prev, ...next }));
-      setNotice({ type: "ok", text: "签到状态已刷新" });
+      toast.success("签到状态已刷新");
     } catch (e) {
-      setNotice({ type: "err", text: api.asError(e) });
+      toast.error("签到状态刷新失败", { description: api.asError(e) });
     } finally {
       setRefreshingCheckin(false);
     }
@@ -329,16 +316,12 @@ export default function AccountsPage() {
 
   async function onSwitchCodebuddyCli(account: AccountMeta) {
     setCodebuddyCliSwitchingId(account.id);
-    setNotice(null);
     try {
       const result = await api.switchCodebuddyCliAccount(account.id);
-      setNotice({
-        type: "ok",
-        text: `${account.nickname || account.email || account.id}：${result.message || "CodeBuddy CLI 已切换"}`,
-      });
+      toast.success("CodeBuddy CLI 已切换", { description: `${account.nickname || account.email || account.id}：${result.message || "切换成功"}` });
       await refreshCodebuddyCliStatus();
     } catch (error) {
-      setNotice({ type: "err", text: api.asError(error) });
+      toast.error("CodeBuddy CLI 切换失败", { description: api.asError(error) });
     } finally {
       setCodebuddyCliSwitchingId(null);
     }
@@ -352,13 +335,12 @@ export default function AccountsPage() {
   async function confirmInstallCodebuddyCli() {
     setInstallConfirmOpen(false);
     setInstallingCodebuddyCli(true);
-    setNotice(null);
     try {
       const result = await api.installCodebuddyCliHelper();
-      setNotice({ type: "ok", text: result.message || "CodeBuddy CLI helper 已更新" });
+      toast.success("CodeBuddy CLI helper 已更新", { description: result.message });
       await refreshCodebuddyCliStatus();
     } catch (error) {
-      setNotice({ type: "err", text: api.asError(error) });
+      toast.error("CodeBuddy CLI 接入失败", { description: api.asError(error) });
     } finally {
       setInstallingCodebuddyCli(false);
     }
@@ -402,10 +384,8 @@ export default function AccountsPage() {
   const codebuddyCurrentName = codebuddyCli?.configured
     ? codebuddyCli.activeAccountName || "未检测到"
     : "尚未接入";
-  const toolbarBtn = "h-10 rounded-lg px-4";
-
   return (
-    <div className="mx-auto w-full max-w-[1080px] px-6 py-8 sm:px-8 sm:py-9">
+    <div className="mx-auto w-full max-w-[1180px] px-6 py-8 sm:px-8 sm:py-9">
       <header className="mb-6">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -463,54 +443,53 @@ export default function AccountsPage() {
         </div>
       </header>
 
-      <div className="mb-6 flex flex-wrap items-center gap-2.5">
-        <Button className={toolbarBtn} onClick={() => setOauthOpen(true)}>
-          <QrCode />
-          OAuth 扫码登录
-        </Button>
-        <Button className={toolbarBtn} onClick={onImport} disabled={importing} variant="outline">
-          {importing ? <Loader2 className="animate-spin" /> : <Download />}
-          导入本机账号
-        </Button>
-        <Button
-          className={toolbarBtn}
-          onClick={() => setExportOpen(true)}
-          disabled={accounts.length === 0}
-          variant="outline"
-        >
-          <FileDown />
-          导出账号
-        </Button>
-        <Button className={toolbarBtn} onClick={() => setImportOpen(true)} variant="outline">
-          <FileUp />
-          导入账号
-        </Button>
-        <Button
-          className={toolbarBtn}
-          onClick={onRefreshCredits}
-          disabled={refreshingCredits || accounts.length === 0}
-          variant="outline"
-        >
-          <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
-          刷新积分
-        </Button>
-        <Button
-          className={toolbarBtn}
-          onClick={() => void onRefreshCheckin()}
-          disabled={refreshingCheckin || accounts.length === 0}
-          variant="outline"
-        >
-          {refreshingCheckin ? <Loader2 className="animate-spin" /> : <CircleCheck />}
-          刷新签到状态
-        </Button>
+      <div className="relative mb-6 overflow-visible rounded-2xl border border-slate-200/90 bg-gradient-to-r from-slate-50/95 via-white to-emerald-50/25 px-5 py-5 shadow-[0_6px_20px_rgba(15,23,42,.025)]">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
+          <div className="absolute -right-12 -top-20 size-44 rounded-full border-[28px] border-slate-400/[0.035]" />
+        </div>
+        <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
+          <div className="min-w-[190px] flex-1">
+            <h2 className="text-sm font-semibold text-slate-800">添加与迁移账号</h2>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">快速接入新账号，或从已有环境恢复</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Button
+              className="h-10 rounded-xl bg-blue-600 px-4 text-white shadow-sm hover:bg-blue-700 focus-visible:border-blue-600 focus-visible:ring-blue-500/35"
+              onClick={() => setOauthOpen(true)}
+            >
+              <QrCode />OAuth 扫码添加
+            </Button>
+            <Button className="h-10 rounded-xl px-4 bg-white/85" onClick={onImport} disabled={importing} variant="outline">
+              {importing ? <Loader2 className="animate-spin" /> : <Download />}导入本机账号
+            </Button>
+          </div>
+          <div className="hidden h-9 w-px bg-border lg:block" />
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setImportOpen(true)} title="从备份文件导入账号">
+              <FileUp />导入备份
+            </Button>
+            <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setExportOpen(true)} disabled={accounts.length === 0} title="导出账号备份">
+              <FileDown />导出
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-9 px-2.5" aria-label="更多账号操作" title="更多账号操作">
+                  <MoreHorizontal />更多
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem disabled={refreshingCredits || accounts.length === 0} onSelect={() => void onRefreshCredits()}>
+                  <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />刷新积分
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={refreshingCheckin || accounts.length === 0} onSelect={() => void onRefreshCheckin()}>
+                  {refreshingCheckin ? <Loader2 className="animate-spin" /> : <CircleCheck />}刷新签到状态
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
       </div>
 
-      {notice && (
-        <Alert variant={notice.type === "err" ? "destructive" : "default"} className="mb-4">
-          <AlertTitle>{notice.type === "err" ? "操作失败" : "成功"}</AlertTitle>
-          <AlertDescription>{notice.text}</AlertDescription>
-        </Alert>
-      )}
       {error && (
         <Alert variant="destructive" className="mb-4">
           <AlertTitle>加载失败</AlertTitle>
@@ -557,9 +536,15 @@ export default function AccountsPage() {
       )}
 
       <section className="mt-7 min-w-0" aria-labelledby="accounts-list-title">
-        <h2 id="accounts-list-title" className="mb-3 text-base font-semibold">
-          账号
-        </h2>
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div className="flex items-baseline gap-3">
+            <h2 id="accounts-list-title" className="text-base font-semibold">账号</h2>
+            <span className="text-xs text-muted-foreground">{accounts.length} 个账号</span>
+          </div>
+          <Button variant="ghost" size="sm" className="h-8 px-2.5" disabled={refreshingCredits || accounts.length === 0} onClick={() => void onRefreshCredits()} title="刷新全部账号积分">
+            <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />刷新
+          </Button>
+        </div>
         {loading && accounts.length === 0 ? (
           <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
             <Loader2 className="animate-spin" />
@@ -570,7 +555,7 @@ export default function AccountsPage() {
             暂无账号。点击上方按钮导入本机账号或扫码登录。
           </div>
         ) : (
-          <Card className="min-w-0 gap-0 overflow-hidden rounded-[12px] py-0 shadow-none">
+          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,430px),1fr))] items-start gap-5">
             {orderedAccounts.map((a) => (
               <AccountCard
                 key={a.id}
@@ -591,7 +576,7 @@ export default function AccountsPage() {
                 featuresDisabled={false}
               />
             ))}
-          </Card>
+          </div>
         )}
       </section>
 

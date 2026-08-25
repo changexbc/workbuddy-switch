@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { Toaster } from "sonner";
 import { ArrowUpCircle, ChartBar, Loader2, Settings, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -11,6 +10,7 @@ import CreditStatsPage from "@/pages/CreditStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
+import { Toaster } from "@/components/ui/sonner";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -150,7 +150,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
-      <Toaster richColors position="bottom-right" />
+      <Toaster />
     </BrowserRouter>
   );
 }
