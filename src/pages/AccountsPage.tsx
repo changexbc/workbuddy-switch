@@ -122,6 +122,8 @@ export default function AccountsPage() {
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
+  /** 刷新按钮触发的批量签到进行中 */
+  const [checkinAllRunning, setCheckinAllRunning] = useState(false);
   /** 接入/升级 CLI helper 确认框 */
   const [installConfirmOpen, setInstallConfirmOpen] = useState(false);
   /** 删除账号确认目标（null=关闭） */
@@ -294,6 +296,8 @@ export default function AccountsPage() {
         /* ignore */
       }
       void fetchAll();
+      // 签到成功/已签到会带来积分变动，force 刷新该账号积分
+      if (res.result !== "error") void refreshCredits([a.id]);
     } catch (e) {
       toast.error("签到失败", { description: api.asError(e) });
     }
@@ -314,10 +318,40 @@ export default function AccountsPage() {
     }
   }
 
+  /** 刷新按钮：先跑一轮批量签到并重查今日签到状态，再强制刷新全部积分。 */
   async function onRefreshCredits() {
-    if (!accounts.length || refreshingCredits) return;
-    await refreshCredits(accounts.map((account) => account.id));
-    toast.success("积分到期情况已刷新");
+    if (!accounts.length || refreshingCredits || checkinAllRunning) return;
+    setCheckinAllRunning(true);
+    try {
+      try {
+        const res = await api.checkinAll();
+        const entries = res.accounts ?? [];
+        const success = entries.filter((e) => e.result === "success").length;
+        const already = entries.filter((e) => e.result === "already").length;
+        const failed = entries.filter((e) => e.result === "error").length;
+        const parts: string[] = [];
+        if (success > 0) parts.push(`${success} 个签到成功`);
+        if (already > 0) parts.push(`${already} 个已签到`);
+        if (failed > 0) parts.push(`${failed} 个失败`);
+        const summary = parts.length > 0 ? parts.join("，") : "无账号需要签到";
+        if (entries.length > 0 && failed === entries.length) {
+          toast.error("签到失败", { description: summary });
+        } else {
+          toast.success("签到完成", { description: summary });
+        }
+        // 批量签到后重查全部账号的今日签到状态，无需切换页面即反映最新结果
+        const next = await fetchTodayCheckinMap(accounts.map((account) => account.id));
+        if (Object.keys(next).length > 0) {
+          setCheckinMap((prev) => ({ ...prev, ...next }));
+        }
+      } catch (e) {
+        toast.error("批量签到失败", { description: api.asError(e) });
+      }
+      await refreshCredits(accounts.map((account) => account.id));
+      toast.success("积分到期情况已刷新");
+    } finally {
+      setCheckinAllRunning(false);
+    }
   }
 
   async function onSwitchCodebuddyCli(account: AccountMeta) {
@@ -553,16 +587,16 @@ export default function AccountsPage() {
                         variant="ghost"
                         size="icon"
                         className="size-9 rounded-lg"
-                        disabled={refreshingCredits || accounts.length === 0}
+                        disabled={refreshingCredits || checkinAllRunning || accounts.length === 0}
                         onClick={() => void onRefreshCredits()}
-                        aria-label="刷新全部账号积分"
+                        aria-label="签到并刷新全部账号积分"
                       >
-                        <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
+                        <RefreshCw className={refreshingCredits || checkinAllRunning ? "animate-spin" : undefined} />
                       </Button>
                     </DemoAction>
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="top">{api.isDemoMode() ? "演示模式下不可操作" : "刷新全部账号积分"}</TooltipContent>
+                <TooltipContent side="top">{api.isDemoMode() ? "演示模式下不可操作" : "签到并刷新全部账号积分"}</TooltipContent>
               </Tooltip>
             </div>
           </TooltipProvider>
