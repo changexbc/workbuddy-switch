@@ -6,6 +6,12 @@ mod tray;
 use std::time::Duration;
 use wb_switch_core::modules;
 
+const SCREENSHOT_DEMO_ENV: &str = "WB_SWITCH_SCREENSHOT_DEMO";
+
+pub(crate) fn is_screenshot_demo() -> bool {
+    std::env::var(SCREENSHOT_DEMO_ENV).as_deref() == Ok("1")
+}
+
 /// 后台循环：自动签到启动即核验、每 30 分钟补签；自动轮换每 30 秒检查；每天一次保活。
 fn spawn_background_loops() {
     tauri::async_runtime::spawn(async move {
@@ -81,7 +87,10 @@ pub fn run() {
                     tray::is_silent_startup(std::env::args()),
                 );
             }
-            spawn_background_loops();
+            // README 截图模式只渲染前端虚构数据，禁止读取账号后执行签到、轮换或保活。
+            if !is_screenshot_demo() {
+                spawn_background_loops();
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

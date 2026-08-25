@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { ArrowUpCircle, CircleCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -22,6 +22,7 @@ import type {
 import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
 import { cn } from "@/lib/utils";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
+import { DemoAction } from "@/components/demo-action";
 import { useAccountsStore } from "@/stores/accounts";
 
 interface SettingsGroupProps {
@@ -62,6 +63,7 @@ interface SettingsFieldRowProps {
   htmlFor?: string;
   children: ReactNode;
   className?: string;
+  operational?: boolean;
 }
 
 function SettingsFieldRow({
@@ -70,6 +72,7 @@ function SettingsFieldRow({
   htmlFor,
   children,
   className,
+  operational = false,
 }: SettingsFieldRowProps) {
   return (
     <SettingsRow className={cn("flex-col items-stretch gap-2 sm:flex-row sm:items-center", className)}>
@@ -85,7 +88,9 @@ function SettingsFieldRow({
           <p className="mt-0.5 text-xs leading-4 text-muted-foreground/75">{description}</p>
         )}
       </div>
-      <div className="flex min-w-0 w-full shrink-0 justify-end sm:w-auto">{children}</div>
+      <div className="flex min-w-0 w-full shrink-0 justify-end sm:w-auto">
+        {operational ? <DemoAction className="w-full sm:w-auto">{children as ReactElement}</DemoAction> : children}
+      </div>
     </SettingsRow>
   );
 }
@@ -197,6 +202,7 @@ function AutoCheckinCard() {
               label="启用自动签到"
               description="启动时立即核验服务端状态，未签到账号会自动补签"
               htmlFor="ac-enabled"
+              operational
             >
               <Switch
                 id="ac-enabled"
@@ -209,6 +215,7 @@ function AutoCheckinCard() {
               label="保活阈值"
               description="天；0 表示每天无条件刷新"
               htmlFor="ac-keep"
+              operational
             >
               <Input
                 id="ac-keep"
@@ -220,7 +227,7 @@ function AutoCheckinCard() {
                 onChange={(e) => setNum("keepalive_days", e.target.value)}
               />
             </SettingsFieldRow>
-            <SettingsFieldRow label="惰性刷新" description="小时" htmlFor="ac-lazy">
+            <SettingsFieldRow label="惰性刷新" description="小时" htmlFor="ac-lazy" operational>
               <Input
                 id="ac-lazy"
                 className="w-full sm:w-48"
@@ -233,14 +240,12 @@ function AutoCheckinCard() {
             </SettingsFieldRow>
 
             <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-              <Button size="sm" onClick={save} disabled={saving}>
-                {saving ? <Loader2 className="animate-spin" /> : <Save />}
-                保存配置
-              </Button>
-              <Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy}>
-                {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}
-                全部立即签到
-              </Button>
+              <DemoAction><Button size="sm" onClick={save} disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" /> : <Save />}保存配置
+              </Button></DemoAction>
+              <DemoAction><Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy}>
+                {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}全部立即签到
+              </Button></DemoAction>
             </div>
           </>
         ) : (
@@ -409,6 +414,7 @@ function AutoRotateCard() {
               label="启用自动轮换"
               description="开启后按下方间隔自动检查并切换 CodeBuddy CLI 账号"
               htmlFor="ar-enabled"
+              operational
             >
               <Switch
                 id="ar-enabled"
@@ -417,7 +423,7 @@ function AutoRotateCard() {
               />
             </SettingsFieldRow>
 
-            <SettingsFieldRow label="检查间隔" description="分钟" htmlFor="ar-interval">
+            <SettingsFieldRow label="检查间隔" description="分钟" htmlFor="ar-interval" operational>
               <Input
                 id="ar-interval"
                 className="w-full sm:w-48"
@@ -428,7 +434,7 @@ function AutoRotateCard() {
                 onChange={(e) => setNum("check_interval_minutes", e.target.value)}
               />
             </SettingsFieldRow>
-            <SettingsFieldRow label="切换冷却" description="分钟" htmlFor="ar-cooldown">
+            <SettingsFieldRow label="切换冷却" description="分钟" htmlFor="ar-cooldown" operational>
               <Input
                 id="ar-cooldown"
                 className="w-full sm:w-48"
@@ -439,7 +445,7 @@ function AutoRotateCard() {
                 onChange={(e) => setNum("cooldown_minutes", e.target.value)}
               />
             </SettingsFieldRow>
-            <SettingsFieldRow label="到期差异阈值" description="小时" htmlFor="ar-gap">
+            <SettingsFieldRow label="到期差异阈值" description="小时" htmlFor="ar-gap" operational>
               <Input
                 id="ar-gap"
                 className="w-full sm:w-48"
@@ -450,7 +456,7 @@ function AutoRotateCard() {
                 onChange={(e) => setNum("min_gap_hours", e.target.value)}
               />
             </SettingsFieldRow>
-            <SettingsFieldRow label="到期紧迫阈值" description="小时" htmlFor="ar-urgency">
+            <SettingsFieldRow label="到期紧迫阈值" description="小时" htmlFor="ar-urgency" operational>
               <Input
                 id="ar-urgency"
                 className="w-full sm:w-48"
@@ -461,7 +467,7 @@ function AutoRotateCard() {
                 onChange={(e) => setNum("min_urgency_hours", e.target.value)}
               />
             </SettingsFieldRow>
-            <SettingsFieldRow label="活跃保护" description="分钟" htmlFor="ar-guard">
+            <SettingsFieldRow label="活跃保护" description="分钟" htmlFor="ar-guard" operational>
               <Input
                 id="ar-guard"
                 className="w-full sm:w-48"
@@ -472,7 +478,7 @@ function AutoRotateCard() {
                 onChange={(e) => setNum("active_guard_minutes", e.target.value)}
               />
             </SettingsFieldRow>
-            <SettingsFieldRow label="最小剩余积分" description="低于此值时不切换" htmlFor="ar-min">
+            <SettingsFieldRow label="最小剩余积分" description="低于此值时不切换" htmlFor="ar-min" operational>
               <Input
                 id="ar-min"
                 className="w-full sm:w-48"
@@ -487,14 +493,12 @@ function AutoRotateCard() {
             </p>
 
             <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-              <Button size="sm" onClick={save} disabled={saving}>
-                {saving ? <Loader2 className="animate-spin" /> : <Save />}
-                保存配置
-              </Button>
-              <Button size="sm" variant="outline" onClick={runNow} disabled={busy}>
-                {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                立即检查一次
-              </Button>
+              <DemoAction><Button size="sm" onClick={save} disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" /> : <Save />}保存配置
+              </Button></DemoAction>
+              <DemoAction><Button size="sm" variant="outline" onClick={runNow} disabled={busy}>
+                {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}立即检查一次
+              </Button></DemoAction>
             </div>
           </>
         ) : (
@@ -590,26 +594,26 @@ function PermissionCheckCard() {
           {authFile || "认证文件路径未获取"}
         </div>
         <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-          <Button size="sm" onClick={runCheck} disabled={checking}>
+          <DemoAction><Button size="sm" onClick={runCheck} disabled={checking}>
             {checking ? "检测中…" : "检测权限"}
-          </Button>
-          <Button
+          </Button></DemoAction>
+          <DemoAction><Button
             size="sm"
             variant="outline"
             onClick={() => void api.openPermissionSettings("all_files")}
           >
             打开完全磁盘访问
-          </Button>
-          <Button
+          </Button></DemoAction>
+          <DemoAction><Button
             size="sm"
             variant="outline"
             onClick={() => void api.openPermissionSettings("app_management")}
           >
             打开 App 管理
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => void api.revealAppInFinder()}>
+          </Button></DemoAction>
+          <DemoAction><Button size="sm" variant="outline" onClick={() => void api.revealAppInFinder()}>
             在 Finder 中显示
-          </Button>
+          </Button></DemoAction>
         </div>
 
         {result && (
@@ -727,14 +731,14 @@ function UpdateCard() {
             <div className="font-medium">公开更新源</div>
             <div className="truncate text-xs text-muted-foreground">{GITHUB_REPOSITORY_URL}</div>
           </div>
-          <Button
+          <DemoAction><Button
             variant="ghost"
             size="icon"
             title="打开 GitHub Release"
             onClick={() => void openReleaseUrl(GITHUB_RELEASE_URL)}
           >
             <ExternalLink />
-          </Button>
+          </Button></DemoAction>
         </div>
 
         <SettingsFieldRow
@@ -742,6 +746,7 @@ function UpdateCard() {
           description="仅用于 GitHub 更新检查和安装包下载；留空表示关闭显式代理。"
           htmlFor="update-proxy"
           className="bg-muted/25"
+          operational
         >
           <Input
             id="update-proxy"
@@ -755,17 +760,17 @@ function UpdateCard() {
         </SettingsFieldRow>
 
         <div className="flex flex-wrap gap-2 border-b border-border/60 bg-muted/25 px-4 py-3 sm:px-5">
-          <Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
+          <DemoAction><Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
             {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
             保存代理
-          </Button>
+          </Button></DemoAction>
         </div>
 
         <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-          <Button size="sm" variant="outline" onClick={check} disabled={checking}>
+          <DemoAction><Button size="sm" variant="outline" onClick={check} disabled={checking}>
             {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             检查更新
-          </Button>
+          </Button></DemoAction>
         </div>
 
         {info?.ok && (
@@ -778,20 +783,20 @@ function UpdateCard() {
                 {info.releaseName && <span className="text-muted-foreground"> · {info.releaseName}</span>}
               </div>
               {info.hasUpdate && (
-                <Button size="sm" onClick={() => setInstallOpen(true)}>
+                <DemoAction><Button size="sm" onClick={() => setInstallOpen(true)}>
                   <ArrowUpCircle />
                   立即升级
-                </Button>
+                </Button></DemoAction>
               )}
               {info.releaseUrl && (
-                <Button
+                <DemoAction><Button
                   variant="link"
                   size="sm"
                   className="h-auto p-0"
                   onClick={() => void openReleaseUrl(info.releaseUrl)}
                 >
                   打开 GitHub Release
-                </Button>
+                </Button></DemoAction>
               )}
             </AlertDescription>
           </Alert>
@@ -865,6 +870,7 @@ function StartupCard() {
           label="开机时静默启动到托盘"
           description="开关直接反映系统登录项状态；之后可从托盘「打开主界面」恢复"
           htmlFor="startup-silent"
+          operational
         >
           <Switch
             id="startup-silent"
@@ -940,8 +946,8 @@ export default function SettingsPage() {
         <PermissionCheckCard />
         <AutoCheckinCard />
         <AutoRotateCard />
-        {api.isDesktop() ? <StartupCard /> : null}
-        {api.isWebui() ? null : <UpdateCard />}
+        {api.isDesktop() || api.isDemoMode() ? <StartupCard /> : null}
+        {api.isWebui() && !api.isDemoMode() ? null : <UpdateCard />}
       </div>
     </div>
   );

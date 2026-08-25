@@ -18,6 +18,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DemoAction } from "@/components/demo-action";
 import {
   Card,
   CardContent,
@@ -1179,7 +1180,9 @@ export default function CreditStatsPage() {
   useEffect(() => {
     // 已有会话缓存且距上次刷新超过 30 分钟时，进入页面自动刷新一次统计
     const autoRefresh =
-      cachedStatistics !== null && Date.now() - lastStatisticsRefreshAt >= STATISTICS_AUTO_REFRESH_MS;
+      !api.isDemoMode() &&
+      cachedStatistics !== null &&
+      Date.now() - lastStatisticsRefreshAt >= STATISTICS_AUTO_REFRESH_MS;
     void load(autoRefresh);
   }, [load]);
 
@@ -1195,16 +1198,18 @@ export default function CreditStatsPage() {
             当前数据更新于 {stats ? formatDateTime(official?.collectedAt ?? stats.generatedAt) : "—"}
           </p>
         </div>
-        <Button
-          className="shrink-0"
-          variant="outline"
-          size="sm"
-          onClick={() => void load(true)}
-          disabled={loading}
-        >
-          {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          刷新统计
-        </Button>
+        <DemoAction>
+          <Button
+            className="shrink-0"
+            variant="outline"
+            size="sm"
+            onClick={() => void load(true)}
+            disabled={loading}
+          >
+            {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            刷新统计
+          </Button>
+        </DemoAction>
       </header>
 
       {error && (

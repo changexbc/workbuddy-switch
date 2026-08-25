@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
+import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { ArrowUpCircle, ChartBar, Loader2, Settings, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -10,7 +10,10 @@ import CreditStatsPage from "@/pages/CreditStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
 import { useAccountsStore } from "@/stores/accounts";
@@ -99,14 +102,21 @@ function Layout() {
       >
         <div className="flex items-center gap-2.5 px-1 pb-5">
           <AppIconMark size={36} className="drop-shadow-sm" />
-          <div
-            className="min-w-0 truncate text-[15px] leading-5 tracking-[-0.02em] text-sidebar-foreground/90"
-            style={{
-              fontFamily: '"Bricolage Grotesque Variable", "SF Pro Display", ui-sans-serif, sans-serif',
-              fontWeight: 640,
-            }}
-          >
-            WorkBuddy Switch
+          <div className="min-w-0">
+            <div
+              className="truncate text-[15px] leading-5 tracking-[-0.02em] text-sidebar-foreground/90"
+              style={{
+                fontFamily: '"Bricolage Grotesque Variable", "SF Pro Display", ui-sans-serif, sans-serif',
+                fontWeight: 640,
+              }}
+            >
+              WorkBuddy Switch
+            </div>
+            {demoModeEnabled && (
+              <Badge variant="secondary" className="mt-1 h-5 border-0 px-1.5 text-[10px] text-sidebar-foreground/60 shadow-none">
+                演示模式
+              </Badge>
+            )}
           </div>
         </div>
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5" aria-label="主导航">
@@ -169,17 +179,21 @@ function Layout() {
 }
 
 export default function App() {
+  const Router = pagesDemoHostingEnabled ? HashRouter : BrowserRouter;
+
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<AccountsPage />} />
-          <Route path="/credit-stats" element={<CreditStatsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-      <Toaster />
-    </BrowserRouter>
+    <TooltipProvider delayDuration={250}>
+      <Router>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<AccountsPage />} />
+            <Route path="/credit-stats" element={<CreditStatsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+        <Toaster />
+      </Router>
+    </TooltipProvider>
   );
 }

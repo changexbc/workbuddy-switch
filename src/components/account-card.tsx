@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DemoAction } from "@/components/demo-action";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +15,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { cn } from "@/lib/utils";
+import { demoModeEnabled } from "@/lib/demo-mode";
 import type { AccountMeta, CreditExpiry, CreditResource } from "@/lib/types";
 
 const AVATAR_TONES = [
@@ -153,7 +155,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
       )}
       {(account.needsRelogin || expired) && <Badge variant="warning" className={chipClass}>{account.needsRelogin ? "需重新登录" : "Token 已过期"}</Badge>}
       {creditPriority && <Badge variant="warning" className={chipClass}>建议优先</Badge>}
-      {workbuddyActive && codebuddyCliActive && <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>2 个工具正在使用</Badge>}
+      {!compact && workbuddyActive && codebuddyCliActive && <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>2 个工具正在使用</Badge>}
     </>
   );
 
@@ -188,27 +190,35 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
         </div>
 
         <div className={cn("absolute z-20", compact ? "right-2.5 top-1/2 -translate-y-1/2" : "right-3.5 top-3.5")}>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          {demoModeEnabled ? (
+            <DemoAction>
               <Button variant="ghost" size="icon" className={cn("rounded-lg text-muted-foreground hover:text-foreground", compact ? "size-7" : "size-8")} aria-label={`管理账号 ${name}`} title="更多账号操作">
                 <Ellipsis />
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuItem disabled={featuresDisabled || !onRefresh} onSelect={() => onRefresh?.(account)}>
-                <RefreshCw />刷新 Token
-              </DropdownMenuItem>
-              {todayCheckedIn === false && (
-                <DropdownMenuItem disabled={featuresDisabled || !onCheckin} onSelect={() => onCheckin?.(account)}>
-                  <CircleCheck />手动签到
+            </DemoAction>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className={cn("rounded-lg text-muted-foreground hover:text-foreground", compact ? "size-7" : "size-8")} aria-label={`管理账号 ${name}`} title="更多账号操作">
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem disabled={featuresDisabled || !onRefresh} onSelect={() => onRefresh?.(account)}>
+                  <RefreshCw />刷新 Token
                 </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-destructive focus:bg-destructive/5 focus:text-destructive" onSelect={() => onDelete(account)}>
-                <Trash2 />删除账号
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                {todayCheckedIn === false && (
+                  <DropdownMenuItem disabled={featuresDisabled || !onCheckin} onSelect={() => onCheckin?.(account)}>
+                    <CircleCheck />手动签到
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="text-destructive focus:bg-destructive/5 focus:text-destructive" onSelect={() => onDelete(account)}>
+                  <Trash2 />删除账号
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
         {compact ? (
@@ -228,6 +238,12 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">WorkBuddy 当前账号</TooltipContent>
                 </Tooltip>
+              ) : demoModeEnabled ? (
+                <DemoAction>
+                  <Button variant="outline" size="icon" className="size-7 rounded-lg" aria-label="设为 WorkBuddy 当前账号">
+                    <WorkBuddyMark size={15} />
+                  </Button>
+                </DemoAction>
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -250,6 +266,12 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">CodeBuddy CLI 当前账号</TooltipContent>
                 </Tooltip>
+              ) : demoModeEnabled ? (
+                <DemoAction>
+                  <Button variant="outline" size="icon" className="size-7 rounded-lg" aria-label="设为 CodeBuddy CLI 当前账号">
+                    <CodeBuddyMark size={15} />
+                  </Button>
+                </DemoAction>
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -327,7 +349,13 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
 
       {!compact && (
         <footer className="flex flex-wrap items-center gap-2.5 border-t px-5 py-2.5">
-          {workbuddyActive ? <ProductCurrentState product="workbuddy" compact /> : (
+          {workbuddyActive ? <ProductCurrentState product="workbuddy" compact /> : demoModeEnabled ? (
+            <DemoAction>
+              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="设为 WorkBuddy 当前账号">
+                <WorkBuddyMark size={18} /><span>设为当前</span>
+              </Button>
+            </DemoAction>
+          ) : (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !onSwitch} onClick={() => onSwitch?.(account)} aria-label="设为 WorkBuddy 当前账号">
@@ -337,7 +365,13 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               <TooltipContent side="top">设为 WorkBuddy 当前账号（会重启 WorkBuddy）</TooltipContent>
             </Tooltip>
           )}
-          {codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : (
+          {codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : demoModeEnabled ? (
+            <DemoAction>
+              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="设为 CodeBuddy CLI 当前账号">
+                <CodeBuddyMark size={18} /><span>设为当前</span>
+              </Button>
+            </DemoAction>
+          ) : (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCliConfigured || !onSwitchCodebuddyCli || codebuddyCliLoading} onClick={() => onSwitchCodebuddyCli?.(account)} aria-label="设为 CodeBuddy CLI 当前账号">

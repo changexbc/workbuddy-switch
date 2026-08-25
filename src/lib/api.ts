@@ -24,6 +24,8 @@ import type {
   SwitchResult,
   UpdateInfo,
 } from "./types";
+import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled } from "./demo-mode";
+import { screenshotDemoResponse } from "./screenshot-demo";
 
 /**
  * 双通道适配层：
@@ -31,6 +33,17 @@ import type {
  * - webui（浏览器）：HTTP fetch 调用本地 workbuddy-switch 服务（127.0.0.1）
  */
 const API_BASE = "http://127.0.0.1:57890";
+
+const DEMO_READ_COMMANDS = new Set([
+  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_checkin_status",
+  "get_credit_expiry", "get_credit_statistics", "get_auto_checkin_config",
+  "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
+  "get_github_config", "get_launch_at_login_enabled", "switch_progress",
+]);
+
+export function isDemoMode(): boolean {
+  return demoModeEnabled;
+}
 
 export function isWebui(): boolean {
   return typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
@@ -127,6 +140,13 @@ async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise
 }
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (demoModeEnabled) {
+    if (cmd === "get_credit_statistics" && args?.refresh === true) {
+      throw new Error(DEMO_UNAVAILABLE_MESSAGE);
+    }
+    if (!DEMO_READ_COMMANDS.has(cmd)) throw new Error(DEMO_UNAVAILABLE_MESSAGE);
+    return screenshotDemoResponse(cmd, args) as T;
+  }
   if (!isWebui()) return invoke<T>(cmd, args);
   return httpCall<T>(cmd, args);
 }
@@ -225,6 +245,7 @@ export function copySessions(
 export function openPermissionSettings(
   target?: "app_management" | "all_files",
 ): Promise<void> {
+  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
   if (isWebui()) return Promise.resolve();
   return call("open_permission_settings", { target: target ?? "app_management" });
 }
@@ -237,6 +258,7 @@ export function checkAuthPermission(): Promise<{
   dir?: string;
   hint?: string;
 }> {
+  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
   if (isWebui()) {
     return Promise.resolve({
       ok: true,
@@ -249,6 +271,7 @@ export function checkAuthPermission(): Promise<{
 
 /** 在 Finder 中显示当前 App（桌面端专用；webui 无操作）。 */
 export function revealAppInFinder(): Promise<void> {
+  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
   if (isWebui()) return Promise.resolve();
   return call("reveal_app_in_finder");
 }
@@ -263,6 +286,14 @@ export async function getCheckinStatus(accountId: string): Promise<{
   error?: string;
   raw?: unknown;
 }> {
+  if (demoModeEnabled) {
+    return screenshotDemoResponse("get_checkin_status", { accountId }) as {
+      ok: boolean;
+      todayCheckedIn: boolean;
+      error?: string;
+      raw?: unknown;
+    };
+  }
   if (isWebui()) {
     // webui 端为批量接口，按 accountId 过滤
     const all = await httpCall<{
@@ -371,12 +402,14 @@ export function relaunchApp(): Promise<void> {
 
 /** 查询系统当前的开机自启注册状态（桌面端）。 */
 export function getLaunchAtLoginEnabled(): Promise<boolean> {
+  if (demoModeEnabled) return call("get_launch_at_login_enabled");
   if (!isDesktop()) return Promise.resolve(false);
   return call("get_launch_at_login_enabled");
 }
 
 /** 注册 / 移除系统开机自启，返回回读后的权威状态（桌面端）。 */
 export function setLaunchAtLoginEnabled(enabled: boolean): Promise<boolean> {
+  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
   if (!isDesktop()) return Promise.resolve(false);
   return call("set_launch_at_login_enabled", { enabled });
 }

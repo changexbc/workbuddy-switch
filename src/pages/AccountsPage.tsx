@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  CircleCheck,
   Columns3,
   Download,
   FileDown,
@@ -14,10 +13,14 @@ import {
 } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
+import { DemoAction } from "@/components/demo-action";
 import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -58,10 +61,6 @@ function creditPriorityRank(credit?: CreditExpiry): number {
   if (hasExpiringSoonCredits(credit)) return 0;
   if (credit.expired) return 1;
   return 2;
-}
-
-function formatCredits(value: number): string {
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
 }
 
 function isWorkbuddyCurrent(account: AccountMeta, current: AppStatus["current"] | undefined): boolean {
@@ -376,10 +375,6 @@ export default function AccountsPage() {
         })
         .map(({ account }) => account)
     : accounts;
-  const urgentCreditAccounts = orderedAccounts.filter((account) => {
-    const credit = creditMap[account.id];
-    return credit?.ok && (credit.expired || credit.expiringSoon);
-  });
   const priorityAccountId =
     creditOrderingReady
       ? orderedAccounts.find((account) => hasExpiringSoonCredits(creditMap[account.id]))?.id
@@ -446,23 +441,31 @@ export default function AccountsPage() {
             <p className="mt-1 text-xs leading-5 text-muted-foreground">快速接入新账号，或从已有环境恢复</p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <Button
-              className="h-10 rounded-xl bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90"
-              onClick={() => setOauthOpen(true)}
-            >
-              <QrCode />OAuth 扫码添加
-            </Button>
-            <Button className="h-10 rounded-xl px-4" onClick={onImport} disabled={importing} variant="outline">
-              {importing ? <Loader2 className="animate-spin" /> : <Download />}导入本机账号
-            </Button>
+            <DemoAction>
+              <Button
+                className="h-10 bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90"
+                onClick={() => setOauthOpen(true)}
+              >
+                <QrCode />OAuth 扫码添加
+              </Button>
+            </DemoAction>
+            <DemoAction>
+              <Button className="h-10 px-4" onClick={onImport} disabled={importing} variant="outline">
+                {importing ? <Loader2 className="animate-spin" /> : <Download />}导入本机账号
+              </Button>
+            </DemoAction>
           </div>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setImportOpen(true)} title="从备份文件导入账号">
-              <FileUp />导入备份
-            </Button>
-            <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setExportOpen(true)} disabled={accounts.length === 0} title="导出账号备份">
-              <FileDown />导出
-            </Button>
+            <DemoAction>
+              <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setImportOpen(true)} title="从备份文件导入账号">
+                <FileUp />导入备份
+              </Button>
+            </DemoAction>
+            <DemoAction>
+              <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setExportOpen(true)} disabled={accounts.length === 0} title="导出账号备份">
+                <FileDown />导出
+              </Button>
+            </DemoAction>
           </div>
         </div>
       </div>
@@ -483,64 +486,86 @@ export default function AccountsPage() {
                 ? "当前 helper 仍按旧索引读取账号；升级后将按账号 ID 独立切换，账号增删也不会错位。"
                 : "WorkBuddy 账号与积分功能可正常使用；如需从这里切换 CodeBuddy CLI 账号，点击下方按钮一键接入（自动完成配置，无需手动操作）。"}
             </p>
-            <Button
-              className="mt-2"
-              size="sm"
-              variant="outline"
-              onClick={() => void onInstallCodebuddyCli()}
-              disabled={installingCodebuddyCli}
-            >
-              {installingCodebuddyCli && <Loader2 className="animate-spin" />}
-              {codebuddyCli.configured ? "升级 CLI helper" : "接入 CLI"}
-            </Button>
+            <DemoAction>
+              <Button
+                className="mt-2"
+                size="sm"
+                variant="outline"
+                onClick={() => void onInstallCodebuddyCli()}
+                disabled={installingCodebuddyCli}
+              >
+                {installingCodebuddyCli && <Loader2 className="animate-spin" />}
+                {codebuddyCli.configured ? "升级 CLI helper" : "接入 CLI"}
+              </Button>
+            </DemoAction>
           </AlertDescription>
         </Alert>
       )}
-      {urgentCreditAccounts.length > 0 && (
-        <Alert className="mb-4 border-amber-300 bg-amber-50 text-amber-950">
-          <AlertTitle>积分即将到期</AlertTitle>
-          <AlertDescription>
-            以下账号有积分将在 7 天内到期，建议尽快使用：{" "}
-            {urgentCreditAccounts.map((account) => {
-              const credit = creditMap[account.id];
-              const amount = expiringSoonAmount(credit);
-              const name = account.nickname || account.email || account.uid || account.id;
-              return amount > 0 ? `${name}（${formatCredits(amount)} 积分）` : `${name}（有已到期资源）`;
-            }).join("、")}
-            。具体资源和时间已标注在账号卡片上。
-          </AlertDescription>
-        </Alert>
-      )}
-
       <section className="mt-7 min-w-0" aria-labelledby="accounts-list-title">
-        <div className="mb-4 flex items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <h2 id="accounts-list-title" className="text-base font-semibold">账号</h2>
-            <span className="text-xs text-muted-foreground">{accounts.length} 个账号</span>
-            <span className="h-4 w-px bg-border" aria-hidden="true" />
-            <div className="flex items-center gap-1.5">
-              <label htmlFor="accounts-auto-checkin" className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <CircleCheck className="size-3.5" />
-                自动签到
-              </label>
-              <Switch
-                id="accounts-auto-checkin"
-                checked={autoCheckinConfig?.enabled ?? false}
-                disabled={!autoCheckinConfig || autoCheckinSaving}
-                onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
-                aria-label="自动签到"
-              />
-              {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h2 id="accounts-list-title" className="text-base font-semibold tracking-tight">账号</h2>
+            <Badge
+              variant="secondary"
+              className="h-6 min-w-6 rounded-full border-0 px-1.5 text-[11px] tabular-nums text-muted-foreground shadow-none"
+              aria-label={`${accounts.length} 个账号`}
+            >
+              {accounts.length}
+            </Badge>
+          </div>
+          <TooltipProvider delayDuration={400}>
+            <div className="ml-auto flex items-center gap-1">
+              <div className="mr-1 flex items-center gap-2.5">
+                <label htmlFor="accounts-auto-checkin" className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  自动签到
+                </label>
+                <DemoAction>
+                  <Switch
+                    id="accounts-auto-checkin"
+                    checked={autoCheckinConfig?.enabled ?? false}
+                    disabled={!autoCheckinConfig || autoCheckinSaving}
+                    onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
+                    aria-label="自动签到"
+                  />
+                </DemoAction>
+                {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label="正在保存自动签到设置" />}
+              </div>
+              <Separator orientation="vertical" className="mx-2 h-5" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn("size-9 rounded-lg", compact && "bg-accent text-accent-foreground")}
+                    onClick={toggleCompact}
+                    aria-label={compact ? "切换为宽松模式" : "切换为紧凑模式"}
+                  >
+                    {compact ? <Rows3 /> : <Columns3 />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{compact ? "切换为宽松模式" : "切换为紧凑模式"}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <DemoAction>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-9 rounded-lg"
+                        disabled={refreshingCredits || accounts.length === 0}
+                        onClick={() => void onRefreshCredits()}
+                        aria-label="刷新全部账号积分"
+                      >
+                        <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />
+                      </Button>
+                    </DemoAction>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">{api.isDemoMode() ? "演示模式下不可操作" : "刷新全部账号积分"}</TooltipContent>
+              </Tooltip>
             </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" className={cn("h-8 px-2.5", compact && "bg-accent text-accent-foreground")} onClick={toggleCompact} title={compact ? "切换为宽松模式" : "切换为紧凑模式"} aria-label={compact ? "切换为宽松模式" : "切换为紧凑模式"}>
-              {compact ? <Rows3 /> : <Columns3 />}
-            </Button>
-            <Button variant="ghost" size="sm" className="h-8 px-2.5" disabled={refreshingCredits || accounts.length === 0} onClick={() => void onRefreshCredits()} title="刷新全部账号积分">
-              <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />刷新
-            </Button>
-          </div>
+          </TooltipProvider>
         </div>
         {loading && accounts.length === 0 ? (
           <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">

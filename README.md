@@ -2,19 +2,24 @@
 
 WorkBuddy（腾讯 AI 编程助手）账号切换工具。两种形态：
 
-- **桌面 App**：下载 `.app` 双击运行（Tauri，推荐日常使用）
+- **桌面 App**：从 GitHub Releases 下载 macOS、Windows 或 Linux 安装包（Tauri，推荐日常使用）
 - **npm / webui**：`npm i -g workbuddy-switch` 后运行 `workbuddy-switch`，浏览器打开操作界面
 
 多账号共享登录态（`workbuddy-desktop.info`），一键切换 WorkBuddy 登录账号，并支持将当前账号的会话复制给目标账号（云端归属目标）。
 
 <p align="center">
-  <img src="src-tauri/icons/icon-windows.png" alt="workbuddy-switch 图标" width="128" />
+  <img src="public/icon-transparent.png" alt="WorkBuddy Switch 图标" width="128" />
 </p>
 
 <p align="center">
   <strong>workbuddy-switch</strong><br />
   WorkBuddy 多账号切换工具
 </p>
+
+
+### 在线演示
+
+[打开 GitHub Pages 在线演示](https://changexbc.github.io/workbuddy-switch/)（只读演示；账号、积分与请求记录均为虚构数据，所有业务操作均已禁用。）
 
 ## 快速开始
 
@@ -26,17 +31,26 @@ workbuddy-switch              # 启动本地服务 + 自动打开浏览器
 workbuddy-switch status       # 终端查看当前账号
 ```
 
-webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动签到、token 保活、更新检查。
+webui 界面与桌面 App 一致：账号管理、切换、会话复制、积分统计、自动签到、token 保活、更新检查。
 
 ### 桌面 App
 
-从 GitHub Releases 下载对应平台 `.app`（macOS）双击运行。
+前往 [GitHub Releases](https://github.com/changexbc/workbuddy-switch/releases/latest) 下载对应平台的安装包：
 
-> **macOS 提示「已损坏，无法打开」？** 未签名应用会触发隔离机制，在终端执行一次即可：
->
-> ```bash
-> xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
-> ```
+| 平台 | 安装包 | 安装方式 |
+| --- | --- | --- |
+| macOS Apple Silicon（M 系列，arm64） | `workbuddy-switch_<版本>_aarch64.dmg` | 打开 DMG，将 `workbuddy-switch.app` 拖入「应用程序」 |
+| macOS Intel（x86_64） | `workbuddy-switch_<版本>_x86_64.dmg` | 打开 DMG，将 `workbuddy-switch.app` 拖入「应用程序」 |
+| Windows x64 | `workbuddy-switch_<版本>_x64-setup.exe` | 运行安装程序并按提示完成安装 |
+| Linux x64 | `workbuddy-switch_<版本>_amd64.deb` / `workbuddy-switch_<版本>_amd64.AppImage` | Debian/Ubuntu 安装 `.deb`；其他发行版可给 AppImage 添加执行权限后直接运行 |
+
+macOS 首次启动若提示无法验证开发者，先在 Finder 中按住 Control 点击应用并选择「打开」，或前往「系统设置 → 隐私与安全性」选择「仍要打开」。仅当安装包来自上述官方 Releases、且系统仍提示「已损坏」时，再执行：
+
+```bash
+xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
+```
+
+应用能启动但切换账号时提示无权限，请参阅下方 [macOS 权限说明](#macos-权限说明)。
 
 ## 功能
 
@@ -48,6 +62,7 @@ webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动
 | 自动签到 | 默认开启；启动时立即检查，运行期间每 30 分钟自动补签；一键全部签到；30 天签到日志 |
 | Token 保活 | 惰性刷新（操作前不足阈值刷新）+ 每日保活（默认每天无条件刷新一次，阈值 >0 时仅刷新剩余不足该天数的账号），避免 refresh token 过期 |
 | 积分到期查询 | 自动查询每个账号的 WorkBuddy 积分资源、剩余量和到期时间；7 天内到期高亮并按到期优先排序 |
+| 积分统计 | 汇总 WorkBuddy 官方请求用量，展示每日趋势、模型分布、账号消耗和请求明细；官方数据不可用时明确回退到本地余额快照观察 |
 | CodeBuddy CLI | 与 WorkBuddy 复用同一账号库，但当前账号独立；账号卡片可单独切 CLI，7 天内到期积分优先并按最近到期时间排序；支持自动轮换（按积分紧迫度自动切换，见下） |
 | 自动轮换 | 后台定时把 CodeBuddy CLI 切到积分最紧迫（最早到期）的账号；结合活跃保护、冷却期、到期差异阈值防抖，避免无效切换浪费缓存 |
 | 自动更新 | 配置 GitHub Releases 源检查新版本；整包更新经签名校验（tauri-updater） |
@@ -59,29 +74,51 @@ webui 界面与桌面 App 一致：账号管理、切换、会话复制、自动
 2. **切换账号**：账号卡片 →「切换」，可勾选复制当前会话
 3. **自动签到**：账号页可直接开关；设置页可调整保活参数、立即签到并查看日志
 4. **查看积分到期**：账号页会自动查询各账号积分资源；点击「刷新积分」可手动更新，临近到期的资源会高亮，并把快过期账号按最近到期时间排序，最前面的标记为「建议优先使用」
-5. **CodeBuddy CLI**：账号页可一键接入/升级 helper（等价于在 `~/.codebuddy/settings.json` 配置 `apiKeyHelper`）；CodeBuddy CLI 与 WorkBuddy 当前账号相互独立，「切换 CodeBuddy」只更新 CLI 轮换状态，不重启 WorkBuddy。CLI 的 helper 缓存通常需要等待约 30 秒刷新。
-6. **自动轮换**：设置 → CodeBuddy CLI 自动轮换，开启后后台按间隔检查并把 CLI 切到积分最紧迫的账号（策略见下）
-7. **更新**：应用会自动检查公开 GitHub Releases；发现新版本后可在左下角直接升级，也可从设置页打开 Release 页面手动下载。
+5. **查看积分统计**：侧栏进入「积分统计」，查看总览、近 30 天趋势、模型分类、账号消耗与请求明细；筛选账号或时间范围不会重复请求官方接口，点击「刷新统计」才会重新采集
+6. **CodeBuddy CLI**：账号页可一键接入/升级 helper（等价于在 `~/.codebuddy/settings.json` 配置 `apiKeyHelper`）；CodeBuddy CLI 与 WorkBuddy 当前账号相互独立，「切换 CodeBuddy」只更新 CLI 轮换状态，不重启 WorkBuddy。CLI 的 helper 缓存通常需要等待约 30 秒刷新。
+7. **自动轮换**：设置 → CodeBuddy CLI 自动轮换，开启后后台按间隔检查并把 CLI 切到积分最紧迫的账号（策略见下）
+8. **更新**：应用会自动检查公开 GitHub Releases；发现新版本后可在左下角直接升级，也可从设置页打开 Release 页面手动下载。
 
-## 界面截图
+## 界面预览
 
-### 账号切换
+### 管理 WorkBuddy 与 CodeBuddy 账号
 
-账号页支持 OAuth 扫码登录、导入本机账号、手动添加，以及对每个账号执行切换、签到和 token 刷新。
+账号卡片集中展示登录状态、签到状态、积分余额和到期资源，支持分别切换 WorkBuddy 与 CodeBuddy CLI。临期积分会直接标注在对应卡片内，并按紧迫程度优先排列。
 
-<p align="center">
-  <img src="docs/images/workbuddy-switch-accounts-redacted.png" alt="账号切换页面（账号信息已脱敏）" width="1000" />
-</p>
+<table>
+  <thead>
+    <tr>
+      <th>浅色模式</th>
+      <th>深色模式</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><img src="docs/images/accounts-overview-light.png" alt="账号管理页面（浅色模式，账号信息已脱敏）" /></td>
+      <td><img src="docs/images/accounts-overview-dark.png" alt="账号管理页面（深色模式，账号信息已脱敏）" /></td>
+    </tr>
+  </tbody>
+</table>
 
-### 自动轮换
+### 积分统计
 
-设置页可开启 CodeBuddy CLI 自动轮换：按间隔检查并把 CLI 切到积分最紧迫的账号。
+积分统计页展示官方请求用量、每日趋势、模型分布、账号消耗和请求明细。数据来源和更新时间会明确显示；
 
-<p align="center">
-  <img src="docs/images/workbuddy-switch-rotate-redacted.png" alt="自动轮换设置（账号信息已脱敏）" width="1000" />
-</p>
+<table>
+  <thead>
+    <tr>
+      <th>浅色模式</th>
+      <th>深色模式</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><img src="docs/images/credit-statistics-light.png" alt="积分统计趋势页面（浅色模式）" /></td>
+      <td><img src="docs/images/credit-statistics-dark.png" alt="积分统计趋势页面（深色模式）" /></td>
+    </tr>
+  </tbody>
+</table>
 
-> 文档截图中的账号名称、头像首字、UID、当前登录名和状态信息均已做脱敏处理。
 
 ### 自动轮换策略
 

@@ -318,6 +318,10 @@ impl<R: Runtime> Drop for CheckinBusyGuard<R> {
 }
 
 fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
+    if crate::is_screenshot_demo() {
+        set_tray_tooltip(app, "README 截图演示模式");
+        return;
+    }
     if CHECKIN_BUSY
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()

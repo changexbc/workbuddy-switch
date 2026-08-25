@@ -1,6 +1,8 @@
 import { cn } from "@/lib/utils";
 import workbuddyIcon from "@/assets/workbuddy-icon-BujKiC6G.svg";
 
+const appIconUrl = `${import.meta.env.BASE_URL}icon-transparent.png`;
+
 interface MarkProps {
   size?: number;
   className?: string;
@@ -26,7 +28,7 @@ export function AppIconMark({ size = 32, className }: MarkProps) {
       className={cn("inline-flex shrink-0", className)}
       style={{ width: size, height: size }}
     >
-      <img src="/icon-transparent.png" alt="" className="size-full object-contain" />
+      <img src={appIconUrl} alt="" className="size-full object-contain" />
     </span>
   );
 }
