@@ -436,50 +436,12 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         .build()
 }
 
-fn set_icon_pixel(pixels: &mut [u8], size: i32, x: i32, y: i32) {
-    if x < 0 || y < 0 || x >= size || y >= size {
-        return;
-    }
-    let offset = ((y * size + x) * 4) as usize;
-    pixels[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
-}
-
-fn draw_disc(pixels: &mut [u8], size: i32, cx: i32, cy: i32, radius: i32) {
-    for y in (cy - radius)..=(cy + radius) {
-        for x in (cx - radius)..=(cx + radius) {
-            let dx = x - cx;
-            let dy = y - cy;
-            if dx * dx + dy * dy <= radius * radius {
-                set_icon_pixel(pixels, size, x, y);
-            }
-        }
-    }
-}
-
-fn draw_segment(pixels: &mut [u8], size: i32, x1: i32, y1: i32, x2: i32, y2: i32, width: i32) {
-    let steps = (x2 - x1).abs().max((y2 - y1).abs()) * 2;
-    let radius = width / 2;
-    for step in 0..=steps {
-        let progress = step as f32 / steps.max(1) as f32;
-        let x = (x1 as f32 + (x2 - x1) as f32 * progress).round() as i32;
-        let y = (y1 as f32 + (y2 - y1) as f32 * progress).round() as i32;
-        draw_disc(pixels, size, x, y, radius);
-    }
-}
-
-/// Monochrome two-way switch glyph used as the macOS menu-bar template icon.
 fn menu_bar_icon() -> tauri::image::Image<'static> {
-    let size = 36;
-    let mut pixels = vec![0; (size * size * 4) as usize];
-
-    draw_segment(&mut pixels, size, 8, 10, 25, 10, 4);
-    draw_segment(&mut pixels, size, 25, 10, 20, 5, 4);
-    draw_segment(&mut pixels, size, 25, 10, 20, 15, 4);
-    draw_segment(&mut pixels, size, 28, 26, 11, 26, 4);
-    draw_segment(&mut pixels, size, 11, 26, 16, 21, 4);
-    draw_segment(&mut pixels, size, 11, 26, 16, 31, 4);
-
-    tauri::image::Image::new_owned(pixels, size as u32, size as u32)
+    const ICON: &[u8; 36 * 36 * 4] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/icons/tray-icon-template.rgba"
+    ));
+    tauri::image::Image::new(ICON, 36, 36)
 }
 
 fn format_checkin_tooltip(value: &Value) -> String {
@@ -511,13 +473,24 @@ fn format_checkin_tooltip(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_checkin_tooltip, is_silent_startup, should_keep_tray_alive};
+    use super::{format_checkin_tooltip, is_silent_startup, menu_bar_icon, should_keep_tray_alive};
     use serde_json::json;
 
     #[test]
     fn runtime_exit_with_no_code_keeps_tray() {
         assert!(should_keep_tray_alive(None));
         assert!(!should_keep_tray_alive(Some(0)));
+    }
+
+    #[test]
+    fn menu_bar_icon_has_transparency_and_antialiasing() {
+        let icon = menu_bar_icon();
+        assert_eq!((icon.width(), icon.height()), (36, 36));
+        assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] == 0));
+        assert!(icon
+            .rgba()
+            .chunks_exact(4)
+            .any(|pixel| (1..=254).contains(&pixel[3])));
     }
 
     #[test]
