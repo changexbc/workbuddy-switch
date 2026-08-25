@@ -26,3 +26,8 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - If a required component is missing, add the matching shadcn/Radix component and wrap it under `src/components/ui/` so styling, accessibility, focus management, and behavior stay consistent.
 - Write a custom component only when shadcn components and their composition APIs cannot satisfy the requirement. Record the reason before doing so.
 - Custom UI must still reuse the project's Rhea theme tokens, spacing, radii, states, and accessibility conventions. Do not substitute native interactive shortcuts such as `details/summary` when an appropriate shadcn component exists.
+
+## Git Commit Language
+
+- Use Conventional Commit type prefixes such as `feat:`, `fix:`, and `docs:`.
+- Write the commit subject and body in Chinese by default. Use English only when the user explicitly requests it.
