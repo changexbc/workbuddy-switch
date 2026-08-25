@@ -12,6 +12,7 @@ import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
+import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
 import { useAccountsStore } from "@/stores/accounts";
 
 function UpdateCenter({ running }: { running: boolean | undefined }) {
@@ -79,6 +80,7 @@ function Layout() {
   const hasUnifiedTitleBar =
     api.isDesktop() && typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
   useCreditAutoRefresh();
+  useWorkbuddyStatusRefresh();
 
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-background">

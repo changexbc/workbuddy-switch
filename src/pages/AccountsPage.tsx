@@ -442,7 +442,7 @@ export default function AccountsPage() {
         </div>
         <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
           <div className="min-w-[190px] flex-1">
-            <h2 className="text-sm font-semibold text-slate-800">添加与迁移账号</h2>
+            <h2 className="text-sm font-semibold text-foreground">添加与迁移账号</h2>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">快速接入新账号，或从已有环境恢复</p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">

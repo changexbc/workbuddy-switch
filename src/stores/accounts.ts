@@ -4,6 +4,16 @@ import type { AccountMeta, AppStatus, CreditExpiry } from "@/lib/types";
 
 /** In-flight credit fetches, shared so a remount does not start a second round. */
 const creditInflight = new Set<string>();
+let statusInflight: Promise<AppStatus> | undefined;
+
+function fetchStatus(): Promise<AppStatus> {
+  if (!statusInflight) {
+    statusInflight = api.getStatus().finally(() => {
+      statusInflight = undefined;
+    });
+  }
+  return statusInflight;
+}
 
 async function fetchCreditExpiry(id: string): Promise<CreditExpiry> {
   try {
@@ -25,6 +35,7 @@ interface AccountsState {
   refreshingCredits: boolean;
   lastCreditRefreshAt: number;
   fetchAll: () => Promise<void>;
+  refreshStatus: (signal?: AbortSignal) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   /** Fetch credits only for ids not already cached. */
   ensureCredits: (accountIds: string[]) => Promise<void>;
@@ -48,10 +59,19 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   async fetchAll() {
     set({ loading: true, error: null });
     try {
-      const [status, { accounts }] = await Promise.all([api.getStatus(), api.getAccounts()]);
+      const [status, { accounts }] = await Promise.all([fetchStatus(), api.getAccounts()]);
       set({ status, accounts, loading: false });
     } catch (e) {
       set({ error: api.asError(e), loading: false });
+    }
+  },
+
+  async refreshStatus(signal) {
+    try {
+      const status = await fetchStatus();
+      if (!signal?.aborted) set({ status });
+    } catch {
+      // 后台探测失败时保留最后一次成功状态，下一轮轮询继续尝试。
     }
   },
 
