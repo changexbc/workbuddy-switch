@@ -23,7 +23,16 @@ pub struct AppStatus {
 
 /// GET /api/status —— WorkBuddy 运行状态 + 当前账号。
 #[tauri::command]
-pub fn get_status() -> AppStatus {
+pub async fn get_status() -> Result<AppStatus, String> {
+    // Windows 的运行状态检测会启动 tasklist 子进程。同步 command 默认在
+    // Tauri 主线程执行，标题栏拖拽期间一旦焦点事件触发状态刷新，就会阻塞
+    // 原生窗口消息循环。放入 blocking 线程，保持窗口移动与 IPC 查询解耦。
+    tauri::async_runtime::spawn_blocking(build_app_status)
+        .await
+        .map_err(|error| format!("查询应用状态失败: {error}"))
+}
+
+fn build_app_status() -> AppStatus {
     let auth = auth_file::read_auth_file();
     let current = auth.as_ref().and_then(|a| {
         let acct = a.get("account").cloned().unwrap_or_else(|| json!({}));
