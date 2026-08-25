@@ -20,6 +20,8 @@ interface AccountsState {
   error: string | null;
   creditMap: Record<string, CreditExpiry>;
   creditLoadingMap: Record<string, boolean>;
+  /** 账号 id -> 最近一次积分查询完成时间（成功/失败都记录） */
+  creditUpdatedAtMap: Record<string, number>;
   refreshingCredits: boolean;
   lastCreditRefreshAt: number;
   fetchAll: () => Promise<void>;
@@ -39,6 +41,7 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   error: null,
   creditMap: {},
   creditLoadingMap: {},
+  creditUpdatedAtMap: {},
   refreshingCredits: false,
   lastCreditRefreshAt: 0,
 
@@ -55,15 +58,18 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   async deleteAccount(id: string) {
     await api.deleteAccount(id);
     creditInflight.delete(id);
-    const { creditMap, creditLoadingMap } = get();
+    const { creditMap, creditLoadingMap, creditUpdatedAtMap } = get();
     const nextCredits = { ...creditMap };
     const nextLoading = { ...creditLoadingMap };
+    const nextUpdatedAt = { ...creditUpdatedAtMap };
     delete nextCredits[id];
     delete nextLoading[id];
+    delete nextUpdatedAt[id];
     set({
       accounts: get().accounts.filter((a) => a.id !== id),
       creditMap: nextCredits,
       creditLoadingMap: nextLoading,
+      creditUpdatedAtMap: nextUpdatedAt,
     });
   },
 
@@ -115,6 +121,7 @@ async function loadCredits(accountIds: string[], force: boolean, silent: boolean
       creditInflight.delete(id);
       useAccountsStore.setState((s) => ({
         creditMap: { ...s.creditMap, [id]: result },
+        creditUpdatedAtMap: { ...s.creditUpdatedAtMap, [id]: Date.now() },
         creditLoadingMap: silent ? s.creditLoadingMap : { ...s.creditLoadingMap, [id]: false },
       }));
     }),

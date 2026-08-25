@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
+use axum::extract::RawQuery;
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -57,14 +58,20 @@ pub fn router() -> Router {
         .route("/api/status", get(api_status))
         .route("/api/accounts", get(api_accounts))
         .route("/api/codebuddy-cli/status", get(api_codebuddy_cli_status))
-        .route("/api/codebuddy-cli/install-helper", post(api_codebuddy_cli_install_helper))
+        .route(
+            "/api/codebuddy-cli/install-helper",
+            post(api_codebuddy_cli_install_helper),
+        )
         .route("/api/codebuddy-cli/switch", post(api_codebuddy_cli_switch))
         .route("/api/delete", post(api_delete))
         .route("/api/oauth/start", post(api_oauth_start))
         .route("/api/oauth/status", post(api_oauth_status))
         .route("/api/import-local", post(api_import_local))
         .route("/api/export-accounts", post(api_export_accounts))
-        .route("/api/export-accounts-to-path", post(api_export_accounts_to_path))
+        .route(
+            "/api/export-accounts-to-path",
+            post(api_export_accounts_to_path),
+        )
         .route("/api/import/preview", post(api_preview_import))
         .route("/api/import", post(api_import))
         .route("/api/switch", post(api_switch))
@@ -76,15 +83,24 @@ pub fn router() -> Router {
         .route("/api/credits/stats", get(api_credit_statistics))
         .route("/api/checkin", post(api_checkin))
         .route("/api/checkin/all", post(api_checkin_all))
-        .route("/api/checkin/config", get(api_checkin_config).post(api_save_checkin_config))
+        .route(
+            "/api/checkin/config",
+            get(api_checkin_config).post(api_save_checkin_config),
+        )
         .route("/api/checkin/logs", get(api_checkin_logs))
-        .route("/api/rotate/config", get(api_rotate_config).post(api_save_rotate_config))
+        .route(
+            "/api/rotate/config",
+            get(api_rotate_config).post(api_save_rotate_config),
+        )
         .route("/api/rotate/status", get(api_rotate_status))
         .route("/api/rotate/run", post(api_rotate_run))
         .route("/api/rotate/logs", get(api_rotate_logs))
         .route("/api/refresh-token", post(api_refresh_token))
         .route("/api/update/check", get(api_update_check))
-        .route("/api/update/config", get(api_update_config).post(api_save_update_config))
+        .route(
+            "/api/update/config",
+            get(api_update_config).post(api_save_update_config),
+        )
         .fallback(static_handler)
 }
 
@@ -172,7 +188,11 @@ async fn api_export_accounts(Json(body): Json<Value>) -> Response {
     let ids: Vec<String> = body
         .get("accountIds")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     match export_import::export_accounts(&ids) {
         Ok(records) => json_ok(json!({ "ok": true, "accounts": records })),
@@ -184,9 +204,17 @@ async fn api_export_accounts_to_path(Json(body): Json<Value>) -> Response {
     let ids: Vec<String> = body
         .get("accountIds")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
-    let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let path = body
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     match export_import::export_accounts_to_path(&ids, &path) {
         Ok(path) => json_ok(json!({ "ok": true, "path": path })),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
@@ -194,7 +222,11 @@ async fn api_export_accounts_to_path(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_preview_import(Json(body): Json<Value>) -> Response {
-    let text = body.get("fileText").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let text = body
+        .get("fileText")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     match export_import::preview_accounts(&text) {
         Ok(v) => json_ok(v),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
@@ -202,11 +234,19 @@ async fn api_preview_import(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_import(Json(body): Json<Value>) -> Response {
-    let text = body.get("fileText").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let text = body
+        .get("fileText")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let indexes: Vec<usize> = body
         .get("indexes")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_u64().map(|n| n as usize))
+                .collect()
+        })
         .unwrap_or_default();
     match export_import::import_accounts(&text, &indexes) {
         Ok(result) => json_ok(json!({
@@ -231,7 +271,11 @@ async fn api_oauth_start() -> Response {
 }
 
 async fn api_oauth_status(Json(body): Json<Value>) -> Response {
-    let login_id = body.get("loginId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let login_id = body
+        .get("loginId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     json_ok(oauth::oauth_poll(&login_id).await)
 }
 
@@ -240,16 +284,30 @@ async fn api_oauth_status(Json(body): Json<Value>) -> Response {
 // ---------------------------------------------------------------------------
 
 async fn api_switch(Json(body): Json<Value>) -> Response {
-    let account_id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let account_id = body
+        .get("accountId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if account_id.trim().is_empty() {
         return json_err("缺少 accountId".to_string(), StatusCode::BAD_REQUEST);
     }
-    let restart = body.get("restart").and_then(|v| v.as_bool()).unwrap_or(true);
-    let share_sessions = body.get("shareSessions").and_then(|v| v.as_bool()).unwrap_or(false);
+    let restart = body
+        .get("restart")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let share_sessions = body
+        .get("shareSessions")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let copy_ids: Vec<String> = body
         .get("copySessionIds")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     {
@@ -266,7 +324,13 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
     });
 
     let result = tokio::task::spawn_blocking(move || {
-        switch::switch_account(Some(&progress), &account_id, restart, share_sessions, &copy_ids)
+        switch::switch_account(
+            Some(&progress),
+            &account_id,
+            restart,
+            share_sessions,
+            &copy_ids,
+        )
     })
     .await;
 
@@ -300,11 +364,19 @@ async fn api_sessions() -> Response {
 }
 
 async fn api_copy_sessions(Json(body): Json<Value>) -> Response {
-    let target_account_id = body.get("targetAccountId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let target_account_id = body
+        .get("targetAccountId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let session_ids: Vec<String> = body
         .get("sessionIds")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let Some(target) = account::find_account(&target_account_id) else {
         return json_err("目标账号不存在".to_string(), StatusCode::BAD_REQUEST);
@@ -346,8 +418,15 @@ async fn api_credits(Json(body): Json<Value>) -> Response {
     json_ok(credits::get_credit_expiry(&acc).await)
 }
 
-async fn api_credit_statistics() -> Response {
-    json_ok(credit_usage::get_statistics().await)
+fn query_flag_enabled(query: Option<&str>, name: &str) -> bool {
+    query.unwrap_or("").split('&').any(|pair| {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, "true"));
+        key == name && matches!(value, "" | "1" | "true" | "yes")
+    })
+}
+
+async fn api_credit_statistics(RawQuery(query): RawQuery) -> Response {
+    json_ok(credit_usage::get_statistics(query_flag_enabled(query.as_deref(), "refresh")).await)
 }
 
 async fn api_checkin(Json(body): Json<Value>) -> Response {

@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
-  Activity,
+  CalendarDays,
+  CalendarRange,
+  Check,
   CircleAlert,
   CircleCheck,
-  CreditCard,
-  Database,
   Loader2,
+  Sparkles,
   RefreshCw,
   TrendingDown,
-  XCircle,
+  Users,
+  // XCircle, // 最近事件卡片隐藏后未使用
+  type LucideIcon,
 } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -19,8 +23,14 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import * as api from "@/lib/api";
 import type {
   CreditExpiry,
@@ -31,7 +41,7 @@ import type {
   CreditResource,
   CreditStatsAccount,
   CreditStatsDailyPoint,
-  CreditStatsEvent,
+  // CreditStatsEvent, // 最近事件卡片隐藏后未使用
   CreditStatistics,
 } from "@/lib/types";
 import { useAccountsStore } from "@/stores/accounts";
@@ -85,8 +95,71 @@ function formatChartDate(date: string): string {
   return date.slice(5).replace("-", "/");
 }
 
-function accountLabel(account: CreditStatsAccount): string {
+function accountLabel(account: { accountName?: string | null; accountId: string }): string {
   return account.accountName || account.accountId;
+}
+
+function AccountFilterMenu({
+  accounts,
+  accountFilter,
+  onAccountFilterChange,
+  ariaLabel,
+  allowAll = true,
+}: {
+  accounts: { accountId: string; accountName?: string | null }[];
+  accountFilter: string | null;
+  onAccountFilterChange: (accountId: string | null) => void;
+  ariaLabel: string;
+  /** false 时隐藏「所有账号」选项，仅允许选择具体账号 */
+  allowAll?: boolean;
+}) {
+  const activeFilterAccount =
+    accountFilter && accounts.some((account) => account.accountId === accountFilter)
+      ? accounts.find((account) => account.accountId === accountFilter)
+      : undefined;
+  const effectiveFilter = activeFilterAccount?.accountId ?? null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 max-w-[190px] gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+          aria-label={ariaLabel}
+        >
+          <Users className="size-3.5 shrink-0" />
+          <span className="truncate">
+            {activeFilterAccount
+              ? accountLabel(activeFilterAccount)
+              : allowAll
+                ? "所有账号"
+                : accounts[0]
+                  ? accountLabel(accounts[0])
+                  : "无账号"}
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-y-auto">
+        {allowAll && (
+          <>
+            <DropdownMenuItem onSelect={() => onAccountFilterChange(null)}>
+              <Users className="size-3.5 shrink-0" />
+              所有账号
+              {!effectiveFilter && <Check className="ml-auto size-3.5 shrink-0" />}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {accounts.map((account) => (
+          <DropdownMenuItem key={account.accountId} onSelect={() => onAccountFilterChange(account.accountId)}>
+            <span className="min-w-0 flex-1 truncate">{accountLabel(account)}</span>
+            {effectiveFilter === account.accountId && <Check className="ml-auto size-3.5 shrink-0" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function isOfficialUsageAvailable(officialUsage?: CreditOfficialUsage): boolean {
@@ -130,6 +203,7 @@ function rangeUsage(
   }
 }
 
+/* 最近事件卡片隐藏后 checkinLabel 一并停用。恢复时取消本注释。
 function checkinLabel(result: string | null | undefined): string {
   switch (result) {
     case "success":
@@ -142,7 +216,9 @@ function checkinLabel(result: string | null | undefined): string {
       return "暂无记录";
   }
 }
+*/
 
+/* 仅账号积分明细表使用，表隐藏期间一并注释。
 function checkinBadgeVariant(
   result: string | null | undefined,
 ): "success" | "warning" | "destructive" | "outline" {
@@ -156,154 +232,241 @@ function checkinBadgeVariant(
       return "outline";
   }
 }
+*/
 
 function resourceName(resource: CreditResource): string {
   return resource.packageName || resource.packageCode || "未命名资源包";
 }
 
-function StatCard({
-  icon,
+function StatMetric({
+  icon: Icon,
   label,
   value,
-  hint,
+  divided = false,
 }: {
-  icon: React.ReactNode;
+  icon: LucideIcon;
   label: string;
   value: string;
-  hint?: string;
+  divided?: boolean;
 }) {
   return (
-    <Card className="min-w-0 gap-3 rounded-xl py-4 shadow-none">
-      <CardContent className="min-w-0 px-4">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {icon}
-          <span className="truncate">{label}</span>
-        </div>
-        <div className="mt-2 truncate text-2xl font-semibold tracking-tight">{value}</div>
-        {hint && <div className="mt-1 truncate text-[11px] text-muted-foreground/75">{hint}</div>}
-      </CardContent>
-    </Card>
+    <div
+      className={`flex min-w-0 flex-col items-center justify-center px-4 py-5 text-center sm:py-3 ${
+        divided ? "sm:border-l sm:border-border/60" : ""
+      }`}
+    >
+      <div className="flex max-w-full items-center justify-center gap-2 text-[13px] font-medium leading-5 text-muted-foreground">
+        <Icon className="size-4 shrink-0 stroke-[1.75]" aria-hidden="true" />
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="mt-3 max-w-full truncate text-[26px] font-semibold leading-8 tracking-[-0.025em] text-foreground tabular-nums" style={{ fontFamily: '"Bricolage Grotesque Variable", "SF Pro Display", ui-sans-serif, sans-serif' }}>
+        {value}
+      </div>
+    </div>
   );
+}
+
+/** 层叠柱状图的模型固定色板（区分度高，深浅模式通用）。 */
+const MODEL_COLORS = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#06b6d4", "#f97316", "#84cc16"];
+const MAX_MODELS = 5;
+const OTHER_MODEL = "其他";
+
+interface ModelChartPoint {
+  date: string;
+  total: number;
+  [model: string]: number | string;
+}
+
+/** 从官方 daily（全量按模型聚合）构建层叠数据；模型按总消耗取前 N，其余并入「其他」。 */
+function buildStackedChart(
+  daily: CreditStatsDailyPoint[],
+): { models: string[]; points: ModelChartPoint[] } {
+  const modelTotals = new Map<string, number>();
+  for (const point of daily) {
+    for (const model of point.models ?? []) {
+      modelTotals.set(model.model, (modelTotals.get(model.model) ?? 0) + model.credit);
+    }
+  }
+  const topModels = [...modelTotals.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, MAX_MODELS)
+    .map(([model]) => model);
+
+  const points: ModelChartPoint[] = daily.map((point) => {
+    const entry: ModelChartPoint = { date: point.date, total: point.usage };
+    for (const model of point.models ?? []) {
+      const key = topModels.includes(model.model) ? model.model : OTHER_MODEL;
+      entry[key] = (typeof entry[key] === "number" ? entry[key] : 0) + model.credit;
+    }
+    return entry;
+  });
+  const models = [...topModels];
+  if (points.some((point) => point[OTHER_MODEL] !== undefined)) {
+    models.push(OTHER_MODEL);
+  }
+  return { models, points };
 }
 
 function TrendChart({
   stats,
   officialUsage,
-  range,
-  onRangeChange,
 }: {
   stats: CreditStatistics;
   officialUsage?: CreditOfficialUsage;
-  range: RangeKey;
-  onRangeChange: (range: RangeKey) => void;
 }) {
+  /** null = 所有账号汇总；本卡片独立，不影响其他卡片 */
+  const [accountFilter, setAccountFilter] = useState<string | null>(null);
+  /** 本卡片独立的时间范围，不影响其他卡片 */
+  const [range, setRange] = useState<RangeKey>("30d");
   const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
   const officialAvailable = Boolean(official);
-  const daily = official ? official.daily : stats.daily;
-  const summary = official ? official.summary : stats.summary;
-  const points = chartPoints(daily, range);
-  const [activePointDate, setActivePointDate] = useState<string | null>(null);
-  const activePoint = points.find((point) => point.date === activePointDate) ?? points[points.length - 1];
-  const maxUsage = Math.max(1, ...points.map((point) => point.usage));
-  const hasObservedUsage = points.some((point) => point.usage > 0);
+  const filterAccounts = official ? official.accounts : stats.accounts;
+  const activeFilterAccount =
+    accountFilter && filterAccounts.some((account) => account.accountId === accountFilter)
+      ? filterAccounts.find((account) => account.accountId === accountFilter)
+      : undefined;
+  const effectiveFilter = activeFilterAccount?.accountId ?? null;
+  const officialAccount = effectiveFilter ? officialAccountFor(official, effectiveFilter) : undefined;
+  const localAccount = effectiveFilter
+    ? stats.accounts.find((account) => account.accountId === effectiveFilter)
+    : undefined;
+  // 选中账号时切到该账号的逐日数据与汇总；否则用全部账号的聚合
+  const daily = official
+    ? (officialAccount ? officialAccount.daily ?? [] : official.daily)
+    : (localAccount ? localAccount.daily ?? [] : stats.daily);
+  const summary = official
+    ? (officialAccount
+        ? {
+            usageToday: officialAccount.usageToday ?? 0,
+            usage7Days: officialAccount.usage7Days ?? 0,
+            usageThisMonth: officialAccount.usageThisMonth ?? 0,
+          }
+        : official.summary)
+    : (localAccount
+        ? {
+            usageToday: localAccount.usageToday,
+            usage7Days: localAccount.usage7Days,
+            usageThisMonth: localAccount.usageThisMonth,
+          }
+        : stats.summary);
+  const basePoints = chartPoints(daily, range);
   const hasDataSource = officialAvailable || Boolean(stats.coverageStartAt);
 
-  useEffect(() => {
-    setActivePointDate(null);
-  }, [official?.rangeEnd, range]);
+  // 官方 daily 带全量模型聚合 → 层叠柱（按模型）；否则单层「本地观察」柱
+  const hasModelDetail = (official?.daily ?? []).some((point) => (point.models?.length ?? 0) > 0);
+  const stacked = official && hasModelDetail ? buildStackedChart(basePoints) : null;
+  const chartData: ModelChartPoint[] = stacked
+    ? stacked.points
+    : basePoints.map((point) => ({ date: point.date, total: point.usage }));
+
+  const series = stacked ? stacked.models : ["总消耗"];
+  const chartConfig: ChartConfig = {};
+  for (const model of series) {
+    chartConfig[model] = {
+      label: model,
+      ...(stacked
+        ? { color: MODEL_COLORS[series.indexOf(model) % MODEL_COLORS.length] }
+        : { theme: { light: "var(--primary)", dark: "var(--primary)" } as const }),
+    };
+  }
+
+  const hasObservedUsage = chartData.some((point) => point.total > 0);
+  const barRadius = stacked ? [2, 2, 0, 0] as [number, number, number, number] : [3, 3, 0, 0] as [number, number, number, number];
 
   return (
-    <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-      <CardHeader className="gap-3 border-b px-4 py-4 sm:px-5">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <TrendingDown className="size-4 text-primary" />
-              {officialAvailable ? "官方积分消耗" : "本地观察积分消耗"}
-            </CardTitle>
-            <CardDescription className="mt-1 text-xs">
+    <section className="min-w-0 space-y-2.5" aria-labelledby="trend-chart-title">
+      <div className="px-1">
+        <h2 id="trend-chart-title" className="text-[13px] font-medium leading-5">
+          {officialAvailable ? "官方积分消耗" : "本地观察积分消耗"}
+        </h2>
+      </div>
+      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+        <CardHeader className="gap-0 px-4 pt-3 pb-0 sm:px-5">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <CardDescription className="min-w-0 text-xs">
               {officialAvailable
                 ? `来自 WorkBuddy 官方请求用量 · ${official?.rangeStart} 至 ${official?.rangeEnd}`
                 : "只统计连续快照中余额下降的正差值；官方用量暂不可用时保留此口径。"}
             </CardDescription>
+            <div className="flex max-w-full flex-wrap items-center gap-1.5">
+              <AccountFilterMenu
+                accounts={filterAccounts}
+                accountFilter={effectiveFilter}
+                onAccountFilterChange={setAccountFilter}
+                ariaLabel="按账号筛选趋势"
+              />
+              <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
+                {RANGE_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                      range === option.key
+                        ? "bg-background font-medium text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setRange(option.key)}
+                    aria-pressed={range === option.key}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
-            {RANGE_OPTIONS.map((option) => (
-              <button
-                key={option.key}
-                type="button"
-                className={`rounded-md px-2.5 py-1.5 text-xs transition-colors ${
-                  range === option.key
-                    ? "bg-background font-medium text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => onRangeChange(option.key)}
-                aria-pressed={range === option.key}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="min-w-0 px-4 py-5 sm:px-5">
+        </CardHeader>
+        <CardContent className="min-w-0 px-4 pt-3 pb-4 sm:px-5">
         {!hasDataSource ? (
           <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
             尚无积分快照。首次成功采集后，统计会从该时刻开始累计。
           </div>
-        ) : points.length === 0 ? (
+        ) : chartData.length === 0 ? (
           <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
             当前口径暂无可展示的观察数据。
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto pb-1" tabIndex={0} aria-label="积分消耗趋势图，可横向滚动">
-              <div
-                className="flex h-56 min-w-[560px] items-end gap-1.5 border-b border-l border-border/70 px-2 pb-0 pt-4"
-                role="img"
-                aria-label={`${RANGE_OPTIONS.find((option) => option.key === range)?.label}积分消耗柱状图`}
-              >
-                {points.map((point, index) => {
-                  const height = point.usage > 0 ? Math.max(4, (point.usage / maxUsage) * 100) : 1.5;
-                  const showLabel = index === 0 || index === points.length - 1 || index % 5 === 0;
-                  return (
-                    <div key={point.date} className="flex h-full min-w-3 flex-1 flex-col justify-end gap-1">
-                      <div className="flex min-h-0 flex-1 items-end justify-center">
-                        <div
-                          className="w-full max-w-6 cursor-pointer rounded-t bg-primary/75 transition-[height,background-color] hover:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1"
-                          style={{ height: `${height}%` }}
-                          role="button"
-                          tabIndex={0}
-                          aria-label={`${formatChartDate(point.date)} 消耗 ${formatCredits(point.usage)} 积分`}
-                          title={`${formatChartDate(point.date)}：${formatCredits(point.usage)} 积分`}
-                          onMouseEnter={() => setActivePointDate(point.date)}
-                          onFocus={() => setActivePointDate(point.date)}
-                          onClick={() => setActivePointDate(point.date)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              setActivePointDate(point.date);
-                            }
-                          }}
-                        />
-                      </div>
-                      <span className="inline-block h-4 min-w-max whitespace-nowrap text-center text-[10px] text-muted-foreground">
-                        {showLabel ? formatChartDate(point.date) : ""}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            {activePoint && (
-              <div
-                className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/15 bg-primary/[0.04] px-3 py-2.5 text-xs"
-                aria-live="polite"
-              >
-                <span className="text-muted-foreground">
-                  当天消耗 · <span className="font-medium text-foreground">{formatChartDate(activePoint.date)}</span>
-                </span>
-                <span className="font-semibold text-primary">{formatCredits(activePoint.usage)} 积分</span>
+            <ChartContainer config={chartConfig} className="h-56 w-full">
+              <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="date"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(value) => formatChartDate(String(value))}
+                />
+                <YAxis tickLine={false} axisLine={false} width={42} tickFormatter={(value) => formatCredits(value)} />
+                <ChartTooltip
+                  cursor={{ fill: "var(--muted)", opacity: 0.4 }}
+                  content={
+                    <ChartTooltipContent
+                      labelFormatter={(_, payload) => {
+                        const item = Array.isArray(payload) ? payload[0] : payload;
+                        return `${formatChartDate(String(item?.payload?.date ?? ""))} 消耗`;
+                      }}
+                    />
+                  }
+                />
+                {series.map((model, index) => (
+                  <Bar
+                    key={model}
+                    dataKey={model}
+                    stackId="usage"
+                    fill={stacked ? MODEL_COLORS[index % MODEL_COLORS.length] : "var(--color-总消耗)"}
+                    radius={index === series.length - 1 ? barRadius : undefined}
+                  />
+                ))}
+              </BarChart>
+            </ChartContainer>
+            {stacked && (
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+                {stacked.models.map((model, index) => (
+                  <span key={model} className="inline-flex items-center gap-1.5">
+                    <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ backgroundColor: MODEL_COLORS[index % MODEL_COLORS.length] }} aria-hidden="true" />
+                    {model}
+                  </span>
+                ))}
               </div>
             )}
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -314,18 +477,20 @@ function TrendChart({
                     ? "官方已返回明细，当前范围暂无积分消耗"
                     : "已采集快照，暂未观察到余额下降"}
               </span>
-              <span>{officialAvailable ? `数据更新于 ${formatDateTime(stats.generatedAt)}` : `数据覆盖至 ${formatDate(stats.generatedAt)}`}</span>
+              <span>{officialAvailable ? `数据更新于 ${formatDateTime(official?.collectedAt ?? stats.generatedAt)}` : `数据覆盖至 ${formatDate(stats.generatedAt)}`}</span>
             </div>
             <p className="sr-only">
-              {points.map((point) => `${point.date} 消耗 ${formatCredits(point.usage)} 积分`).join("；")}
+              {chartData.map((point) => `${point.date} 消耗 ${formatCredits(point.total)} 积分`).join("；")}
             </p>
           </>
         )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
+/* 与下方「积分明细」重复，先隐藏。恢复时取消本注释，并恢复页面中的 <AccountTable />。
 function AccountTable({
   stats,
   officialUsage,
@@ -340,17 +505,17 @@ function AccountTable({
   const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
 
   return (
-    <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-      <CardHeader className="border-b px-4 py-4 sm:px-5">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Activity className="size-4 text-primary" />
-          账号积分明细
-        </CardTitle>
-        <CardDescription className="mt-1 text-xs">
-          账号 ID 是统计关联键，名称只用于展示；官方用量优先，点击一行查看积分明细和事件。
-        </CardDescription>
-      </CardHeader>
-      {stats.accounts.length === 0 ? (
+    <section className="min-w-0 space-y-2.5" aria-labelledby="account-table-title">
+      <div className="px-1">
+        <h2 id="account-table-title" className="text-[13px] font-medium leading-5">账号积分明细</h2>
+      </div>
+      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+        <CardHeader className="border-b px-4 py-3 sm:px-5">
+          <CardDescription className="text-xs">
+            账号 ID 是统计关联键，名称只用于展示；官方用量优先，点击一行查看积分明细和事件。
+          </CardDescription>
+        </CardHeader>
+        {stats.accounts.length === 0 ? (
         <div className="px-4 py-10 text-center text-sm text-muted-foreground">暂无账号统计。</div>
       ) : (
         <div className="min-w-0 overflow-x-auto">
@@ -422,9 +587,11 @@ function AccountTable({
           </table>
         </div>
       )}
-    </Card>
+      </Card>
+    </section>
   );
 }
+*/
 
 function ResourceBreakdown({ credit, loading }: { credit?: CreditExpiry; loading?: boolean }) {
   if (loading) {
@@ -456,20 +623,18 @@ function ResourceBreakdown({ credit, loading }: { credit?: CreditExpiry; loading
       {resources.map((resource, index) => {
         const ratio = resource.total > 0 ? Math.min(100, Math.max(0, (resource.remaining / resource.total) * 100)) : 0;
         return (
-          <div key={`${resource.packageCode || resource.packageName || "resource"}-${index}`} className="min-w-0 px-4 py-3 sm:px-5">
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium">{resourceName(resource)}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">
+          <div key={`${resource.packageCode || resource.packageName || "resource"}-${index}`} className="min-w-0 px-4 py-1.5 sm:px-5">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <div className="min-w-0 truncate text-[13px] font-medium">{resourceName(resource)}</div>
+              <div className="flex shrink-0 items-center gap-2.5">
+                <span className="text-[11px] text-muted-foreground">
                   {resource.expired ? "已到期" : resource.expiringSoon ? "7 天内到期" : `到期 ${formatDate(resource.expireAt)}`}
-                </div>
-              </div>
-              <div className="shrink-0 text-right text-xs">
-                <div className="font-medium">{formatCredits(resource.remaining)} / {formatCredits(resource.total)}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">已用 {formatCredits(resource.used)}</div>
+                  {resource.used > 0 ? ` · 已用 ${formatCredits(resource.used)}` : ""}
+                </span>
+                <span className="text-xs font-medium">{formatCredits(resource.remaining)} / {formatCredits(resource.total)}</span>
               </div>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
               <div className="h-full rounded-full bg-primary/75" style={{ width: `${ratio}%` }} />
             </div>
           </div>
@@ -487,6 +652,7 @@ function ModelBreakdownRows({ models }: { models: CreditOfficialUsageModel[] }) 
     <div className="space-y-3">
       {models.slice(0, 8).map((model) => {
         const ratio = totalCredit > 0 ? model.credit / totalCredit : totalRequests > 0 ? model.requestCount / totalRequests : 0;
+        const percent = ratio * 100;
         const label = model.model === "—" ? "未知模型" : model.model;
         return (
           <div key={model.model} className="min-w-0">
@@ -496,6 +662,9 @@ function ModelBreakdownRows({ models }: { models: CreditOfficialUsageModel[] }) 
               </span>
               <span className="shrink-0 text-muted-foreground">
                 {formatCredits(model.credit)} 积分 · {formatCredits(model.requestCount)} 次
+                <span className="ml-1.5 font-medium text-foreground">
+                  {percent < 0.05 ? "<0.1%" : `${percent.toFixed(1)}%`}
+                </span>
               </span>
             </div>
             <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
@@ -508,31 +677,90 @@ function ModelBreakdownRows({ models }: { models: CreditOfficialUsageModel[] }) 
   );
 }
 
-function ModelBreakdown({ officialUsage }: { officialUsage: CreditOfficialUsage }) {
-  const models = officialUsage.models ?? [];
+function ModelBreakdown({
+  officialUsage,
+}: {
+  officialUsage: CreditOfficialUsage;
+}) {
+  /** null = 所有账号汇总；本卡片独立，不影响其他卡片 */
+  const [accountFilter, setAccountFilter] = useState<string | null>(null);
+  /** 本卡片独立的时间范围，不影响其他卡片 */
+  const [range, setRange] = useState<RangeKey>("30d");
+  const filterAccounts = officialUsage.accounts;
+  const activeFilterAccount =
+    accountFilter && filterAccounts.some((account) => account.accountId === accountFilter)
+      ? filterAccounts.find((account) => account.accountId === accountFilter)
+      : undefined;
+  const effectiveFilter = activeFilterAccount?.accountId ?? null;
+  // 按选中账号 + 时间范围，从逐日模型聚合求和（全量，不受明细条数上限影响）
+  const basePoints = chartPoints(
+    effectiveFilter ? activeFilterAccount?.daily ?? [] : officialUsage.daily,
+    range,
+  );
+  const rangeModelMap = new Map<string, { requestCount: number; credit: number }>();
+  for (const point of basePoints) {
+    for (const item of point.models ?? []) {
+      const entry = rangeModelMap.get(item.model) ?? { requestCount: 0, credit: 0 };
+      entry.requestCount += item.requestCount;
+      entry.credit += item.credit;
+      rangeModelMap.set(item.model, entry);
+    }
+  }
+  const models = [...rangeModelMap.entries()]
+    .map(([model, value]) => ({ model, requestCount: value.requestCount, credit: value.credit }))
+    .sort(
+      (a, b) =>
+        b.credit - a.credit ||
+        b.requestCount - a.requestCount ||
+        a.model.localeCompare(b.model),
+    );
   const totalCredit = models.reduce((sum, model) => sum + model.credit, 0);
   const totalRequests = models.reduce((sum, model) => sum + model.requestCount, 0);
 
   return (
-    <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-      <CardHeader className="border-b px-4 py-4 sm:px-5">
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <Activity className="size-4 text-primary" />
-            按模型分类
-          </CardTitle>
-          <Badge variant="outline" className="shrink-0">
-            {models.length} 个模型
-          </Badge>
-        </div>
-        <CardDescription className="mt-1 text-xs">
-          按官方返回的全部有效请求汇总，不受最近 {officialUsage.detailLimitPerAccount} 条明细展示上限影响。
-        </CardDescription>
-      </CardHeader>
-      {models.length === 0 ? (
-        <CardContent className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">官方暂无可用的模型消耗明细。</CardContent>
+    <section className="min-w-0 space-y-2.5" aria-labelledby="model-breakdown-title">
+      <div className="px-1">
+        <h2 id="model-breakdown-title" className="text-[13px] font-medium leading-5">按模型分类</h2>
+      </div>
+      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+        <CardHeader className="gap-0 px-4 pt-3 pb-0 sm:px-5">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <Badge variant="outline" className="shrink-0">
+              {models.length} 个模型
+            </Badge>
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <AccountFilterMenu
+                accounts={filterAccounts}
+                accountFilter={effectiveFilter}
+                onAccountFilterChange={setAccountFilter}
+                ariaLabel="按账号筛选模型分类"
+              />
+              <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="模型分类时间范围">
+                {RANGE_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                      range === option.key
+                        ? "bg-background font-medium text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setRange(option.key)}
+                    aria-pressed={range === option.key}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+        {models.length === 0 ? (
+        <CardContent className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">
+          {activeFilterAccount && !activeFilterAccount.ok ? "该账号官方用量暂不可用。" : "官方暂无可用的模型消耗明细。"}
+        </CardContent>
       ) : (
-        <CardContent className="px-4 py-4 sm:px-5">
+        <CardContent className="px-4 pt-3 pb-4 sm:px-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>共 {formatCredits(totalRequests)} 次请求</span>
             <span className="font-medium text-foreground">合计 {formatCredits(totalCredit)} 积分</span>
@@ -541,23 +769,26 @@ function ModelBreakdown({ officialUsage }: { officialUsage: CreditOfficialUsage 
           {models.length > 8 && <p className="mt-3 text-[11px] text-muted-foreground">已展示消耗最高的 8 个模型，其余模型仍计入上方合计。</p>}
         </CardContent>
       )}
-    </Card>
+      </Card>
+    </section>
   );
 }
 
-function OfficialUsageMetric({ label, value }: { label: string; value: number | null | undefined }) {
-  return (
-    <div className="min-w-0 rounded-lg bg-muted/45 px-3 py-2.5">
-      <div className="truncate text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate text-base font-semibold tracking-tight">{formatCredits(value)}</div>
-    </div>
-  );
-}
-
-function OfficialRequestRow({ request }: { request: CreditOfficialUsageRequest }) {
+function OfficialRequestRow({
+  request,
+  showAccount,
+}: {
+  request: CreditOfficialUsageRequest;
+  showAccount: boolean;
+}) {
   return (
     <tr className="border-t border-border/60 align-top">
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{request.requestTime}</td>
+      {showAccount && (
+        <td className="max-w-[140px] truncate px-3 py-3" title={request.accountName}>
+          {request.accountName}
+        </td>
+      )}
       <td className="whitespace-nowrap px-3 py-3 text-right font-medium text-primary">
         {formatCredits(request.credit)}
       </td>
@@ -576,12 +807,13 @@ function OfficialRequestRow({ request }: { request: CreditOfficialUsageRequest }
 
 function OfficialUsageBreakdown({
   officialUsage,
-  account,
+  accountId,
 }: {
   officialUsage?: CreditOfficialUsage;
-  account?: CreditOfficialUsageAccount;
+  accountId: string | null;
 }) {
   const officialAvailable = isOfficialUsageAvailable(officialUsage);
+  const account = accountId ? officialAccountFor(officialUsage, accountId) : undefined;
 
   if (!officialAvailable || !officialUsage) {
     return (
@@ -592,11 +824,11 @@ function OfficialUsageBreakdown({
     );
   }
 
-  if (!account) {
+  if (accountId && !account) {
     return <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">该账号暂无官方用量记录。</div>;
   }
 
-  if (!account.ok) {
+  if (account && !account.ok) {
     return (
       <div className="flex items-start gap-2 px-4 py-8 text-sm text-destructive sm:px-5">
         <CircleAlert className="mt-0.5 size-4 shrink-0" />
@@ -605,48 +837,38 @@ function OfficialUsageBreakdown({
     );
   }
 
-  const requests = officialUsage.requests.filter((request) => request.accountId === account.accountId);
-  const totalRequests = account.reportedTotal ?? account.requestCount;
+  const requests = account
+    ? officialUsage.requests.filter((request) => request.accountId === account.accountId)
+    : officialUsage.requests;
+  const totalRequests = account
+    ? (account.reportedTotal ?? account.requestCount)
+    : officialUsage.accounts.reduce((sum, item) => sum + (item.reportedTotal ?? item.requestCount), 0);
+  const detailTruncated = account
+    ? account.detailTruncated
+    : officialUsage.accounts.some((item) => item.detailTruncated);
+  const showAccount = !account;
 
   return (
     <div className="min-w-0">
-      <div className="grid grid-cols-2 gap-2 border-b px-4 py-3 sm:grid-cols-4 sm:px-5">
-        <OfficialUsageMetric label="今日消耗" value={account.usageToday} />
-        <OfficialUsageMetric label="近 7 天" value={account.usage7Days} />
-        <OfficialUsageMetric label="本月消耗" value={account.usageThisMonth} />
-        <OfficialUsageMetric label="官方请求数" value={totalRequests} />
-      </div>
-      {account.detailTruncated && (
+      {detailTruncated && (
         <div className="flex items-start gap-2 border-b bg-amber-500/[0.06] px-4 py-2.5 text-xs text-amber-800 sm:px-5">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           <span>
-            仅展示最近 {officialUsage.detailLimitPerAccount} 条请求明细；上方统计使用官方返回的全部 {formatCredits(totalRequests)} 条请求。
+            仅展示最近 {officialUsage.detailLimitPerAccount} 条请求明细；合计使用官方返回的全部 {formatCredits(totalRequests)} 条请求。
           </span>
         </div>
       )}
-      <div className="border-b px-4 py-3 sm:px-5">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-          <span className="font-medium">按模型分类</span>
-          <span className="text-muted-foreground">{account.models?.length ?? 0} 个模型</span>
-        </div>
-        {account.models && account.models.length > 0 ? (
-          <div className="mt-3">
-            <ModelBreakdownRows models={account.models} />
-          </div>
-        ) : (
-          <div className="mt-2 text-xs text-muted-foreground">该账号暂无可用的模型消耗明细。</div>
-        )}
-      </div>
       {requests.length === 0 ? (
         <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">
           {totalRequests > 0 ? "官方返回了请求总数，但明细未通过格式校验。" : "官方暂无请求用量。"}
         </div>
       ) : (
-        <div className="min-w-0 overflow-x-auto">
+        <div className="max-h-[340px] min-w-0 overflow-auto">
           <table className="w-full min-w-[700px] text-left text-[11px]">
-            <thead className="bg-muted/45 text-muted-foreground">
+            <thead className="sticky top-0 bg-muted/95 text-muted-foreground">
               <tr>
                 <th className="px-3 py-2.5 font-medium">请求时间</th>
+                {showAccount && <th className="px-3 py-2.5 font-medium">账号</th>}
                 <th className="px-3 py-2.5 text-right font-medium">消耗</th>
                 <th className="px-3 py-2.5 font-medium">模型</th>
                 <th className="px-3 py-2.5 font-medium">客户端</th>
@@ -655,7 +877,11 @@ function OfficialUsageBreakdown({
             </thead>
             <tbody>
               {requests.map((request) => (
-                <OfficialRequestRow key={`${request.requestId}-${request.requestTime}`} request={request} />
+                <OfficialRequestRow
+                  key={`${request.requestId}-${request.requestTime}`}
+                  request={request}
+                  showAccount={showAccount}
+                />
               ))}
             </tbody>
           </table>
@@ -665,6 +891,7 @@ function OfficialUsageBreakdown({
   );
 }
 
+/* 最近事件卡片已隐藏，EventRow 一并停用。恢复时取消本注释。
 function EventRow({ event }: { event: CreditStatsEvent }) {
   if (event.kind === "usage") {
     return (
@@ -708,126 +935,201 @@ function EventRow({ event }: { event: CreditStatsEvent }) {
     </div>
   );
 }
+*/
 
-function SelectedAccountDetails({
-  account,
-  credit,
-  creditLoading,
-  events,
-  officialUsage,
+function ResourcesByAccount({
+  accounts,
+  creditMap,
+  creditLoadingMap,
 }: {
-  account: CreditStatsAccount | null;
-  credit?: CreditExpiry;
-  creditLoading?: boolean;
-  events: CreditStatsEvent[];
-  officialUsage?: CreditOfficialUsage;
+  accounts: CreditStatsAccount[];
+  creditMap: Record<string, CreditExpiry>;
+  creditLoadingMap: Record<string, boolean>;
 }) {
-  const [detailTab, setDetailTab] = useState<"credits" | "requests">("credits");
-
-  useEffect(() => {
-    setDetailTab("credits");
-  }, [account?.accountId]);
-
-  if (!account) {
-    return (
-      <Card className="min-w-0 rounded-xl shadow-none">
-        <CardContent className="px-4 py-10 text-center text-sm text-muted-foreground sm:px-5">选择账号后查看详情。</CardContent>
-      </Card>
-    );
+  if (accounts.length === 0) {
+    return <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">暂无账号统计。</div>;
   }
-
-  const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
-  const officialAccount = officialAccountFor(official, account.accountId);
-
+  if (accounts.length === 1) {
+    const account = accounts[0];
+    return <ResourceBreakdown credit={creditMap[account.accountId]} loading={creditLoadingMap[account.accountId]} />;
+  }
   return (
-    <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-        <CardHeader className="border-b px-4 py-4 sm:px-5">
-          <div className="flex min-w-0 items-center justify-between gap-3">
-            <CardTitle className="flex min-w-0 items-center gap-2 text-sm">
-              <CreditCard className="size-4 shrink-0 text-primary" />
-              <span className="truncate">积分明细</span>
-            </CardTitle>
-            {official ? (
-              <Badge variant={officialAccount?.ok ? "success" : "warning"} className="shrink-0">
-                {officialAccount?.ok ? "官方已同步" : "官方不可用"}
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="shrink-0">
-                本地观察
-              </Badge>
-            )}
-          </div>
-          <CardDescription className="mt-1 truncate text-xs" title={account.accountId}>
-            {accountLabel(account)} · 最近采集 {formatDateTime(account.lastSnapshotAt)}
-          </CardDescription>
-          <div className="mt-3 flex max-w-full gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label="积分详情类型">
-            {(
-              [
-                ["credits", "积分明细"],
-                ["requests", "请求用量"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={detailTab === value}
-                className={`min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
-                  detailTab === value
-                    ? "bg-background font-medium text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setDetailTab(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </CardHeader>
-        {detailTab === "credits" ? (
-          <ResourceBreakdown credit={credit} loading={creditLoading} />
-        ) : (
-          <OfficialUsageBreakdown officialUsage={officialUsage} account={officialAccount} />
-        )}
-      </Card>
-      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-        <CardHeader className="border-b px-4 py-4 sm:px-5">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <Database className="size-4 text-primary" />
-            最近事件
-          </CardTitle>
-          <CardDescription className="mt-1 text-xs">签到单独记录，不会计入官方请求用量。</CardDescription>
-        </CardHeader>
-        <CardContent className="max-h-[340px] min-w-0 overflow-y-auto px-4 py-1 sm:px-5">
-          {events.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">该账号暂无最近事件。</div>
-          ) : (
-            events.map((event, index) => <EventRow key={`${event.kind}-${event.ts}-${index}`} event={event} />)
-          )}
-        </CardContent>
-      </Card>
+    <div className="divide-y divide-border/60">
+      {accounts.map((account) => (
+        <div key={account.accountId} className="min-w-0">
+          <div className="px-4 py-2.5 text-xs font-medium sm:px-5">{accountLabel(account)}</div>
+          <ResourceBreakdown credit={creditMap[account.accountId]} loading={creditLoadingMap[account.accountId]} />
+        </div>
+      ))}
     </div>
   );
 }
 
+function SelectedAccountDetails({
+  stats,
+  officialUsage,
+  creditMap,
+  creditLoadingMap,
+}: {
+  stats: CreditStatistics;
+  officialUsage?: CreditOfficialUsage;
+  creditMap: Record<string, CreditExpiry>;
+  creditLoadingMap: Record<string, boolean>;
+}) {
+  const [detailTab, setDetailTab] = useState<"credits" | "requests">("credits");
+  const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
+  const filterAccounts = official ? official.accounts : stats.accounts;
+  /** 本卡片仅允许选择单个账号，默认第一个账号 */
+  const [accountFilter, setAccountFilter] = useState<string | null>(
+    () => filterAccounts[0]?.accountId ?? null,
+  );
+  const activeFilterAccount =
+    accountFilter && filterAccounts.some((account) => account.accountId === accountFilter)
+      ? filterAccounts.find((account) => account.accountId === accountFilter)
+      : undefined;
+  // 筛选失效（如账号列表刷新变化）时回退到第一个账号
+  const effectiveFilter = activeFilterAccount?.accountId ?? filterAccounts[0]?.accountId ?? null;
+  const visibleAccounts = effectiveFilter
+    ? stats.accounts.filter((account) => account.accountId === effectiveFilter)
+    : stats.accounts;
+  // 最近事件卡片已隐藏，events 不再使用。恢复时取消本注释。
+  // const events = (effectiveFilter
+  //   ? stats.events.filter((event) => event.accountId === effectiveFilter)
+  //   : stats.events
+  // ).slice(0, 50);
+  const latestSnapshotAt = visibleAccounts.reduce<number | null>((latest, account) => {
+    if (account.lastSnapshotAt == null) return latest;
+    if (latest == null || account.lastSnapshotAt > latest) return account.lastSnapshotAt;
+    return latest;
+  }, null);
+
+  useEffect(() => {
+    setDetailTab("credits");
+  }, [effectiveFilter]);
+
+  return (
+    <div className="flex min-w-0 flex-col gap-12">
+      <section className="min-w-0 space-y-2.5" aria-labelledby="credit-detail-title">
+        <div className="px-1">
+          <h2 id="credit-detail-title" className="text-[13px] font-medium leading-5">积分明细</h2>
+        </div>
+        <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+          <CardHeader className="gap-0 border-b px-4 pt-3 pb-3 sm:px-5">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+              <CardDescription className="min-w-0 truncate text-xs">
+                {latestSnapshotAt ? `最近采集 ${formatDateTime(latestSnapshotAt)}` : "暂无账号资源包。"}
+              </CardDescription>
+              <AccountFilterMenu
+                accounts={filterAccounts}
+                accountFilter={effectiveFilter}
+                onAccountFilterChange={setAccountFilter}
+                ariaLabel="按账号筛选积分明细"
+                allowAll={false}
+              />
+            </div>
+            <div className="mt-3 flex max-w-full gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label="积分详情类型">
+              {(
+                [
+                  ["credits", "积分明细"],
+                  ["requests", "请求用量"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === value}
+                  className={`min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                    detailTab === value
+                      ? "bg-background font-medium text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setDetailTab(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </CardHeader>
+          {detailTab === "credits" ? (
+            <div className="max-h-[340px] min-w-0 overflow-y-auto">
+              <ResourcesByAccount accounts={visibleAccounts} creditMap={creditMap} creditLoadingMap={creditLoadingMap} />
+            </div>
+          ) : (
+            <OfficialUsageBreakdown officialUsage={officialUsage} accountId={effectiveFilter} />
+          )}
+        </Card>
+      </section>
+      {/* 最近事件卡片已隐藏。恢复时取消本注释。
+      <section className="min-w-0 space-y-2.5" aria-labelledby="account-events-title">
+        <div className="px-1">
+          <h2 id="account-events-title" className="text-[13px] font-medium leading-5">最近事件</h2>
+        </div>
+        <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+          <CardHeader className="border-b px-4 py-3 sm:px-5">
+            <CardDescription className="text-xs">签到单独记录，不会计入官方请求用量。</CardDescription>
+          </CardHeader>
+          <CardContent className="max-h-[340px] min-w-0 overflow-y-auto px-4 py-1 sm:px-5">
+            {events.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                {effectiveFilter ? "该账号暂无最近事件。" : "暂无最近事件。"}
+              </div>
+            ) : (
+              events.map((event, index) => <EventRow key={`${event.kind}-${event.ts}-${index}`} event={event} />)
+            )}
+          </CardContent>
+        </Card>
+      </section>
+      */}
+    </div>
+  );
+}
+
+/* 积分明细默认展示全部账号后不再单独使用。
 function UnselectedRecentEvents({ events }: { events: CreditStatsEvent[] }) {
   return (
-    <Card className="mt-4 min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-      <CardHeader className="border-b px-4 py-4 sm:px-5">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Database className="size-4 text-primary" />
-          最近事件
-        </CardTitle>
-        <CardDescription className="mt-1 text-xs">签到与积分观察分开记录，签到不会计入消耗。</CardDescription>
-      </CardHeader>
-      <CardContent className="max-h-[340px] min-w-0 overflow-y-auto px-4 py-1 sm:px-5">
-        {events.slice(0, 50).map((event, index) => (
-          <EventRow key={`${event.kind}-${event.ts}-${index}`} event={event} />
-        ))}
-      </CardContent>
-    </Card>
+    <section className="min-w-0 space-y-2.5" aria-labelledby="all-events-title">
+      <div className="px-1">
+        <h2 id="all-events-title" className="text-[13px] font-medium leading-5">最近事件</h2>
+      </div>
+      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+        <CardHeader className="border-b px-4 py-3 sm:px-5">
+          <CardDescription className="text-xs">签到与积分观察分开记录，签到不会计入消耗。</CardDescription>
+        </CardHeader>
+        <CardContent className="max-h-[340px] min-w-0 overflow-y-auto px-4 py-1 sm:px-5">
+          {events.slice(0, 50).map((event, index) => (
+            <EventRow key={`${event.kind}-${event.ts}-${index}`} event={event} />
+          ))}
+        </CardContent>
+      </Card>
+    </section>
   );
+}
+*/
+
+/** 当前会话内共用一份统计数据；只有「刷新统计」才会重新采集。 */
+let cachedStatistics: CreditStatistics | null = null;
+let statisticsInflight: Promise<CreditStatistics> | null = null;
+
+/** 进入统计页时距上次刷新超过此时长（ms）则自动触发一次刷新统计 */
+const STATISTICS_AUTO_REFRESH_MS = 30 * 60 * 1000;
+
+/** 最近一次「刷新统计」完成的时刻（会话级，0 = 从未刷新过） */
+let lastStatisticsRefreshAt = 0;
+
+function rememberStatistics(next: CreditStatistics): CreditStatistics {
+  cachedStatistics = next;
+  return next;
+}
+
+function loadCachedStatistics(refresh: boolean): Promise<CreditStatistics> {
+  if (!refresh && cachedStatistics) return Promise.resolve(cachedStatistics);
+  if (!refresh && statisticsInflight) return statisticsInflight;
+  const pending = api.getCreditStatistics(refresh).then(rememberStatistics);
+  statisticsInflight = pending;
+  return pending.finally(() => {
+    if (statisticsInflight === pending) statisticsInflight = null;
+  });
 }
 
 export default function CreditStatsPage() {
@@ -835,18 +1137,21 @@ export default function CreditStatsPage() {
     accounts,
     creditMap,
     creditLoadingMap,
-    ensureCredits,
     fetchAll,
     refreshCredits,
   } = useAccountsStore();
-  const [stats, setStats] = useState<CreditStatistics | null>(null);
-  const [range, setRange] = useState<RangeKey>("30d");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<CreditStatistics | null>(cachedStatistics);
+  const [loading, setLoading] = useState(!cachedStatistics);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(
-    async (forceCredits = false) => {
+    async (refresh = false) => {
+      if (!refresh && cachedStatistics) {
+        setStats(cachedStatistics);
+        setLoading(false);
+        setError(null);
+        return;
+      }
       setLoading(true);
       setError(null);
       try {
@@ -857,51 +1162,37 @@ export default function CreditStatsPage() {
         }
         const currentAccounts = accountState.accounts;
         const ids = currentAccounts.map((account) => account.id);
-        if (ids.length > 0) {
-          if (forceCredits) {
-            await refreshCredits(ids);
-          } else {
-            await ensureCredits(ids);
-          }
+        if (refresh && ids.length > 0) {
+          await refreshCredits(ids);
         }
-        const next = await api.getCreditStatistics();
-        setStats(next);
-        setSelectedId((current) =>
-          current && next.accounts.some((account) => account.accountId === current)
-            ? current
-            : next.accounts[0]?.accountId ?? ids[0] ?? null,
-        );
+        setStats(await loadCachedStatistics(refresh));
+        if (refresh) lastStatisticsRefreshAt = Date.now();
       } catch (cause) {
         setError(api.asError(cause));
       } finally {
         setLoading(false);
       }
     },
-    [ensureCredits, fetchAll, refreshCredits],
+    [fetchAll, refreshCredits],
   );
 
   useEffect(() => {
-    void load();
+    // 已有会话缓存且距上次刷新超过 30 分钟时，进入页面自动刷新一次统计
+    const autoRefresh =
+      cachedStatistics !== null && Date.now() - lastStatisticsRefreshAt >= STATISTICS_AUTO_REFRESH_MS;
+    void load(autoRefresh);
   }, [load]);
 
-  const selectedAccount = useMemo(
-    () => stats?.accounts.find((account) => account.accountId === selectedId) ?? null,
-    [selectedId, stats],
-  );
-  const selectedEvents = useMemo(
-    () => stats?.events.filter((event) => event.accountId === selectedId).slice(0, 50) ?? [],
-    [selectedId, stats],
-  );
   const officialUsage = stats?.officialUsage;
   const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
 
   return (
     <div className="mx-auto w-full max-w-[1180px] min-w-0 px-4 py-6 sm:px-8 sm:py-9">
-      <header className="mb-6 flex min-w-0 flex-wrap items-start justify-between gap-4">
+      <header className="mb-10 flex min-w-0 flex-wrap items-start justify-between gap-4 sm:mb-12">
         <div className="min-w-0">
           <h1 className="text-[28px] font-semibold tracking-tight">积分统计</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            优先展示 WorkBuddy 官方请求用量；接口不可用时保留本地积分快照，并把签到记录作为独立事件查看。
+            当前数据更新于 {stats ? formatDateTime(official?.collectedAt ?? stats.generatedAt) : "—"}
           </p>
         </div>
         <Button
@@ -935,9 +1226,9 @@ export default function CreditStatsPage() {
           正在采集账号积分并加载统计…
         </div>
       ) : stats ? (
-        <>
+        <div className="min-w-0 space-y-12">
           {accounts.length === 0 && (
-            <Alert className="mb-5">
+            <Alert>
               <CircleAlert />
               <AlertTitle>暂无当前账号</AlertTitle>
               <AlertDescription>可以先去账号管理导入或登录账号；历史事件仍会保留在下方最近事件中。</AlertDescription>
@@ -945,7 +1236,7 @@ export default function CreditStatsPage() {
           )}
 
           {officialUsage && officialUsage.status !== "complete" && (
-            <Alert variant="warning" className="mb-5">
+            <Alert variant="warning">
               <CircleAlert />
               <AlertTitle>
                 {officialUsage.status === "partial" ? "部分账号官方用量未同步" : "官方用量暂不可用"}
@@ -963,46 +1254,64 @@ export default function CreditStatsPage() {
             </Alert>
           )}
 
-          <section className="mb-5 grid min-w-0 grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:grid-cols-5" aria-label="积分总览">
-            <StatCard icon={<CreditCard className="size-3.5" />} label="当前剩余积分" value={formatCredits(stats.summary.currentRemaining)} />
-            <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "今日官方消耗" : "今日观察消耗"} value={formatCredits(official ? official.summary.usageToday : stats.summary.usageToday)} />
-            <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "近 7 天官方消耗" : "近 7 天观察消耗"} value={formatCredits(official ? official.summary.usage7Days : stats.summary.usage7Days)} />
-            <StatCard icon={<TrendingDown className="size-3.5" />} label={official ? "本月官方消耗" : "本月观察消耗"} value={formatCredits(official ? official.summary.usageThisMonth : stats.summary.usageThisMonth)} />
-            <StatCard icon={<CircleCheck className="size-3.5" />} label="今日签到账号" value={`${stats.summary.todayCheckedInAccounts}`} hint={`成功 ${stats.summary.todaySuccess} · 已签 ${stats.summary.todayAlready}`} />
-          </section>
+          <Card className="min-w-0 gap-0 overflow-hidden rounded-2xl bg-card/70 py-0 shadow-none" aria-label="积分总览">
+            <CardContent className="grid min-w-0 grid-cols-1 divide-y divide-border/60 p-0 sm:grid-cols-4 sm:divide-y-0 sm:py-5">
+              <StatMetric
+                icon={Sparkles}
+                label="剩余积分"
+                value={formatCredits(stats.summary.currentRemaining)}
+              />
+              <StatMetric
+                icon={TrendingDown}
+                label="今日消耗"
+                value={formatCredits(official ? official.summary.usageToday : stats.summary.usageToday)}
+                divided
+              />
+              <StatMetric
+                icon={CalendarDays}
+                label="近 7 天消耗"
+                value={formatCredits(official ? official.summary.usage7Days : stats.summary.usage7Days)}
+                divided
+              />
+              <StatMetric
+                icon={CalendarRange}
+                label="本月消耗"
+                value={formatCredits(official ? official.summary.usageThisMonth : stats.summary.usageThisMonth)}
+                divided
+              />
+            </CardContent>
+          </Card>
 
           {!official && !stats.coverageStartAt && stats.events.some((event) => event.kind === "checkin") && (
-            <Alert className="mb-5">
+            <Alert>
               <CircleCheck />
               <AlertTitle>目前只有签到记录</AlertTitle>
               <AlertDescription>签到不会被计入积分消耗。首次成功采集积分资源后，趋势统计才会开始累计。</AlertDescription>
             </Alert>
           )}
 
-          <div className="mb-5">
-            <TrendChart stats={stats} officialUsage={officialUsage} range={range} onRangeChange={setRange} />
-          </div>
-
-          {official && (
-            <div className="mb-5">
-              <ModelBreakdown officialUsage={official} />
-            </div>
-          )}
-
-          <div className="mb-5">
-            <AccountTable stats={stats} officialUsage={officialUsage} selectedId={selectedId} onSelect={setSelectedId} />
-          </div>
-
-          {!selectedAccount && stats.events.length > 0 && <UnselectedRecentEvents events={stats.events} />}
-
-          <SelectedAccountDetails
-            account={selectedAccount}
-            credit={selectedId ? creditMap[selectedId] : undefined}
-            creditLoading={selectedId ? creditLoadingMap[selectedId] : undefined}
-            events={selectedEvents}
+          <TrendChart
+            stats={stats}
             officialUsage={officialUsage}
           />
-        </>
+
+          {official && (
+            <ModelBreakdown
+              officialUsage={official}
+            />
+          )}
+
+          {/* 与下方「积分明细」重复，先隐藏。
+          <AccountTable stats={stats} officialUsage={officialUsage} selectedId={selectedId} onSelect={setSelectedId} />
+          */}
+
+          <SelectedAccountDetails
+            stats={stats}
+            officialUsage={officialUsage}
+            creditMap={creditMap}
+            creditLoadingMap={creditLoadingMap}
+          />
+        </div>
       ) : (
         <div className="rounded-xl border border-dashed px-4 py-16 text-center text-sm text-muted-foreground">
           暂无统计数据，请点击刷新重试。

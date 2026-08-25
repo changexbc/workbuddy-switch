@@ -49,7 +49,12 @@ fn read_json_file(path: &PathBuf) -> Option<Value> {
 
 fn helper_path() -> Option<String> {
     read_json_file(&settings_path())
-        .and_then(|settings| settings.get("apiKeyHelper").and_then(|value| value.as_str()).map(str::to_string))
+        .and_then(|settings| {
+            settings
+                .get("apiKeyHelper")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
         .map(|path| path.trim().to_string())
         .filter(|path| !path.is_empty())
 }
@@ -72,7 +77,9 @@ fn helper_supports_account_ids() -> bool {
 }
 
 fn load_state() -> Value {
-    read_json_file(&state_path()).filter(Value::is_object).unwrap_or_else(|| json!({}))
+    read_json_file(&state_path())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
 }
 
 fn account_index(accounts: &[Value], account_id: &str) -> Option<(usize, String)> {
@@ -178,7 +185,8 @@ pub fn install_helper() -> Result<Value, String> {
     }
 
     settings_value["apiKeyHelper"] = json!(target.to_string_lossy().to_string());
-    let content = serde_json::to_string_pretty(&settings_value).map_err(|error| error.to_string())?;
+    let content =
+        serde_json::to_string_pretty(&settings_value).map_err(|error| error.to_string())?;
     if let Some(parent) = settings.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -247,14 +255,20 @@ mod tests {
             json!({"id": "a2", "uid": "u2"}),
         ];
         let state = json!({"active": 0, "activeAccountId": "a2"});
-        assert_eq!(state_account_index(&state, &accounts), Some((1, "a2".to_string())));
+        assert_eq!(
+            state_account_index(&state, &accounts),
+            Some((1, "a2".to_string()))
+        );
     }
 
     #[test]
     fn legacy_index_wraps_without_panicking() {
         let accounts = vec![json!({"id": "a1"}), json!({"id": "a2"})];
         let state = json!({"active": 5});
-        assert_eq!(state_account_index(&state, &accounts), Some((1, "a2".to_string())));
+        assert_eq!(
+            state_account_index(&state, &accounts),
+            Some((1, "a2".to_string()))
+        );
     }
 
     #[test]

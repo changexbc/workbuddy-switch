@@ -34,7 +34,9 @@ pub fn workbuddy_db_path() -> PathBuf {
 }
 
 fn edge_sync_db_path() -> PathBuf {
-    home_dir().join(".workbuddy").join("edge-sync-mapping-v2.db")
+    home_dir()
+        .join(".workbuddy")
+        .join("edge-sync-mapping-v2.db")
 }
 
 /// 当前认证账号的 uid（认证文件 account.uid）。
@@ -204,7 +206,11 @@ fn backup_workbuddy_db(backup_root: &Path) -> Option<PathBuf> {
 /// 全部按「新 id」复制一份给目标账号，源账号数据完全不动。
 /// 新 id 必须用带连字符的 UUID 格式（`Uuid::new_v4().to_string()`），与官方一致；
 /// 32 位无连字符形式会导致 WorkBuddy 无法识别新会话。
-pub fn copy_session_to_user(cid: &str, source_uid: &str, target_uid: &str) -> Result<Value, String> {
+pub fn copy_session_to_user(
+    cid: &str,
+    source_uid: &str,
+    target_uid: &str,
+) -> Result<Value, String> {
     let new_cid = uuid::Uuid::new_v4().to_string();
     let db = workbuddy_db_path();
     if let Some(conn) = open_db(&db, true) {
@@ -294,12 +300,8 @@ fn insert_session_copy(
             }
             match col.as_str() {
                 "id" => vals.push(rusqlite::types::Value::Text(new_cid.to_string())),
-                "user_id" => {
-                    vals.push(rusqlite::types::Value::Text(target_uid.to_string()))
-                }
-                "created_at" | "updated_at" => {
-                    vals.push(rusqlite::types::Value::Integer(now_ms()))
-                }
+                "user_id" => vals.push(rusqlite::types::Value::Text(target_uid.to_string())),
+                "created_at" | "updated_at" => vals.push(rusqlite::types::Value::Integer(now_ms())),
                 "deleted_at" => vals.push(rusqlite::types::Value::Null),
                 _ => vals.push(v),
             }
@@ -309,9 +311,7 @@ fn insert_session_copy(
 
         let placeholders = cols.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let colnames = cols.join(", ");
-        let sql = format!(
-            "INSERT OR REPLACE INTO sessions ({colnames}) VALUES ({placeholders})"
-        );
+        let sql = format!("INSERT OR REPLACE INTO sessions ({colnames}) VALUES ({placeholders})");
         let params: Vec<&rusqlite::types::Value> = vals.iter().collect();
         conn.execute(&sql, rusqlite::params_from_iter(params))
             .map_err(|e| e.to_string())?;
@@ -338,7 +338,12 @@ fn insert_edge_sync_mapping(db_path: &Path, new_cid: &str, target_uid: &str) -> 
     let r = conn.execute(
         "INSERT OR REPLACE INTO edge_sync_mapping \
          (session_id, conversation_id, msg_channel, created_at) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![new_cid, new_cid, format!("convmsg:{target_uid}"), created_at],
+        rusqlite::params![
+            new_cid,
+            new_cid,
+            format!("convmsg:{target_uid}"),
+            created_at
+        ],
     );
     match r {
         Ok(_) => true,
@@ -386,12 +391,19 @@ mod tests {
 
     #[test]
     fn db_paths_point_to_home() {
-        assert!(workbuddy_db_path().to_string_lossy().ends_with(".workbuddy/workbuddy.db"));
-        assert!(edge_sync_db_path().to_string_lossy().ends_with("edge-sync-mapping-v2.db"));
+        assert!(workbuddy_db_path()
+            .to_string_lossy()
+            .ends_with(".workbuddy/workbuddy.db"));
+        assert!(edge_sync_db_path()
+            .to_string_lossy()
+            .ends_with("edge-sync-mapping-v2.db"));
     }
 
     fn temp_db(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("wb_switch_test_{}_{name}.db", uuid::Uuid::new_v4().simple()))
+        std::env::temp_dir().join(format!(
+            "wb_switch_test_{}_{name}.db",
+            uuid::Uuid::new_v4().simple()
+        ))
     }
 
     #[test]
@@ -424,14 +436,7 @@ mod tests {
             .query_row(
                 "SELECT id, user_id, title, deleted_at FROM sessions WHERE id = 'new-uuid-1'",
                 [],
-                |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                    ))
-                },
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
         assert_eq!(id, "new-uuid-1");
@@ -441,7 +446,11 @@ mod tests {
 
         // 源行保持不变
         let src_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sessions WHERE id = 'src-1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = 'src-1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(src_count, 1);
     }
@@ -498,7 +507,8 @@ mod tests {
     fn insert_edge_sync_mapping_missing_table_false() {
         let db = temp_db("edge-no-table");
         let conn = Connection::open(&db).unwrap();
-        conn.execute_batch("CREATE TABLE other (x INTEGER);").unwrap();
+        conn.execute_batch("CREATE TABLE other (x INTEGER);")
+            .unwrap();
         assert!(!insert_edge_sync_mapping(&db, "new-1", "uid-b"));
     }
 
@@ -529,6 +539,8 @@ mod tests {
         assert!(is_claw_workspace("/Users/apple/WorkBuddy/claw/"));
         assert!(is_claw_workspace(r"C:\Users\me\WorkBuddy\Claw"));
         assert!(!is_claw_workspace("/Users/apple/WorkBuddy/ClawBot"));
-        assert!(!is_claw_workspace("/Users/apple/Documents/AI-PROJECT/LetterTotTown"));
+        assert!(!is_claw_workspace(
+            "/Users/apple/Documents/AI-PROJECT/LetterTotTown"
+        ));
     }
 }

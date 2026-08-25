@@ -25,8 +25,7 @@ pub async fn refresh_account_token(mut account: Value) -> Value {
         .unwrap_or_default();
     if rt.is_empty() {
         account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] =
-            json!("缺少 refresh token，无法刷新，需重新登录");
+        account["needs_relogin_reason"] = json!("缺少 refresh token，无法刷新，需重新登录");
         let _ = upsert_account(&account);
         return account;
     }
@@ -87,8 +86,10 @@ pub async fn refresh_account_token(mut account: Value) -> Value {
             .get("auth_raw")
             .and_then(|a| a.get("refreshExpiresAt")),
     );
-    let mut new_rt_exp =
-        norm_ts(data.get("refreshExpiresAt").or_else(|| data.get("refresh_expires_at")));
+    let mut new_rt_exp = norm_ts(
+        data.get("refreshExpiresAt")
+            .or_else(|| data.get("refresh_expires_at")),
+    );
     if new_rt_exp.is_none() {
         new_rt_exp = fallback_rt_exp;
     }
@@ -143,7 +144,10 @@ pub async fn run_keepalive_cycle() -> Value {
         return json!({"skipped": "already_running"});
     };
     let cfg = load_checkin_config();
-    let keep_days = cfg.get("keepalive_days").and_then(|v| v.as_i64()).unwrap_or(0);
+    let keep_days = cfg
+        .get("keepalive_days")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let accounts = crate::modules::account::load_accounts();
     let total = accounts.len();
     let mut results: Vec<Value> = Vec::new();

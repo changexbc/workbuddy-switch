@@ -76,14 +76,36 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
 
 function Layout() {
   const running = useAccountsStore((s) => s.status?.running);
+  const hasUnifiedTitleBar =
+    api.isDesktop() && typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
   useCreditAutoRefresh();
 
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-background">
-      <aside className="flex min-h-0 w-[220px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4">
-        <div className="flex items-center gap-2.5 px-1 pb-6">
-          <AppIconMark size={32} />
-          <div className="min-w-0 truncate text-[13px] font-semibold tracking-tight">workbuddy-switch</div>
+      {hasUnifiedTitleBar ? (
+        <div
+          data-tauri-drag-region
+          className="fixed inset-x-0 top-0 z-50 h-16"
+          aria-hidden="true"
+        />
+      ) : null}
+      <aside
+        className={cn(
+          "flex min-h-0 w-[220px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 pb-4",
+          hasUnifiedTitleBar ? "pt-20" : "pt-4",
+        )}
+      >
+        <div className="flex items-center gap-2.5 px-1 pb-5">
+          <AppIconMark size={36} className="drop-shadow-sm" />
+          <div
+            className="min-w-0 truncate text-[15px] leading-5 tracking-[-0.02em] text-sidebar-foreground/90"
+            style={{
+              fontFamily: '"Bricolage Grotesque Variable", "SF Pro Display", ui-sans-serif, sans-serif',
+              fontWeight: 640,
+            }}
+          >
+            WorkBuddy Switch
+          </div>
         </div>
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5" aria-label="主导航">
           <NavLink
@@ -132,7 +154,12 @@ function Layout() {
         </nav>
         {api.isWebui() ? null : <UpdateCenter running={running} />}
       </aside>
-      <main className="min-w-0 flex-1 overflow-y-auto bg-background overscroll-contain">
+      <main
+        className={cn(
+          "min-w-0 flex-1 overflow-y-auto bg-background overscroll-contain",
+          hasUnifiedTitleBar && "pt-16 [&>div]:pt-4",
+        )}
+      >
         <Outlet />
       </main>
     </div>

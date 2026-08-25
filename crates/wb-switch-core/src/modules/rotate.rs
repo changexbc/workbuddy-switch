@@ -60,9 +60,7 @@ fn to_candidate(account: &Value, credit: &Value) -> Candidate {
         .get("totalRemaining")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let soonest_expire_at = credit
-        .get("soonestExpireAt")
-        .and_then(|v| v.as_i64());
+    let soonest_expire_at = credit.get("soonestExpireAt").and_then(|v| v.as_i64());
     let error = credit
         .get("error")
         .and_then(|v| v.as_str())
@@ -156,7 +154,8 @@ pub fn decide_target(
         .iter()
         .find(|c| c.account_id == current_account_id.unwrap_or(""))
     {
-        if let (Some(cur_ts), Some(target_ts)) = (current.soonest_expire_at, target.soonest_expire_at)
+        if let (Some(cur_ts), Some(target_ts)) =
+            (current.soonest_expire_at, target.soonest_expire_at)
         {
             if cur_ts > 0 && target_ts < cur_ts && cur_ts - target_ts < min_gap_ms {
                 return Decision::Skip(format!(
@@ -173,14 +172,18 @@ pub fn decide_target(
 /// 最近 CLI 会话活动时间：递归扫 `~/.codebuddy/projects/**/*.jsonl`
 /// （含 subagents/ 子目录），取最新 mtime（毫秒）；无会话文件返回 None。
 pub fn cli_recent_activity() -> Option<i64> {
-    let projects = crate::modules::config::home_dir().join(".codebuddy").join("projects");
+    let projects = crate::modules::config::home_dir()
+        .join(".codebuddy")
+        .join("projects");
     if !projects.is_dir() {
         return None;
     }
     let mut newest: Option<i64> = None;
     let mut stack = vec![projects];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -277,12 +280,15 @@ pub async fn run_rotate_cycle() -> Value {
         "to": Value::Null,
     });
     // 每次检查记录各账号积分快照（供观察后调整 min_remaining_credits）
-    log["detail"] = json!(candidates.iter().map(|c| json!({
-        "name": c.display_name,
-        "remaining": c.total_remaining,
-        "soonestExpireAt": c.soonest_expire_at,
-        "valid": c.valid,
-    })).collect::<Vec<_>>());
+    log["detail"] = json!(candidates
+        .iter()
+        .map(|c| json!({
+            "name": c.display_name,
+            "remaining": c.total_remaining,
+            "soonestExpireAt": c.soonest_expire_at,
+            "valid": c.valid,
+        }))
+        .collect::<Vec<_>>());
     if let Some(id) = &current_id {
         log["from"] = json!({"id": id, "name": cli_status.get("activeAccountName").cloned().unwrap_or_else(|| json!(null))});
     }
@@ -423,12 +429,32 @@ mod tests {
         ];
         // 刚切过（10 分钟前），冷却 30 分钟 → 不切
         assert_eq!(
-            decide_target(&candidates, Some("a"), Some(now - 10 * 60_000), 30 * 60_000, GAP, URG, None, GUARD, 0.0),
+            decide_target(
+                &candidates,
+                Some("a"),
+                Some(now - 10 * 60_000),
+                30 * 60_000,
+                GAP,
+                URG,
+                None,
+                GUARD,
+                0.0
+            ),
             Decision::Skip("处于切换冷却期".to_string())
         );
         // 冷却结束 → 切
         assert_eq!(
-            decide_target(&candidates, Some("a"), Some(now - 40 * 60_000), 30 * 60_000, GAP, URG, None, GUARD, 0.0),
+            decide_target(
+                &candidates,
+                Some("a"),
+                Some(now - 40 * 60_000),
+                30 * 60_000,
+                GAP,
+                URG,
+                None,
+                GUARD,
+                0.0
+            ),
             Decision::Switch("b".to_string())
         );
     }
@@ -482,12 +508,32 @@ mod tests {
         ];
         // 10 分钟前有会话写入 → 活跃保护，不切
         assert_eq!(
-            decide_target(&candidates, Some("a"), None, 0, GAP, URG, Some(now - 10 * 60_000), GUARD, 0.0),
+            decide_target(
+                &candidates,
+                Some("a"),
+                None,
+                0,
+                GAP,
+                URG,
+                Some(now - 10 * 60_000),
+                GUARD,
+                0.0
+            ),
             Decision::Skip("CLI 正在使用中，暂不切换".to_string())
         );
         // 1 小时前有会话写入 → 已过窗口，正常切
         assert_eq!(
-            decide_target(&candidates, Some("a"), None, 0, GAP, URG, Some(now - 60 * 60_000), GUARD, 0.0),
+            decide_target(
+                &candidates,
+                Some("a"),
+                None,
+                0,
+                GAP,
+                URG,
+                Some(now - 60 * 60_000),
+                GUARD,
+                0.0
+            ),
             Decision::Switch("b".to_string())
         );
         // 无会话文件（None）→ 正常切

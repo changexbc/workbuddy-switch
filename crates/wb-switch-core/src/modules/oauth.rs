@@ -110,9 +110,13 @@ pub async fn oauth_poll(login_id: &str) -> Value {
     }
 
     // 拉取账号信息
-    let account_url = format!("{WORKBUDDY_API_ENDPOINT}{WORKBUDDY_API_PREFIX}/login/account?state={state}");
+    let account_url =
+        format!("{WORKBUDDY_API_ENDPOINT}{WORKBUDDY_API_PREFIX}/login/account?state={state}");
     let mut headers = HashMap::new();
-    headers.insert("Authorization".to_string(), format!("Bearer {access_token}"));
+    headers.insert(
+        "Authorization".to_string(),
+        format!("Bearer {access_token}"),
+    );
     let domain = data.get("domain").and_then(|v| v.as_str()).unwrap_or("");
     if !domain.is_empty() {
         headers.insert("X-Domain".to_string(), domain.to_string());
@@ -219,6 +223,9 @@ mod tests {
     #[test]
     fn oauth_profile_keeps_factual_email() {
         let profile = json!({"email": " user@example.com "});
-        assert_eq!(oauth_profile_email(&profile).as_deref(), Some("user@example.com"));
+        assert_eq!(
+            oauth_profile_email(&profile).as_deref(),
+            Some("user@example.com")
+        );
     }
 }

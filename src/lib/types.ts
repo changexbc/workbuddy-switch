@@ -195,6 +195,8 @@ export interface CreditStatsSummary {
 export interface CreditStatsDailyPoint {
   date: string;
   usage: number;
+  /** 官方用量按模型聚合（全量，不受请求明细条数限制）；本地观察口径下为空 */
+  models?: { model: string; requestCount: number; credit: number }[];
 }
 
 export interface CreditStatsAccount {
@@ -211,6 +213,8 @@ export interface CreditStatsAccount {
   checkinStatusToday: string | null;
   lastCheckinAt: number | null;
   lastCheckinResult: string | null;
+  /** 按账号的逐日观察消耗（缺省兼容旧后端）；官方可用时趋势图优先使用官方 daily */
+  daily?: CreditStatsDailyPoint[];
 }
 
 export interface CreditStatsUsageEvent {
@@ -262,6 +266,8 @@ export interface CreditOfficialUsageAccount {
   fetchedCount?: number;
   /** 缺省兼容旧后端响应。 */
   models?: CreditOfficialUsageModel[];
+  /** 按账号的逐日官方消耗（全量聚合，不受 requests 明细上限影响；缺省兼容旧后端） */
+  daily?: CreditStatsDailyPoint[];
 }
 
 export interface CreditOfficialUsageRequest {
@@ -284,6 +290,8 @@ export interface CreditOfficialUsage {
   status: CreditOfficialUsageStatus;
   rangeStart: string;
   rangeEnd: string;
+  /** 官方用量最近一次采集时间；缓存命中时保持采集当时的时间。 */
+  collectedAt?: number;
   summary: CreditOfficialUsageSummary;
   daily: CreditStatsDailyPoint[];
   accounts: CreditOfficialUsageAccount[];

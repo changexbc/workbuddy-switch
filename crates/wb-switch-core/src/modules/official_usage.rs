@@ -1,15 +1,18 @@
 //! WorkBuddy 官方请求用量投影。
 //!
-//! 该接口返回的是官方请求账单明细，不写入本地持久化文件。这里负责请求
-//! 最近 31 个自然日、处理分页、校验和归一化明细，并只向上层暴露统计字段
-//! 与有限的请求摘要；上游可能携带的 prompt/input 等字段永远不会被复制。
+//! 这里负责请求最近 31 个自然日、处理分页、校验和归一化明细，并只向上层
+//! 暴露统计字段与有限的请求摘要。投影会写入本地缓存，避免每次打开统计页
+//! 都打官方用量接口；上游可能携带的 prompt/input 等字段永远不会被复制。
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use crate::modules::account::{account_display_name, get_str};
+use crate::modules::config::{atomic_write, official_usage_cache_file, store_dir};
 use crate::modules::credits::authenticated_post;
 
 pub const OFFICIAL_USAGE_URL: &str =
@@ -17,6 +20,194 @@ pub const OFFICIAL_USAGE_URL: &str =
 pub const OFFICIAL_USAGE_PAGE_SIZE: usize = 3_000;
 pub const OFFICIAL_USAGE_DETAIL_LIMIT: usize = 100;
 const OFFICIAL_USAGE_MAX_PAGES: usize = 100;
+static OFFICIAL_USAGE_MEMORY: Mutex<Option<Value>> = Mutex::new(None);
+
+fn official_usage_fetch_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+fn take_object_fields(value: &Value, keys: &[&str]) -> Map<String, Value> {
+    let mut out = Map::new();
+    let Some(object) = value.as_object() else {
+        return out;
+    };
+    for key in keys {
+        if let Some(field) = object.get(*key) {
+            out.insert((*key).to_string(), field.clone());
+        }
+    }
+    out
+}
+
+fn sanitize_models(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                Value::Object(take_object_fields(
+                    item,
+                    &["model", "requestCount", "credit"],
+                ))
+            })
+            .collect(),
+    )
+}
+
+fn sanitize_daily(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                let mut point = take_object_fields(item, &["date", "usage"]);
+                point.insert("models".into(), sanitize_models(item.get("models")));
+                Value::Object(point)
+            })
+            .collect(),
+    )
+}
+
+fn sanitize_requests(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                Value::Object(take_object_fields(
+                    item,
+                    &[
+                        "accountId",
+                        "accountName",
+                        "requestId",
+                        "credit",
+                        "model",
+                        "client",
+                        "requestTime",
+                    ],
+                ))
+            })
+            .collect(),
+    )
+}
+
+fn sanitize_accounts(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                let mut account = take_object_fields(
+                    item,
+                    &[
+                        "accountId",
+                        "accountName",
+                        "ok",
+                        "requestCount",
+                        "detailTruncated",
+                        "usageToday",
+                        "usage7Days",
+                        "usageThisMonth",
+                        "error",
+                        "reportedTotal",
+                        "fetchedCount",
+                    ],
+                );
+                account.insert("models".into(), sanitize_models(item.get("models")));
+                account.insert("daily".into(), sanitize_daily(item.get("daily")));
+                Value::Object(account)
+            })
+            .collect(),
+    )
+}
+
+fn sanitize_cached_payload(value: &Value) -> Option<Value> {
+    let status = value.get("status")?.as_str()?;
+    if !matches!(status, "complete" | "partial" | "unavailable") {
+        return None;
+    }
+    let mut payload = take_object_fields(
+        value,
+        &[
+            "status",
+            "rangeStart",
+            "rangeEnd",
+            "summary",
+            "detailLimitPerAccount",
+            "collectedAt",
+            "errors",
+        ],
+    );
+    payload.insert("daily".into(), sanitize_daily(value.get("daily")));
+    payload.insert("models".into(), sanitize_models(value.get("models")));
+    payload.insert("accounts".into(), sanitize_accounts(value.get("accounts")));
+    payload.insert("requests".into(), sanitize_requests(value.get("requests")));
+    Some(Value::Object(payload))
+}
+
+fn parse_official_usage_cache(text: &str) -> Option<Value> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let payload = value.get("payload").unwrap_or(&value);
+    sanitize_cached_payload(payload)
+}
+
+fn load_official_usage_cache_from(path: &Path) -> Option<Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    parse_official_usage_cache(&text)
+}
+
+fn save_official_usage_cache_to(path: &Path, payload: &Value) {
+    let body = json!({ "payload": payload });
+    let content = serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string());
+    let parent = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(store_dir);
+    let _ = std::fs::create_dir_all(parent).and_then(|_| atomic_write(path, &content));
+}
+
+fn remembered_official_usage() -> Option<Value> {
+    if let Ok(guard) = OFFICIAL_USAGE_MEMORY.lock() {
+        if let Some(cached) = guard.as_ref() {
+            return Some(cached.clone());
+        }
+    }
+    let loaded = load_official_usage_cache_from(&official_usage_cache_file())?;
+    if let Ok(mut guard) = OFFICIAL_USAGE_MEMORY.lock() {
+        *guard = Some(loaded.clone());
+    }
+    Some(loaded)
+}
+
+fn remember_official_usage(payload: &Value) {
+    if let Ok(mut guard) = OFFICIAL_USAGE_MEMORY.lock() {
+        *guard = Some(payload.clone());
+    }
+    save_official_usage_cache_to(&official_usage_cache_file(), payload);
+}
+
+/// 统计页默认读缓存；`refresh = true` 时才重新请求官方用量接口。
+pub async fn official_usage_for_statistics(accounts: &[Value], at_ms: i64, refresh: bool) -> Value {
+    if !refresh {
+        if let Some(cached) = remembered_official_usage() {
+            return cached;
+        }
+    }
+    let _guard = official_usage_fetch_lock().lock().await;
+    if !refresh {
+        if let Some(cached) = remembered_official_usage() {
+            return cached;
+        }
+    }
+    let usage = collect_official_usage(accounts, at_ms).await;
+    remember_official_usage(&usage);
+    usage
+}
 
 #[derive(Clone, Debug)]
 struct RequestRow {
@@ -344,6 +535,29 @@ fn aggregate_models(rows: &[RequestRow]) -> Vec<Value> {
     model_usage_values(usage)
 }
 
+/// 生成 range_start..=range_end 的逐日序列（无数据的天补 0，模型聚合缺省为空）。
+fn daily_series(
+    totals: &HashMap<NaiveDate, f64>,
+    models: &HashMap<NaiveDate, HashMap<String, (usize, f64)>>,
+    range_start: NaiveDate,
+    range_end: NaiveDate,
+) -> Vec<Value> {
+    let mut daily = Vec::new();
+    let mut date = range_start;
+    while date <= range_end {
+        daily.push(json!({
+            "date": date.format("%Y-%m-%d").to_string(),
+            "usage": totals.get(&date).copied().unwrap_or(0.0),
+            "models": models
+                .get(&date)
+                .map(|models| model_usage_values(models.clone()))
+                .unwrap_or_default(),
+        }));
+        date += Duration::days(1);
+    }
+    daily
+}
+
 fn request_value(account_id: &str, account_name: &str, row: &RequestRow) -> Value {
     json!({
         "accountId": account_id,
@@ -368,6 +582,12 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
     let mut account_rows = Vec::new();
     let mut errors = Vec::new();
     let mut daily_totals: HashMap<NaiveDate, f64> = HashMap::new();
+    let mut daily_models: HashMap<NaiveDate, HashMap<String, (usize, f64)>> = HashMap::new();
+    let mut account_daily_totals: HashMap<String, HashMap<NaiveDate, f64>> = HashMap::new();
+    let mut account_daily_models: HashMap<
+        String,
+        HashMap<NaiveDate, HashMap<String, (usize, f64)>>,
+    > = HashMap::new();
     let mut total_today = 0.0;
     let mut total_week = 0.0;
     let mut total_month = 0.0;
@@ -387,9 +607,25 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
                 total_month += usage_month;
                 for row in &result.rows {
                     add_model_usage(&mut model_totals, row);
+                    // 每日按模型聚合（全量，不受 100 条明细限制）
+                    add_model_usage(daily_models.entry(row.date).or_default(), row);
+                    // 单账号每日按模型聚合（同样不受明细条数限制）
+                    add_model_usage(
+                        account_daily_models
+                            .entry(account_id.clone())
+                            .or_default()
+                            .entry(row.date)
+                            .or_default(),
+                        row,
+                    );
                 }
                 for (date, amount) in daily {
                     *daily_totals.entry(date).or_insert(0.0) += amount;
+                    *account_daily_totals
+                        .entry(account_id.clone())
+                        .or_default()
+                        .entry(date)
+                        .or_insert(0.0) += amount;
                 }
 
                 let mut sorted_rows = result.rows.clone();
@@ -413,6 +649,16 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
                     "reportedTotal": result.reported_total,
                     "fetchedCount": result.fetched_raw,
                     "models": aggregate_models(&result.rows),
+                    "daily": daily_series(
+                        account_daily_totals
+                            .get(&account_id)
+                            .unwrap_or(&HashMap::new()),
+                        account_daily_models
+                            .get(&account_id)
+                            .unwrap_or(&HashMap::new()),
+                        range_start,
+                        range_end,
+                    ),
                 }));
             }
             Err(error) => {
@@ -434,6 +680,7 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
                     "reportedTotal": Value::Null,
                     "fetchedCount": 0,
                     "models": [],
+                    "daily": [],
                 }));
             }
         }
@@ -445,15 +692,7 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
         .map(|(_, value)| value)
         .collect();
 
-    let mut daily = Vec::new();
-    let mut date = range_start;
-    while date <= range_end {
-        daily.push(json!({
-            "date": date.format("%Y-%m-%d").to_string(),
-            "usage": daily_totals.get(&date).copied().unwrap_or(0.0),
-        }));
-        date += Duration::days(1);
-    }
+    let daily = daily_series(&daily_totals, &daily_models, range_start, range_end);
 
     let status = if accounts.is_empty() {
         "unavailable"
@@ -469,6 +708,7 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
         "status": status,
         "rangeStart": range_start_text,
         "rangeEnd": range_end_text,
+        "collectedAt": at_ms,
         "summary": {
             "usageToday": total_today,
             "usage7Days": total_week,
@@ -634,5 +874,68 @@ mod tests {
             error_message(&json!({"code": -1, "message": "secret token"})),
             "官方请求失败（网络或服务不可达）"
         );
+    }
+
+    #[test]
+    fn cache_round_trip_keeps_projection_and_strips_prompt_fields() {
+        let payload = json!({
+            "status": "complete",
+            "rangeStart": "2026-07-26",
+            "rangeEnd": "2026-08-25",
+            "collectedAt": 1,
+            "summary": { "usageToday": 1.5, "usage7Days": 3.0, "usageThisMonth": 3.0 },
+            "daily": [{ "date": "2026-08-25", "usage": 1.5, "models": [{ "model": "model-a", "requestCount": 1, "credit": 1.5 }] }],
+            "models": [{ "model": "model-a", "requestCount": 1, "credit": 1.5 }],
+            "accounts": [{
+                "accountId": "account-1",
+                "accountName": "one@example.com",
+                "ok": true,
+                "requestCount": 1,
+                "detailTruncated": false,
+                "usageToday": 1.5,
+                "usage7Days": 1.5,
+                "usageThisMonth": 1.5,
+                "error": null,
+                "reportedTotal": 1,
+                "fetchedCount": 1,
+                "models": [{ "model": "model-a", "requestCount": 1, "credit": 1.5 }],
+                "daily": []
+            }],
+            "requests": [{
+                "accountId": "account-1",
+                "accountName": "one@example.com",
+                "requestId": "req-1",
+                "credit": 1.5,
+                "model": "model-a",
+                "client": "cli",
+                "requestTime": "2026-08-25 12:00:00",
+                "input": "do not persist this prompt"
+            }],
+            "detailLimitPerAccount": 100,
+            "errors": [],
+            "secret": "drop-me"
+        });
+        let path = std::env::temp_dir().join(format!(
+            "wb-switch-official-usage-cache-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        save_official_usage_cache_to(&path, &payload);
+        let loaded = load_official_usage_cache_from(&path).expect("valid cache");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded["status"], "complete");
+        assert_eq!(loaded["summary"]["usageToday"], 1.5);
+        assert_eq!(loaded["requests"][0]["requestId"], "req-1");
+        assert!(loaded.get("secret").is_none());
+        let text = loaded.to_string();
+        assert!(!text.contains("do not persist"));
+        assert!(!text.contains("drop-me"));
+    }
+
+    #[test]
+    fn cache_parser_rejects_corrupt_and_unknown_status() {
+        assert!(parse_official_usage_cache("not-json").is_none());
+        assert!(parse_official_usage_cache("{}").is_none());
+        assert!(parse_official_usage_cache(r#"{"payload":{"status":"nope"}}"#).is_none());
     }
 }

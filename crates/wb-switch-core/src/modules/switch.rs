@@ -30,8 +30,8 @@ pub fn switch_account(
     };
 
     progress("开始切换账号…");
-    let acc = account::find_account(account_id)
-        .ok_or_else(|| format!("账号不存在: {account_id}"))?;
+    let acc =
+        account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
     let backup = auth_file::backup_auth_file();
 
     let mut copy_report: Option<Value> = None;
@@ -46,8 +46,7 @@ pub fn switch_account(
         }
         if share_sessions {
             // 旧的「全体转移」兼容路径（默认关闭），Rust 版暂未实现
-            session_report =
-                Some(json!({"error": "share_sessions 兼容路径暂未在 Rust 版实现"}));
+            session_report = Some(json!({"error": "share_sessions 兼容路径暂未在 Rust 版实现"}));
         }
     }
     progress("正在写入认证文件…");

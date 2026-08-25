@@ -6,7 +6,9 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewWindowBuilder, Window, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewWindowBuilder, Window, WindowEvent,
+};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use wb_switch_core::modules::{checkin, update};
@@ -606,12 +608,10 @@ mod tests {
             super::app_bundle_path_from_exe(Path::new("/Users/x/target/debug/wb-switch-rust"))
                 .is_none()
         );
-        assert!(
-            super::app_bundle_path_from_exe(Path::new(
-                "/Applications/workbuddy-switch.app/Contents/Resources/icon.icns"
-            ))
-            .is_none()
-        );
+        assert!(super::app_bundle_path_from_exe(Path::new(
+            "/Applications/workbuddy-switch.app/Contents/Resources/icon.icns"
+        ))
+        .is_none());
     }
 
     #[test]

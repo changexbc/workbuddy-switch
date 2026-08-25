@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   CircleCheck,
+  Columns3,
   Download,
   FileDown,
   FileUp,
   Loader2,
-  MoreHorizontal,
   QrCode,
   RefreshCw,
+  Rows3,
   Terminal,
 } from "lucide-react";
 
@@ -16,7 +17,6 @@ import { AccountCard } from "@/components/account-card";
 import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -32,6 +32,7 @@ import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import * as api from "@/lib/api";
 import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CreditExpiry } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
 
 function expiringSoonAmount(credit?: CreditExpiry): number {
@@ -105,6 +106,7 @@ export default function AccountsPage() {
     importLocal,
     creditMap,
     creditLoadingMap,
+    creditUpdatedAtMap,
     refreshingCredits,
     ensureCredits,
     refreshCredits,
@@ -118,7 +120,6 @@ export default function AccountsPage() {
   const [autoCheckinSaving, setAutoCheckinSaving] = useState(false);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
-  const [refreshingCheckin, setRefreshingCheckin] = useState(false);
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
@@ -126,6 +127,26 @@ export default function AccountsPage() {
   const [installConfirmOpen, setInstallConfirmOpen] = useState(false);
   /** 删除账号确认目标（null=关闭） */
   const [deleteTarget, setDeleteTarget] = useState<AccountMeta | null>(null);
+  /** 紧凑模式：卡片更小、同屏更多列；默认开启，持久化到 localStorage */
+  const [compact, setCompact] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("wb-switch.compact") !== "0";
+    } catch {
+      return true;
+    }
+  });
+
+  function toggleCompact() {
+    setCompact((value) => {
+      const next = !value;
+      try {
+        localStorage.setItem("wb-switch.compact", next ? "1" : "0");
+      } catch {
+        /* 存储不可用时静默 */
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     void fetchAll();
@@ -300,20 +321,6 @@ export default function AccountsPage() {
     toast.success("积分到期情况已刷新");
   }
 
-  async function onRefreshCheckin() {
-    if (!accounts.length || refreshingCheckin) return;
-    setRefreshingCheckin(true);
-    try {
-      const next = await fetchTodayCheckinMap(accounts.map((account) => account.id));
-      setCheckinMap((prev) => ({ ...prev, ...next }));
-      toast.success("签到状态已刷新");
-    } catch (e) {
-      toast.error("签到状态刷新失败", { description: api.asError(e) });
-    } finally {
-      setRefreshingCheckin(false);
-    }
-  }
-
   async function onSwitchCodebuddyCli(account: AccountMeta) {
     setCodebuddyCliSwitchingId(account.id);
     try {
@@ -395,26 +402,12 @@ export default function AccountsPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-4 pt-1">
-            <div className="flex items-center gap-2">
-              <label htmlFor="accounts-auto-checkin" className="flex items-center gap-1.5 text-sm">
-                <CircleCheck className="size-4 text-muted-foreground" />
-                自动签到
-              </label>
-              <Switch
-                id="accounts-auto-checkin"
-                checked={autoCheckinConfig?.enabled ?? false}
-                disabled={!autoCheckinConfig || autoCheckinSaving}
-                onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
-                aria-label="自动签到"
-              />
-              {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
-            </div>
             <div className="flex items-center gap-2.5">
               <span className="group relative inline-flex cursor-default">
                 <span
                   className={
                     status?.running
-                      ? "inline-flex rounded-[22%] bg-emerald-500 p-[2px] shadow-sm shadow-emerald-500/40"
+                      ? "inline-flex rounded-[22%] bg-primary p-[2px] shadow-sm shadow-primary/40"
                       : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
                   }
                 >
@@ -428,7 +421,7 @@ export default function AccountsPage() {
                 <span
                   className={
                     codebuddyCli?.configured
-                      ? "inline-flex rounded-[22%] bg-emerald-500 p-[2px] shadow-sm shadow-emerald-500/40"
+                      ? "inline-flex rounded-[22%] bg-primary p-[2px] shadow-sm shadow-primary/40"
                       : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
                   }
                 >
@@ -443,7 +436,7 @@ export default function AccountsPage() {
         </div>
       </header>
 
-      <div className="relative mb-6 overflow-visible rounded-2xl border border-slate-200/90 bg-gradient-to-r from-slate-50/95 via-white to-emerald-50/25 px-5 py-5 shadow-[0_6px_20px_rgba(15,23,42,.025)]">
+      <div className="relative mb-6 overflow-visible rounded-2xl border border-border bg-muted/30 px-5 py-5 shadow-[0_6px_20px_rgba(15,23,42,.025)]">
         <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
           <div className="absolute -right-12 -top-20 size-44 rounded-full border-[28px] border-slate-400/[0.035]" />
         </div>
@@ -454,16 +447,15 @@ export default function AccountsPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
             <Button
-              className="h-10 rounded-xl bg-blue-600 px-4 text-white shadow-sm hover:bg-blue-700 focus-visible:border-blue-600 focus-visible:ring-blue-500/35"
+              className="h-10 rounded-xl bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90"
               onClick={() => setOauthOpen(true)}
             >
               <QrCode />OAuth 扫码添加
             </Button>
-            <Button className="h-10 rounded-xl px-4 bg-white/85" onClick={onImport} disabled={importing} variant="outline">
+            <Button className="h-10 rounded-xl px-4" onClick={onImport} disabled={importing} variant="outline">
               {importing ? <Loader2 className="animate-spin" /> : <Download />}导入本机账号
             </Button>
           </div>
-          <div className="hidden h-9 w-px bg-border lg:block" />
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setImportOpen(true)} title="从备份文件导入账号">
               <FileUp />导入备份
@@ -471,21 +463,6 @@ export default function AccountsPage() {
             <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setExportOpen(true)} disabled={accounts.length === 0} title="导出账号备份">
               <FileDown />导出
             </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-9 px-2.5" aria-label="更多账号操作" title="更多账号操作">
-                  <MoreHorizontal />更多
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem disabled={refreshingCredits || accounts.length === 0} onSelect={() => void onRefreshCredits()}>
-                  <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />刷新积分
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={refreshingCheckin || accounts.length === 0} onSelect={() => void onRefreshCheckin()}>
-                  {refreshingCheckin ? <Loader2 className="animate-spin" /> : <CircleCheck />}刷新签到状态
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
         </div>
       </div>
@@ -537,13 +514,33 @@ export default function AccountsPage() {
 
       <section className="mt-7 min-w-0" aria-labelledby="accounts-list-title">
         <div className="mb-4 flex items-center justify-between gap-4">
-          <div className="flex items-baseline gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <h2 id="accounts-list-title" className="text-base font-semibold">账号</h2>
             <span className="text-xs text-muted-foreground">{accounts.length} 个账号</span>
+            <span className="h-4 w-px bg-border" aria-hidden="true" />
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="accounts-auto-checkin" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <CircleCheck className="size-3.5" />
+                自动签到
+              </label>
+              <Switch
+                id="accounts-auto-checkin"
+                checked={autoCheckinConfig?.enabled ?? false}
+                disabled={!autoCheckinConfig || autoCheckinSaving}
+                onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
+                aria-label="自动签到"
+              />
+              {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+            </div>
           </div>
-          <Button variant="ghost" size="sm" className="h-8 px-2.5" disabled={refreshingCredits || accounts.length === 0} onClick={() => void onRefreshCredits()} title="刷新全部账号积分">
-            <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />刷新
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" className={cn("h-8 px-2.5", compact && "bg-accent text-accent-foreground")} onClick={toggleCompact} title={compact ? "切换为宽松模式" : "切换为紧凑模式"} aria-label={compact ? "切换为宽松模式" : "切换为紧凑模式"}>
+              {compact ? <Rows3 /> : <Columns3 />}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-8 px-2.5" disabled={refreshingCredits || accounts.length === 0} onClick={() => void onRefreshCredits()} title="刷新全部账号积分">
+              <RefreshCw className={refreshingCredits ? "animate-spin" : undefined} />刷新
+            </Button>
+          </div>
         </div>
         {loading && accounts.length === 0 ? (
           <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
@@ -555,11 +552,12 @@ export default function AccountsPage() {
             暂无账号。点击上方按钮导入本机账号或扫码登录。
           </div>
         ) : (
-          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,430px),1fr))] items-start gap-5">
+          <div className={cn("grid min-w-0 items-start gap-5", compact ? "grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))]" : "grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))]")}>
             {orderedAccounts.map((a) => (
               <AccountCard
                 key={a.id}
                 account={a}
+                compact={compact}
                 onDelete={onDelete}
                 onSwitch={setSwitchAccount}
                 onCheckin={onCheckin}
@@ -567,6 +565,7 @@ export default function AccountsPage() {
                 todayCheckedIn={checkinMap[a.id]}
                 credit={creditMap[a.id]}
                 creditLoading={creditLoadingMap[a.id]}
+                creditUpdatedAt={creditUpdatedAtMap[a.id]}
                 creditPriority={a.id === priorityAccountId}
                 workbuddyActive={isWorkbuddyCurrent(a, current)}
                 codebuddyCliConfigured={codebuddyCli?.configured}

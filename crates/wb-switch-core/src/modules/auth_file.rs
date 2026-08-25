@@ -18,13 +18,9 @@ pub fn auth_file_path() -> PathBuf {
         "Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info",
     );
     #[cfg(target_os = "windows")]
-    return home.join(
-        "AppData/Local/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info",
-    );
+    return home.join("AppData/Local/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info");
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    return home.join(
-        ".local/share/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info",
-    );
+    return home.join(".local/share/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info");
 }
 
 /// WorkBuddy 应用路径。
@@ -107,7 +103,11 @@ pub fn build_account_obj(acc: &Value) -> Value {
         "deployStatus",
         json!({"statusCode": 0, "statusMsg": "", "detailMsg": ""}),
     );
-    setdefault(&mut obj, "sso", json!({"domain": "", "domainModifiedTimes": 0}));
+    setdefault(
+        &mut obj,
+        "sso",
+        json!({"domain": "", "domainModifiedTimes": 0}),
+    );
     Value::Object(obj)
 }
 
@@ -144,7 +144,11 @@ pub fn build_auth_obj(acc: &Value) -> Value {
         get_str(acc, "domain").unwrap_or_default().into(),
     );
     obj.insert("lastRefreshTime".to_string(), json!(now));
-    setdefault(&mut obj, "scope", json!("openid profile offline_access email"));
+    setdefault(
+        &mut obj,
+        "scope",
+        json!("openid profile offline_access email"),
+    );
 
     if let Some(expires_at) = expires_at {
         obj.insert("expiresAt".to_string(), json!(expires_at));
@@ -183,7 +187,11 @@ pub fn write_account_to_auth_file(acc: &Value) -> Result<(), String> {
     eprintln!(
         "[auth] write_account: existing is_object={} allAccounts_len={}",
         existing.is_object(),
-        existing.get("allAccounts").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+        existing
+            .get("allAccounts")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0)
     );
     let all_accounts = existing
         .get("allAccounts")
@@ -202,7 +210,11 @@ pub fn write_account_to_auth_file(acc: &Value) -> Result<(), String> {
             .get("uid")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .or_else(|| a.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()))
+            .or_else(|| {
+                a.get("id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or("");
         primary != target_uid
     });
@@ -228,10 +240,9 @@ pub fn write_account_to_auth_file(acc: &Value) -> Result<(), String> {
     }
 
     // 写后校验
-    let written: Value = serde_json::from_str(
-        &std::fs::read_to_string(&path).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     let written_token = written
         .get("auth")
         .and_then(|a| a.get("accessToken"))
@@ -289,8 +300,10 @@ fn imported_account_from_root(root: Value) -> Option<Value> {
         .unwrap_or_else(|| "Bearer".to_string());
     let domain = get_str(&root, "domain").or_else(|| get_str(&auth_obj, "domain"));
     let expires_at = parse_ts(root.get("expiresAt").or_else(|| auth_obj.get("expiresAt")));
-    let refresh_expires_at =
-        parse_ts(root.get("refreshExpiresAt").or_else(|| auth_obj.get("refreshExpiresAt")));
+    let refresh_expires_at = parse_ts(
+        root.get("refreshExpiresAt")
+            .or_else(|| auth_obj.get("refreshExpiresAt")),
+    );
 
     if access_token.is_none() {
         return None;
@@ -340,8 +353,14 @@ mod tests {
     fn auth_file_path_is_expected_location() {
         let p = auth_file_path();
         let s = p.to_string_lossy();
-        assert!(s.contains("CodeBuddyExtension"), "路径应包含 CodeBuddyExtension: {s}");
-        assert!(s.ends_with("workbuddy-desktop.info"), "文件名应为 workbuddy-desktop.info: {s}");
+        assert!(
+            s.contains("CodeBuddyExtension"),
+            "路径应包含 CodeBuddyExtension: {s}"
+        );
+        assert!(
+            s.ends_with("workbuddy-desktop.info"),
+            "文件名应为 workbuddy-desktop.info: {s}"
+        );
     }
 
     #[test]

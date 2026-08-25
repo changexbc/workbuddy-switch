@@ -28,8 +28,8 @@ pub fn parse_accounts_json(text: &str) -> Result<Vec<Value>, String> {
     if text.trim().is_empty() {
         return Err("文件内容为空".to_string());
     }
-    let parsed: Value = serde_json::from_str(text)
-        .map_err(|e| format!("文件不是合法的 JSON：{e}"))?;
+    let parsed: Value =
+        serde_json::from_str(text).map_err(|e| format!("文件不是合法的 JSON：{e}"))?;
     let array = parsed
         .as_array()
         .ok_or_else(|| "文件内容应为 JSON 数组（账号列表）".to_string())?;
@@ -184,14 +184,23 @@ fn validate_export_path(path: &str) -> Result<(), String> {
     if !p.is_absolute() {
         return Err("导出路径必须是绝对路径".to_string());
     }
-    if !p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) {
+    if !p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("json"))
+        .unwrap_or(false)
+    {
         return Err("导出文件名必须以 .json 结尾".to_string());
     }
     Ok(())
 }
 
 /// 纯函数：把记录数组写入指定目录下的 JSON 文件，返回完整路径。
-pub fn write_records_to_file(dir: &Path, records: &[Value], file_name: &str) -> Result<String, String> {
+pub fn write_records_to_file(
+    dir: &Path,
+    records: &[Value],
+    file_name: &str,
+) -> Result<String, String> {
     validate_export_file_name(file_name)?;
     let content = serde_json::to_string_pretty(records).map_err(|e| e.to_string())?;
     let path = dir.join(file_name);
@@ -215,7 +224,13 @@ pub fn export_accounts_to_path(ids: &[String], path: &str) -> Result<String, Str
 mod tests {
     use super::*;
 
-    fn record(id: &str, uid: Option<&str>, nickname: &str, email: Option<&str>, token: bool) -> Value {
+    fn record(
+        id: &str,
+        uid: Option<&str>,
+        nickname: &str,
+        email: Option<&str>,
+        token: bool,
+    ) -> Value {
         json!({
             "id": id,
             "uid": uid,
@@ -298,7 +313,8 @@ mod tests {
     #[test]
     fn merge_counts_out_of_range_index_as_skipped() {
         let mut accounts: Vec<Value> = vec![];
-        let result = merge_import_records(&mut accounts, r#"[{ "access_token": "t" }]"#, &[5]).unwrap();
+        let result =
+            merge_import_records(&mut accounts, r#"[{ "access_token": "t" }]"#, &[5]).unwrap();
         assert_eq!(result.imported, 0);
         assert_eq!(result.skipped, 1);
     }
@@ -355,7 +371,10 @@ mod tests {
         let result = merge_import_records(&mut target, &text, &[0]).unwrap();
         assert_eq!(result.imported, 1);
         assert_eq!(target.len(), 1);
-        assert_eq!(target[0]["access_token"], "tok-1", "round-trip 保留 access_token");
+        assert_eq!(
+            target[0]["access_token"], "tok-1",
+            "round-trip 保留 access_token"
+        );
         assert_eq!(target[0]["refresh_token"], "ref-1");
         assert_eq!(target[0]["auth_raw"]["k"], "v");
     }
@@ -376,7 +395,10 @@ mod tests {
         assert_eq!(preview["accounts"][0]["nickname"], "小明");
         assert_eq!(preview["accounts"][0]["email"], "x@y.z");
         assert_eq!(preview["accounts"][0]["hasToken"], true);
-        assert!(preview["accounts"][0].get("access_token").is_none(), "预览不得泄露 token");
+        assert!(
+            preview["accounts"][0].get("access_token").is_none(),
+            "预览不得泄露 token"
+        );
     }
 
     #[test]
@@ -391,19 +413,29 @@ mod tests {
 
     #[test]
     fn export_path_validation() {
-        assert!(validate_export_path("relative/out.json").is_err(), "必须绝对路径");
+        assert!(
+            validate_export_path("relative/out.json").is_err(),
+            "必须绝对路径"
+        );
         assert!(validate_export_path("/tmp/out.txt").is_err(), "必须 .json");
-        assert!(validate_export_path("/tmp/out.JSON").is_ok(), "扩展名不区分大小写");
+        assert!(
+            validate_export_path("/tmp/out.JSON").is_ok(),
+            "扩展名不区分大小写"
+        );
         assert!(validate_export_path("/tmp/out.json").is_ok());
     }
 
     #[test]
     fn export_accounts_to_file_writes_json_with_tokens() {
         let dir = std::env::temp_dir();
-        let file_name = format!("wb-switch-accounts-test-{}.json", uuid::Uuid::new_v4().simple());
+        let file_name = format!(
+            "wb-switch-accounts-test-{}.json",
+            uuid::Uuid::new_v4().simple()
+        );
         let records = vec![record("a1", Some("u1"), "甲", None, true)];
         let path = write_records_to_file(&dir, &records, &file_name).unwrap();
-        let written: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let written: Vec<Value> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(written.len(), 1);
         assert_eq!(written[0]["access_token"], "token-a1", "导出文件保留 token");

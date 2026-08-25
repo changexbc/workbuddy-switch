@@ -91,12 +91,27 @@ const ROUTES: Record<string, Route> = {
   switch_progress: { method: "GET", path: "/api/switch/progress" },
 };
 
+function queryString(args?: Record<string, unknown>): string {
+  if (!args) return "";
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined || value === null) continue;
+    params.set(key, String(value));
+  }
+  const text = params.toString();
+  return text ? `?${text}` : "";
+}
+
 async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const route = ROUTES[cmd];
   if (!route) throw new Error(`webui 模式暂不支持该操作: ${cmd}`);
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${route.path}`, {
+    const url =
+      route.method === "GET"
+        ? `${API_BASE}${route.path}${queryString(args)}`
+        : `${API_BASE}${route.path}`;
+    res = await fetch(url, {
       method: route.method,
       headers: { "Content-Type": "application/json" },
       body: route.method === "POST" ? JSON.stringify(args ?? {}) : undefined,
@@ -272,8 +287,8 @@ export function getCreditExpiry(accountId: string): Promise<CreditExpiry> {
   return call("get_credit_expiry", { accountId });
 }
 
-export function getCreditStatistics(): Promise<CreditStatistics> {
-  return call("get_credit_statistics");
+export function getCreditStatistics(refresh = false): Promise<CreditStatistics> {
+  return call("get_credit_statistics", refresh ? { refresh: true } : undefined);
 }
 
 export function checkin(accountId: string): Promise<CheckinResult> {

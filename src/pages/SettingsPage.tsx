@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
+import { getThemePreference, setThemePreference, type ThemePreference } from "@/lib/theme";
 import type {
   AutoRotateConfig,
   CheckinConfig,
@@ -260,7 +262,7 @@ function AutoCheckinCard() {
             <p className="py-3 text-center text-sm text-muted-foreground">暂无签到记录</p>
           ) : (
             <div className="max-h-64 overflow-y-auto pr-1">
-              {logs.map((l, i) => {
+              {[...logs].reverse().map((l, i) => {
                 const tone = logLabel(l.result);
                 return (
                   <div
@@ -886,6 +888,44 @@ function StartupCard() {
   );
 }
 
+/** 外观：主题选择（持久化到 localStorage）。 */
+function AppearanceCard() {
+  const [theme, setTheme] = useState<ThemePreference>(getThemePreference);
+
+  function onThemeChange(value: string) {
+    if (value !== "system" && value !== "light" && value !== "dark") return;
+    setThemePreference(value);
+    setTheme(value);
+  }
+
+  return (
+    <SettingsGroup
+      id="settings-appearance"
+      title="外观"
+    >
+      <CardContent className="space-y-0 p-0">
+        <SettingsFieldRow
+          className="border-b-0"
+          label="主题"
+          description="选择浅色、深色，或跟随系统外观自动切换"
+          htmlFor="appearance-theme"
+        >
+          <Select value={theme} onValueChange={onThemeChange}>
+            <SelectTrigger id="appearance-theme" size="sm" className="w-full sm:w-40" aria-label="主题">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="system">系统</SelectItem>
+              <SelectItem value="light">浅色</SelectItem>
+              <SelectItem value="dark">深色</SelectItem>
+            </SelectContent>
+          </Select>
+        </SettingsFieldRow>
+      </CardContent>
+    </SettingsGroup>
+  );
+}
+
 /** 设置页：自动签到配置 / 权限检测 / 更新配置。 */
 export default function SettingsPage() {
   return (
@@ -896,6 +936,7 @@ export default function SettingsPage() {
       </header>
 
       <div className="min-w-0 space-y-12">
+        <AppearanceCard />
         <PermissionCheckCard />
         <AutoCheckinCard />
         <AutoRotateCard />

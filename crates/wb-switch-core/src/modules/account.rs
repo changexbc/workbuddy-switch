@@ -186,7 +186,10 @@ pub fn build_auth_headers(account: &Value) -> HashMap<String, String> {
     let mut headers = HashMap::new();
     headers.insert(
         "Authorization".to_string(),
-        format!("Bearer {}", get_str(account, "access_token").unwrap_or_default()),
+        format!(
+            "Bearer {}",
+            get_str(account, "access_token").unwrap_or_default()
+        ),
     );
     headers.insert("Accept".to_string(), "application/json".to_string());
     headers.insert("Content-Type".to_string(), "application/json".to_string());
@@ -234,8 +237,14 @@ mod tests {
 
     #[test]
     fn account_display_name_priority() {
-        assert_eq!(account_display_name(&json!({"email": "a@b.c", "nickname": "n"})), "a@b.c");
-        assert_eq!(account_display_name(&json!({"nickname": "n", "uid": "u"})), "n");
+        assert_eq!(
+            account_display_name(&json!({"email": "a@b.c", "nickname": "n"})),
+            "a@b.c"
+        );
+        assert_eq!(
+            account_display_name(&json!({"nickname": "n", "uid": "u"})),
+            "n"
+        );
         assert_eq!(account_display_name(&json!({"uid": "u"})), "u");
         assert_eq!(account_display_name(&json!({})), "unknown");
     }
@@ -261,10 +270,8 @@ mod tests {
     #[test]
     fn same_nickname_with_different_uids_is_retained() {
         let mut accounts = vec![account("old", Some("uid-1"), "同名", Some("同名"))];
-        let saved = upsert_collected_account(
-            &mut accounts,
-            account("new", Some("uid-2"), "同名", None),
-        );
+        let saved =
+            upsert_collected_account(&mut accounts, account("new", Some("uid-2"), "同名", None));
 
         assert_eq!(accounts.len(), 2);
         assert_eq!(saved["id"], "new");
@@ -305,12 +312,7 @@ mod tests {
 
     #[test]
     fn real_email_is_fallback_only_when_collected_uid_is_missing() {
-        let mut accounts = vec![account(
-            "stable",
-            None,
-            "旧名称",
-            Some("user@example.com"),
-        )];
+        let mut accounts = vec![account("stable", None, "旧名称", Some("user@example.com"))];
         let saved = upsert_collected_account(
             &mut accounts,
             account("generated", None, "新名称", Some("USER@example.com")),
@@ -324,10 +326,7 @@ mod tests {
     #[test]
     fn legacy_synthetic_email_does_not_merge_accounts() {
         let mut accounts = vec![account("old", None, "同名", Some("同名"))];
-        upsert_collected_account(
-            &mut accounts,
-            account("new", None, "同名", Some("同名")),
-        );
+        upsert_collected_account(&mut accounts, account("new", None, "同名", Some("同名")));
 
         assert_eq!(accounts.len(), 2);
     }

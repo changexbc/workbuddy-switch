@@ -7,7 +7,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use tauri::Emitter;
-use wb_switch_core::modules::{account, auth_file, checkin, codebuddy_cli, credit_usage, credits, export_import, oauth, process, refresh, rotate, session, switch, update};
+use wb_switch_core::modules::{
+    account, auth_file, checkin, codebuddy_cli, credit_usage, credits, export_import, oauth,
+    process, refresh, rotate, session, switch, update,
+};
 
 #[derive(Serialize)]
 pub struct AppStatus {
@@ -34,7 +37,9 @@ pub fn get_status() -> AppStatus {
         running: process::is_workbuddy_running(),
         auth_file: auth_file::auth_file_path().to_string_lossy().to_string(),
         current,
-        app_path: auth_file::workbuddy_app_path().to_string_lossy().to_string(),
+        app_path: auth_file::workbuddy_app_path()
+            .to_string_lossy()
+            .to_string(),
         version: update::APP_VERSION.to_string(),
     }
 }
@@ -111,10 +116,7 @@ pub fn export_accounts(account_ids: Vec<String>) -> Result<Value, String> {
 
 /// POST /api/export-accounts-to-path —— 把勾选账号的完整记录写入用户选择的路径（保存对话框产物）。
 #[tauri::command]
-pub fn export_accounts_to_path(
-    account_ids: Vec<String>,
-    path: String,
-) -> Result<Value, String> {
+pub fn export_accounts_to_path(account_ids: Vec<String>, path: String) -> Result<Value, String> {
     export_import::export_accounts_to_path(&account_ids, &path)
         .map(|path| json!({ "ok": true, "path": path }))
 }
@@ -179,7 +181,10 @@ pub fn check_auth_permission() -> Value {
 #[tauri::command]
 pub fn reveal_app_in_finder() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let _ = std::process::Command::new("open").arg("-R").arg(&exe).spawn();
+    let _ = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&exe)
+        .spawn();
     Ok(())
 }
 
@@ -201,12 +206,17 @@ pub async fn switch_account(
     let restart = restart.unwrap_or(true);
     let share_sessions = share_sessions.unwrap_or(false);
     let copy_ids = copy_session_ids.unwrap_or_default();
-    let progress: switch::ProgressFn =
-        Box::new(move |message| {
-            let _ = app.emit("switch-progress", json!({ "message": message }));
-        });
+    let progress: switch::ProgressFn = Box::new(move |message| {
+        let _ = app.emit("switch-progress", json!({ "message": message }));
+    });
     tauri::async_runtime::spawn_blocking(move || {
-        switch::switch_account(Some(&progress), &account_id, restart, share_sessions, &copy_ids)
+        switch::switch_account(
+            Some(&progress),
+            &account_id,
+            restart,
+            share_sessions,
+            &copy_ids,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -238,8 +248,7 @@ pub async fn copy_sessions(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
-        Ok(session::copy_sessions_for_switch(&target, &session_ids)
-            .unwrap_or_else(|| json!({})))
+        Ok(session::copy_sessions_for_switch(&target, &session_ids).unwrap_or_else(|| json!({})))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -264,9 +273,10 @@ pub async fn get_credit_expiry(account_id: String) -> Result<Value, String> {
 }
 
 /// GET /api/credits/stats —— 本地快照与官方请求用量统计。
+/// `refresh = true` 时才重新请求官方用量；默认读缓存。
 #[tauri::command]
-pub async fn get_credit_statistics() -> Value {
-    credit_usage::get_statistics().await
+pub async fn get_credit_statistics(refresh: Option<bool>) -> Value {
+    credit_usage::get_statistics(refresh.unwrap_or(false)).await
 }
 
 /// POST /api/checkin —— 单账号立即签到。

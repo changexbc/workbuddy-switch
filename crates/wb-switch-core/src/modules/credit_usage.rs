@@ -196,6 +196,28 @@ fn local_date_string(ts: i64) -> Option<String> {
     local_date(ts).map(|date| date.format("%Y-%m-%d").to_string())
 }
 
+/// 生成逐日观察序列（daily_start..=today，无数据的天补 0）；无快照起点时返回空数组。
+fn local_daily_series(
+    daily: &HashMap<String, f64>,
+    daily_start: Option<NaiveDate>,
+    today: NaiveDate,
+) -> Vec<Value> {
+    let Some(start) = daily_start else {
+        return Vec::new();
+    };
+    let mut points = Vec::new();
+    let mut date = start;
+    while date <= today {
+        let key = date.format("%Y-%m-%d").to_string();
+        points.push(json!({
+            "date": key,
+            "usage": daily.get(&key).copied().unwrap_or(0.0),
+        }));
+        date += ChronoDuration::days(1);
+    }
+    points
+}
+
 fn parse_checkin_event(value: &Value) -> Option<CheckinEvent> {
     let ts = value
         .get("ts")
@@ -323,7 +345,7 @@ fn build_statistics(
 
     let mut usage_events = Vec::new();
     let mut usage_totals: HashMap<String, (f64, f64, f64)> = HashMap::new();
-    let mut daily_usage: HashMap<String, f64> = HashMap::new();
+    let mut daily_usage: HashMap<String, HashMap<String, f64>> = HashMap::new();
     let mut latest_snapshots = HashMap::new();
     for (account_id, mut snapshots) in by_account {
         snapshots.sort_by_key(|snapshot: &Snapshot| snapshot.ts);
@@ -351,7 +373,11 @@ fn build_statistics(
             if month_usage {
                 entry.2 += amount;
             }
-            *daily_usage.entry(date.clone()).or_default() += amount;
+            *daily_usage
+                .entry(account_id.clone())
+                .or_default()
+                .entry(date.clone())
+                .or_default() += amount;
             usage_events.push(UsageEvent {
                 ts: current.ts,
                 date,
@@ -414,6 +440,13 @@ fn build_statistics(
         }
     }
 
+    // 逐日序列起点：全局最早快照与保留窗口下界的较大者；无快照时为 None（返回空序列）
+    let daily_start = coverage_start_at.and_then(local_date).map(|coverage_date| {
+        let earliest = today - ChronoDuration::days(CREDIT_SNAPSHOT_RETENTION_DAYS - 1);
+        coverage_date.max(earliest)
+    });
+    let empty_account_daily: HashMap<String, f64> = HashMap::new();
+
     let account_summaries: Vec<Value> = account_ids
         .iter()
         .map(|account_id| {
@@ -445,27 +478,22 @@ fn build_statistics(
                 "checkinStatusToday": today_checkin.map(|event| event.result.clone()),
                 "lastCheckinAt": last_checkin.map(|event| event.ts),
                 "lastCheckinResult": last_checkin.map(|event| event.result.clone()),
+                "daily": local_daily_series(
+                    daily_usage.get(account_id).unwrap_or(&empty_account_daily),
+                    daily_start,
+                    today,
+                ),
             })
         })
         .collect();
 
-    let daily = coverage_start_at
-        .and_then(local_date)
-        .map(|coverage_date| {
-            let earliest = today - ChronoDuration::days(CREDIT_SNAPSHOT_RETENTION_DAYS - 1);
-            let mut date = coverage_date.max(earliest);
-            let mut points = Vec::new();
-            while date <= today {
-                let key = date.format("%Y-%m-%d").to_string();
-                points.push(json!({
-                    "date": key,
-                    "usage": daily_usage.get(&key).copied().unwrap_or(0.0),
-                }));
-                date += ChronoDuration::days(1);
-            }
-            points
-        })
-        .unwrap_or_default();
+    let mut aggregate_daily: HashMap<String, f64> = HashMap::new();
+    for account_daily in daily_usage.values() {
+        for (date, amount) in account_daily {
+            *aggregate_daily.entry(date.clone()).or_insert(0.0) += amount;
+        }
+    }
+    let daily = local_daily_series(&aggregate_daily, daily_start, today);
 
     let mut events: Vec<(i64, Value)> = usage_events
         .iter()
@@ -526,16 +554,16 @@ fn build_statistics(
 }
 
 /// 返回本地快照、账号列表、签到日志与官方请求用量的统一统计投影。
-pub async fn get_statistics() -> Value {
+///
+/// `refresh = false` 时官方用量读本地缓存，不打用量接口；
+/// 只有统计页「刷新统计」传入 `refresh = true` 才会重新采集。
+pub async fn get_statistics(refresh: bool) -> Value {
     let at_ms = now_ms();
     let accounts = load_accounts();
-    let mut statistics = build_statistics(
-        &load_snapshots(),
-        &load_checkin_logs(),
-        &accounts,
-        at_ms,
-    );
-    statistics["officialUsage"] = official_usage::collect_official_usage(&accounts, at_ms).await;
+    let mut statistics =
+        build_statistics(&load_snapshots(), &load_checkin_logs(), &accounts, at_ms);
+    statistics["officialUsage"] =
+        official_usage::official_usage_for_statistics(&accounts, at_ms, refresh).await;
     statistics
 }
 

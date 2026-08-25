@@ -18,15 +18,15 @@ export function WorkBuddyMark({ size = 32, className }: MarkProps) {
   );
 }
 
-/** 应用自身的图标（public/icon.png，与 App 图标一致）。 */
+/** 应用自身的透明角色图标；桌面安装图标仍使用 public/icon.png。 */
 export function AppIconMark({ size = 32, className }: MarkProps) {
   return (
     <span
       aria-hidden
-      className={cn("inline-flex shrink-0 overflow-hidden rounded-[22%]", className)}
+      className={cn("inline-flex shrink-0", className)}
       style={{ width: size, height: size }}
     >
-      <img src="/icon.png" alt="" className="size-full object-cover" />
+      <img src="/icon-transparent.png" alt="" className="size-full object-contain" />
     </span>
   );
 }
@@ -62,7 +62,7 @@ export function StatusDot({ on, className }: { on: boolean; className?: string }
   return (
     <span
       aria-hidden
-      className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-emerald-500" : "bg-muted-foreground/35", className)}
+      className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-primary" : "bg-muted-foreground/35", className)}
     />
   );
 }
