@@ -358,7 +358,9 @@ export default function AccountsPage() {
     setCodebuddyCliSwitchingId(account.id);
     try {
       const result = await api.switchCodebuddyCliAccount(account.id);
-      toast.success("CodeBuddy CLI 已切换", { description: `${account.nickname || account.email || account.id}：${result.message || "切换成功"}` });
+      toast.success("CodeBuddy CLI 默认账号已更新", {
+        description: `${account.nickname || account.email || account.id}：${result.message || "配置已更新"}`,
+      });
       await refreshCodebuddyCliStatus();
     } catch (error) {
       toast.error("CodeBuddy CLI 切换失败", { description: api.asError(error) });
@@ -377,7 +379,7 @@ export default function AccountsPage() {
     setInstallingCodebuddyCli(true);
     try {
       const result = await api.installCodebuddyCliHelper();
-      toast.success("CodeBuddy CLI helper 已更新", { description: result.message });
+      toast.success("CodeBuddy CLI 接入已更新", { description: result.message });
       await refreshCodebuddyCliStatus();
     } catch (error) {
       toast.error("CodeBuddy CLI 接入失败", { description: api.asError(error) });
@@ -420,6 +422,7 @@ export default function AccountsPage() {
   const codebuddyCurrentName = codebuddyCli?.configured
     ? codebuddyCli.activeAccountName || "未检测到"
     : "尚未接入";
+  const codebuddyUsesSettingsEnv = codebuddyCli?.authMode === "settings-env";
   return (
     <div className="mx-auto w-full max-w-[1180px] px-6 py-8 sm:px-8 sm:py-9">
       <header className="mb-6">
@@ -457,7 +460,7 @@ export default function AccountsPage() {
                   <CodeBuddyMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  CodeBuddy CLI：{codebuddyCli?.configured ? "已接入" : "未接入"} · 当前账号：{codebuddyCurrentName}
+                  CodeBuddy CLI：{codebuddyCli?.migrationRequired ? "需升级" : codebuddyCli?.configured ? "已接入" : "未接入"} · 当前账号：{codebuddyCurrentName}
                 </span>
               </span>
             </div>
@@ -510,15 +513,29 @@ export default function AccountsPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      {codebuddyCli && (!codebuddyCli.configured || !codebuddyCli.helperSupportsAccountIds) && (
+      {codebuddyCli &&
+        (!codebuddyCli.configured ||
+          (!codebuddyUsesSettingsEnv && !codebuddyCli.helperSupportsAccountIds) ||
+          codebuddyCli.migrationRequired ||
+          codebuddyCli.syncPending) && (
         <Alert className="mb-4">
           <Terminal />
           <AlertTitle>CodeBuddy CLI 接入</AlertTitle>
           <AlertDescription>
             <p>
-              {codebuddyCli.configured
-                ? "当前 helper 仍按旧索引读取账号；升级后将按账号 ID 独立切换，账号增删也不会错位。"
-                : "WorkBuddy 账号与积分功能可正常使用；如需从这里切换 CodeBuddy CLI 账号，点击下方按钮一键接入（自动完成配置，无需手动操作）。"}
+              {codebuddyUsesSettingsEnv
+                ? codebuddyCli.environmentOverride
+                  ? "检测到进程环境变量 CODEBUDDY_AUTH_TOKEN。它会覆盖 settings.json；请先从 Windows 用户或系统环境变量中删除它，再重启本应用与 CodeBuddy CLI。"
+                  : codebuddyCli.syncPending
+                    ? "Windows CLI 认证配置与当前账号 Token 已脱节。点击更新认证后写入最新 Token；当前运行会话不会切换，请由 ACP 重新加载会话或重启 CLI 后生效。"
+                    : codebuddyCli.migrationRequired
+                      ? "检测到旧版 Windows helper 配置。接入后会改用 settings.json 的 env.CODEBUDDY_AUTH_TOKEN，不再执行 helper。"
+                      : "Windows 使用 CodeBuddy settings.json 中的认证 Token；切换或保活刷新后会自动更新。当前运行会话不会切换，请由 ACP 重新加载会话或重启 CLI 后生效。"
+                : codebuddyCli.migrationRequired
+                  ? "检测到旧版 helper，请先升级；升级前不会将 CLI 切换显示为已验证。"
+                  : codebuddyCli.configured
+                    ? "当前 helper 仍按旧索引读取账号；升级后将按账号 ID 独立切换，账号增删也不会错位。"
+                    : "WorkBuddy 账号与积分功能可正常使用；如需从这里切换 CodeBuddy CLI 账号，点击下方按钮一键接入。"}
             </p>
             <DemoAction>
               <Button
@@ -529,7 +546,9 @@ export default function AccountsPage() {
                 disabled={installingCodebuddyCli}
               >
                 {installingCodebuddyCli && <Loader2 className="animate-spin" />}
-                {codebuddyCli.configured ? "升级 CLI helper" : "接入 CLI"}
+                {codebuddyUsesSettingsEnv
+                  ? codebuddyCli.configured ? "更新 CLI 认证" : "接入 CLI"
+                  : codebuddyCli.configured || codebuddyCli.migrationRequired ? "升级 CLI helper" : "接入 CLI"}
               </Button>
             </DemoAction>
           </AlertDescription>
@@ -627,7 +646,7 @@ export default function AccountsPage() {
                 creditUpdatedAt={creditUpdatedAtMap[a.id]}
                 creditPriority={a.id === priorityAccountId}
                 workbuddyActive={isWorkbuddyCurrent(a, current)}
-                codebuddyCliConfigured={codebuddyCli?.configured}
+                codebuddyCliConfigured={codebuddyCli?.configured && !codebuddyCli.migrationRequired && !codebuddyCli.syncPending}
                 codebuddyCliActive={a.id === cliCurrentAccountId}
                 onSwitchCodebuddyCli={onSwitchCodebuddyCli}
                 codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
@@ -662,17 +681,34 @@ export default function AccountsPage() {
         }}
       />
 
-      {/* 接入/升级 CLI helper 确认（桌面 App 不支持 window.confirm） */}
+      {/* 接入/升级 CLI 认证确认（桌面 App 不支持 window.confirm） */}
       <Dialog open={installConfirmOpen} onOpenChange={setInstallConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{codebuddyCli?.configured ? "升级 CodeBuddy CLI helper" : "接入 CodeBuddy CLI"}</DialogTitle>
+            <DialogTitle>
+              {codebuddyUsesSettingsEnv
+                ? "更新 CodeBuddy CLI 认证"
+                : codebuddyCli?.configured || codebuddyCli?.migrationRequired
+                  ? "升级 CodeBuddy CLI helper"
+                  : "接入 CodeBuddy CLI"}
+            </DialogTitle>
             <DialogDescription>
-              {codebuddyCli?.configured ? "升级" : "接入"}会自动写入
-              <code className="mx-1 rounded bg-muted px-1">~/.codebuddy-rotate/helper.cjs</code>
-              并更新
-              <code className="mx-1 rounded bg-muted px-1">~/.codebuddy/settings.json</code>
-              的 apiKeyHelper 配置，是否继续？
+              {codebuddyUsesSettingsEnv ? (
+                <>
+                  将把当前账号的认证 Token 写入
+                  <code className="mx-1 rounded bg-muted px-1">~/.codebuddy/settings.json</code>
+                  的 <code className="mx-1 rounded bg-muted px-1">env.CODEBUDDY_AUTH_TOKEN</code>。
+                  其他配置会保留；更新只影响后续加载的会话，当前运行会话不会切换。是否继续？
+                </>
+              ) : (
+                <>
+                  {codebuddyCli?.configured || codebuddyCli?.migrationRequired ? "升级" : "接入"}会自动写入
+                  <code className="mx-1 rounded bg-muted px-1">~/.codebuddy-rotate/helper.cjs</code>
+                  并更新
+                  <code className="mx-1 rounded bg-muted px-1">~/.codebuddy/settings.json</code>
+                  的 apiKeyHelper 配置，是否继续？
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

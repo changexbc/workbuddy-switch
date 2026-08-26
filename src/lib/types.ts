@@ -316,9 +316,14 @@ export interface CreditStatistics {
 
 export interface CodeBuddyCliStatus {
   configured: boolean;
+  authMode?: "settings-env" | "api-key-helper";
+  environmentOverride?: boolean;
   settingsPresent: boolean;
   helperPresent: boolean;
   helperSupportsAccountIds: boolean;
+  helperCurrent?: boolean;
+  migrationRequired?: boolean;
+  syncPending?: boolean;
   activeIndex: number | null;
   activeAccountId: string | null;
   activeAccountName: string | null;
@@ -330,6 +335,8 @@ export interface CodeBuddyCliSwitchResult {
   ok: boolean;
   configured: boolean;
   synced: boolean;
+  verified?: boolean;
+  authMode?: "settings-env" | "api-key-helper";
   activeIndex?: number;
   activeAccountId?: string;
   source?: string;
@@ -343,6 +350,8 @@ export interface CodeBuddyCliInstallResult {
   configured: boolean;
   helperPresent: boolean;
   helperSupportsAccountIds: boolean;
+  verified?: boolean;
+  authMode?: "settings-env" | "api-key-helper";
   message?: string;
   error?: string;
 }
