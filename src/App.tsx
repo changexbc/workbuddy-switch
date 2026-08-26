@@ -90,7 +90,7 @@ function Layout() {
       {hasUnifiedTitleBar ? (
         <div
           data-tauri-drag-region
-          className="fixed inset-x-0 top-0 z-50 h-16"
+          className="fixed inset-x-0 top-0 z-50 h-8"
           aria-hidden="true"
         />
       ) : null}
