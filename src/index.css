@@ -126,12 +126,14 @@
     @apply border-border outline-ring/50;
   }
   html {
-    min-height: 100%;
+    height: 100%;
+    overflow: hidden;
   }
   body {
     @apply bg-background text-foreground;
     min-width: 320px;
-    min-height: 100vh;
+    height: 100%;
+    overflow: hidden;
     font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
@@ -139,6 +141,7 @@
     -moz-osx-font-smoothing: grayscale;
   }
   #root {
-    min-height: 100vh;
+    height: 100%;
+    overflow: hidden;
   }
 }

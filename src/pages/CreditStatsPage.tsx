@@ -864,7 +864,7 @@ function OfficialUsageBreakdown({
           {totalRequests > 0 ? "官方返回了请求总数，但明细未通过格式校验。" : "官方暂无请求用量。"}
         </div>
       ) : (
-        <div className="max-h-[340px] min-w-0 overflow-auto">
+        <div className="min-w-0 overflow-x-auto">
           <table className="w-full min-w-[700px] text-left text-[11px]">
             <thead className="sticky top-0 bg-muted/95 text-muted-foreground">
               <tr>
@@ -1053,7 +1053,7 @@ function SelectedAccountDetails({
             </div>
           </CardHeader>
           {detailTab === "credits" ? (
-            <div className="max-h-[340px] min-w-0 overflow-y-auto">
+            <div className="min-w-0">
               <ResourcesByAccount accounts={visibleAccounts} creditMap={creditMap} creditLoadingMap={creditLoadingMap} />
             </div>
           ) : (
