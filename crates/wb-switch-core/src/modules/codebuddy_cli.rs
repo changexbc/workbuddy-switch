@@ -337,8 +337,12 @@ fn restore_file(path: &Path, previous: Option<&str>) {
 }
 
 fn helper_validation_error(stage: &str, cause: &str) -> String {
+    #[cfg(windows)]
+    let hint = "请确认 Git Bash 和 Node.js 可用，然后重试；如仍失败，请查看 CodeBuddy CLI 日志";
+    #[cfg(not(windows))]
+    let hint = "请确认 Node.js 可用，然后重试；如仍失败，请查看 CodeBuddy CLI 日志";
     format!(
-        "CodeBuddy CLI helper 验证失败（{stage}）：{cause}。请确认 Git Bash 和 Node.js 可用，然后重试；如仍失败，请查看 CodeBuddy CLI 日志"
+        "CodeBuddy CLI helper 验证失败（{stage}）：{cause}。{hint}"
     )
 }
 
@@ -384,6 +388,38 @@ fn validate_helper_result(
         ));
     }
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn node_path_from_shell_output(stdout: &[u8]) -> Option<PathBuf> {
+    String::from_utf8_lossy(stdout).lines().rev().find_map(|line| {
+        let path = PathBuf::from(line.trim());
+        (path.is_absolute() && path.file_name().is_some_and(|name| name == "node"))
+            .then_some(path)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_node_candidates() -> Vec<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from("node"),
+        PathBuf::from("/opt/homebrew/bin/node"),
+        PathBuf::from("/usr/local/bin/node"),
+    ];
+    // Finder/LaunchServices 不会继承终端（尤其是 nvm）注入的 PATH。
+    // 这里只让用户的登录 shell 定位 node，helper 本身仍由 Rust 直接执行，
+    // 避免 .zshrc 的欢迎语等输出污染 helper 的 stdout。
+    if let Ok(output) = Command::new("/bin/zsh")
+        .args(["-lic", "command -v node"])
+        .output()
+    {
+        if let Some(path) = node_path_from_shell_output(&output.stdout) {
+            if !candidates.contains(&path) {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates
 }
 
 #[cfg(windows)]
@@ -449,7 +485,26 @@ fn run_helper_command(command: &str) -> Result<Output, String> {
         "未找到 Git Bash bash.exe",
         ))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        for node in macos_node_candidates() {
+            match Command::new(node).arg(command).output() {
+                Ok(output) => return Ok(output),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    return Err(helper_validation_error(
+                        "启动阶段",
+                        "无法使用 Node.js 执行 helper",
+                    ))
+                }
+            }
+        }
+        Err(helper_validation_error(
+            "启动阶段",
+            "未找到可用的 Node.js；如通过 nvm 安装，请确认登录 shell 能执行 node",
+        ))
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         Command::new("/bin/sh")
             .arg("-c")
@@ -1117,6 +1172,18 @@ mod tests {
         assert!(error.contains("退出码为 127"));
         assert!(!error.contains(secret));
         assert!(!error.contains("LEAKED"));
+    }
+
+    #[test]
+    fn extracts_node_path_without_accepting_shell_noise() {
+        let output = b"welcome to the shell\n/Users/test/.nvm/versions/node/v22/bin/node\n";
+        assert_eq!(
+            node_path_from_shell_output(output),
+            Some(PathBuf::from(
+                "/Users/test/.nvm/versions/node/v22/bin/node"
+            ))
+        );
+        assert_eq!(node_path_from_shell_output(b"node\nwelcome\n"), None);
     }
 
     #[test]

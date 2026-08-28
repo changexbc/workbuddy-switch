@@ -38,7 +38,7 @@ const DEMO_READ_COMMANDS = new Set([
   "get_status", "get_accounts", "get_codebuddy_cli_status", "get_checkin_status",
   "get_credit_expiry", "get_credit_statistics", "get_auto_checkin_config",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
-  "get_github_config", "get_launch_at_login_enabled", "switch_progress",
+  "get_github_config", "check_update", "get_launch_at_login_enabled", "switch_progress",
 ]);
 
 export function isDemoMode(): boolean {

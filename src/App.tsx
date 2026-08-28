@@ -59,14 +59,19 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
         </div>
         <div className="mt-1 text-sidebar-foreground/50">v{version || "?"}</div>
         {hasUpdate && (
-          <button
-            type="button"
-            className="mt-3 flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 text-left text-[13px] text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
-            onClick={() => setDialogOpen(true)}
-          >
-            <ArrowUpCircle className="size-3.5" />
-            发现新版本 v{info?.latest}
-          </button>
+          <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/[0.07] p-2 shadow-sm">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+              <ArrowUpCircle className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1 text-xs font-medium text-sidebar-foreground/75">有新版本</span>
+            <button
+              type="button"
+              className="inline-flex h-6 shrink-0 items-center justify-center rounded-full bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/70"
+              onClick={() => setDialogOpen(true)}
+            >
+              更新
+            </button>
+          </div>
         )}
       </section>
       <UpdateInstallDialog
@@ -164,7 +169,7 @@ function Layout() {
             设置
           </NavLink>
         </nav>
-        {api.isWebui() ? null : <UpdateCenter running={running} />}
+        {api.isWebui() && !demoModeEnabled ? null : <UpdateCenter running={running} />}
       </aside>
       <main
         className={cn(

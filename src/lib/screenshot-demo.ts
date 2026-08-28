@@ -359,6 +359,7 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "rotate_status": return rotateStatus;
     case "get_rotate_logs": return { logs: rotateLogs() };
     case "get_github_config": return githubConfig;
+    case "check_update": return { ok: true, current: "0.1.24", latest: "0.1.25", latestTag: "v0.1.25", hasUpdate: true, releaseName: "更新提示演示", releaseUrl: "https://github.com/changexbc/workbuddy-switch/releases/tag/v0.1.25" };
     case "get_launch_at_login_enabled": return true;
     case "switch_progress": return { running: false, progress: null };
     default: throw new Error(`演示模式缺少只读数据: ${command}`);
