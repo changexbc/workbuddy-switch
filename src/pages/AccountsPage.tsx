@@ -355,15 +355,23 @@ export default function AccountsPage() {
   }
 
   async function onSwitchCodebuddyCli(account: AccountMeta) {
+    if (codebuddyCliSwitchingId !== null) return;
     setCodebuddyCliSwitchingId(account.id);
+    const toastId = toast.loading("正在切换 CodeBuddy CLI…", {
+      description: `正在将默认账号设为 ${account.nickname || account.email || account.id}`,
+    });
     try {
       const result = await api.switchCodebuddyCliAccount(account.id);
+      await refreshCodebuddyCliStatus();
       toast.success("CodeBuddy CLI 默认账号已更新", {
+        id: toastId,
         description: `${account.nickname || account.email || account.id}：${result.message || "配置已更新"}`,
       });
-      await refreshCodebuddyCliStatus();
     } catch (error) {
-      toast.error("CodeBuddy CLI 切换失败", { description: api.asError(error) });
+      toast.error("CodeBuddy CLI 切换失败", {
+        id: toastId,
+        description: api.asError(error),
+      });
     } finally {
       setCodebuddyCliSwitchingId(null);
     }
@@ -648,6 +656,7 @@ export default function AccountsPage() {
                 workbuddyActive={isWorkbuddyCurrent(a, current)}
                 codebuddyCliConfigured={codebuddyCli?.configured && !codebuddyCli.migrationRequired && !codebuddyCli.syncPending}
                 codebuddyCliActive={a.id === cliCurrentAccountId}
+                codebuddyCliBusy={codebuddyCliSwitchingId !== null}
                 onSwitchCodebuddyCli={onSwitchCodebuddyCli}
                 codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
                 featuresDisabled={false}
