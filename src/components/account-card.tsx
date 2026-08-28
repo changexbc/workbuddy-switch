@@ -269,12 +269,6 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">CodeBuddy CLI 当前账号</TooltipContent>
                 </Tooltip>
-              ) : demoModeEnabled ? (
-                <DemoAction>
-                  <Button variant="outline" size="icon" className="size-7 rounded-lg" aria-label="设为 CodeBuddy CLI 当前账号">
-                    <CodeBuddyMark size={15} />
-                  </Button>
-                </DemoAction>
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -368,13 +362,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               <TooltipContent side="top">设为 WorkBuddy 当前账号（会重启 WorkBuddy）</TooltipContent>
             </Tooltip>
           )}
-          {codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : demoModeEnabled ? (
-            <DemoAction>
-              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="设为 CodeBuddy CLI 当前账号">
-                <CodeBuddyMark size={18} /><span>设为当前</span>
-              </Button>
-            </DemoAction>
-          ) : (
+          {codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCliConfigured || !onSwitchCodebuddyCli || codebuddyCliBusy} onClick={() => onSwitchCodebuddyCli?.(account)} aria-label={codebuddyCliLoading ? "正在切换 CodeBuddy CLI 当前账号" : "设为 CodeBuddy CLI 当前账号"} aria-busy={codebuddyCliLoading}>

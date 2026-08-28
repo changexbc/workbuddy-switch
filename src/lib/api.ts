@@ -172,6 +172,17 @@ export function installCodebuddyCliHelper(): Promise<CodeBuddyCliInstallResult> 
 }
 
 export function switchCodebuddyCliAccount(accountId: string): Promise<CodeBuddyCliSwitchResult> {
+  if (demoModeEnabled) {
+    return new Promise((resolve, reject) => {
+      window.setTimeout(() => {
+        try {
+          resolve(screenshotDemoResponse("switch_codebuddy_cli_account", { accountId }) as CodeBuddyCliSwitchResult);
+        } catch (error) {
+          reject(error);
+        }
+      }, 1200);
+    });
+  }
   return call("switch_codebuddy_cli_account", { accountId });
 }
 
