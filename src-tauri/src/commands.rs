@@ -289,8 +289,10 @@ pub async fn get_credit_statistics(refresh: Option<bool>) -> Value {
 }
 
 #[tauri::command]
-pub fn get_token_statistics(days: Option<i64>) -> Value {
-    token_stats::get_statistics(days)
+pub async fn get_token_statistics(days: Option<i64>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || token_stats::get_statistics(days))
+        .await
+        .map_err(|error| format!("扫描 Token 统计失败: {error}"))
 }
 
 /// POST /api/checkin —— 单账号立即签到。

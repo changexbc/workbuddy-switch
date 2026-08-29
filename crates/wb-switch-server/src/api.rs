@@ -436,7 +436,13 @@ async fn api_token_statistics(RawQuery(query): RawQuery) -> Response {
             part.strip_prefix("days=")?.parse::<i64>().ok()
         })
     });
-    json_ok(token_stats::get_statistics(days))
+    match tokio::task::spawn_blocking(move || token_stats::get_statistics(days)).await {
+        Ok(statistics) => json_ok(statistics),
+        Err(error) => json_err(
+            format!("扫描 Token 统计失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
 }
 
 async fn api_checkin(Json(body): Json<Value>) -> Response {
