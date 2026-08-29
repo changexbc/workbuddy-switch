@@ -78,6 +78,7 @@ pub fn router() -> Router {
         .route("/api/switch/progress", get(api_switch_progress))
         .route("/api/sessions", get(api_sessions))
         .route("/api/sessions/copy", post(api_copy_sessions))
+        .route("/api/sessions/dedup", post(api_dedup_sessions))
         .route("/api/checkin/status", get(api_checkin_status))
         .route("/api/credits", post(api_credits))
         .route("/api/credits/stats", get(api_credit_statistics))
@@ -388,6 +389,31 @@ async fn api_copy_sessions(Json(body): Json<Value>) -> Response {
         "targetUid": target.get("uid"),
         "copied": result,
     }))
+}
+
+/// POST /api/sessions/dedup —— 清理指定账号下重复会话（复制累积的副本）。
+async fn api_dedup_sessions(Json(body): Json<Value>) -> Response {
+    let account_id = body
+        .get("accountId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if account_id.trim().is_empty() {
+        return json_err("缺少 accountId".to_string(), StatusCode::BAD_REQUEST);
+    }
+    let Some(target) = account::find_account(&account_id) else {
+        return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+    };
+    let uid = target
+        .get("uid")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if uid.is_empty() {
+        return json_err("账号缺少 uid".to_string(), StatusCode::BAD_REQUEST);
+    }
+    let result = session::dedup_sessions_for_user(&uid);
+    json_ok(result)
 }
 
 // ---------------------------------------------------------------------------
