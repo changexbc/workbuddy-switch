@@ -31,6 +31,13 @@ pub const ROTATE_LOG_MAX_RECORDS: usize = 200;
 // ---------------------------------------------------------------------------
 
 pub fn home_dir() -> PathBuf {
+    // 测试钩子：仅在显式设置 WORKBUDDY_HOME 时重定向（集成测试用）。
+    // 生产环境不设置该变量，行为与原先一致，零回归风险。
+    if let Ok(p) = std::env::var("WORKBUDDY_HOME") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
