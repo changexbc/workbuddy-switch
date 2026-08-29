@@ -342,11 +342,16 @@ function rotateLogs(): RotateLog[] {
 }
 
 function demoTokenTotals(input: number, output: number, cacheRead: number, cacheWrite: number, records: number): TokenStatsTotals {
-  return { input, output, cacheRead, cacheWrite, uncachedInput: Math.max(0, input - cacheRead), records, cacheHitRate: input > 0 ? cacheRead / input : null };
+  return { total: input + output + cacheWrite, input, output, cacheRead, cacheWrite, uncachedInput: Math.max(0, input - cacheRead), records, cacheHitRate: input > 0 ? cacheRead / input : null };
 }
 
 function demoTokenGroup(key: string, input: number, output: number, cacheRead: number, cacheWrite: number, records: number): TokenStatsGroup {
   return { key, ...demoTokenTotals(input, output, cacheRead, cacheWrite, records) };
+}
+
+function demoTokenSession(key: string, title: string, project: string, input: number, output: number, cacheRead: number, cacheWrite: number, records: number): TokenStatsGroup {
+  const keyParts = key.split(" · ");
+  return { ...demoTokenGroup(key, input, output, cacheRead, cacheWrite, records), title, project, sessionId: keyParts[keyParts.length - 1] };
 }
 
 function demoTokenSource(source: TokenStatsSource["source"], scale: number): TokenStatsSource {
@@ -371,10 +376,10 @@ function demoTokenSource(source: TokenStatsSource["source"], scale: number): Tok
     demoTokenGroup("glm-5.2", 6_600_000 * scale, 630_000 * scale, 5_400_000 * scale, 80_000 * scale, Math.round(24 * scale)),
   ];
   const sessions = [
-    demoTokenGroup("wb-switch-rust · token-stats-dashboard", 18_700_000 * scale, 1_050_000 * scale, 16_100_000 * scale, 160_000 * scale, Math.round(72 * scale)),
-    demoTokenGroup("my-code-teams · settings-agent-acp", 13_200_000 * scale, 890_000 * scale, 11_300_000 * scale, 120_000 * scale, Math.round(55 * scale)),
-    demoTokenGroup("LetterTotTown · character-audio", 8_600_000 * scale, 640_000 * scale, 7_200_000 * scale, 80_000 * scale, Math.round(38 * scale)),
-    demoTokenGroup("wb-switch-rust · account-card-redesign", 6_300_000 * scale, 410_000 * scale, 5_400_000 * scale, 50_000 * scale, Math.round(29 * scale)),
+    demoTokenSession("wb-switch-rust · token-stats-dashboard", "完善 Token 统计仪表盘与本地用量分析", "wb-switch-rust", 18_700_000 * scale, 1_050_000 * scale, 16_100_000 * scale, 160_000 * scale, Math.round(72 * scale)),
+    demoTokenSession("my-code-teams · settings-agent-acp", "设计 Agent 与 ACP 管理设置", "my-code-teams", 13_200_000 * scale, 890_000 * scale, 11_300_000 * scale, 120_000 * scale, Math.round(55 * scale)),
+    demoTokenSession("LetterTotTown · character-audio", "补全角色成语双音频", "LetterTotTown", 8_600_000 * scale, 640_000 * scale, 7_200_000 * scale, 80_000 * scale, Math.round(38 * scale)),
+    demoTokenSession("wb-switch-rust · account-card-redesign", "统一账号卡片视觉和交互", "wb-switch-rust", 6_300_000 * scale, 410_000 * scale, 5_400_000 * scale, 50_000 * scale, Math.round(29 * scale)),
   ];
   const now = Date.now();
   return { source, summary, models, projects, sessions, daily, hours, filesScanned: source === "workbuddy" ? 63 : 41, parseErrors: 0, coverageStartAt: now - 13 * 86_400_000, coverageEndAt: now };
