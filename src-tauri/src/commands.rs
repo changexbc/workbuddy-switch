@@ -289,7 +289,9 @@ pub async fn get_credit_statistics(refresh: Option<bool>) -> Value {
 }
 
 #[tauri::command]
-pub fn get_token_statistics() -> Value { token_stats::get_statistics() }
+pub fn get_token_statistics(days: Option<i64>) -> Value {
+    token_stats::get_statistics(days)
+}
 
 /// POST /api/checkin —— 单账号立即签到。
 #[tauri::command]

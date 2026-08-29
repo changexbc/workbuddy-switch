@@ -430,8 +430,13 @@ async fn api_credit_statistics(RawQuery(query): RawQuery) -> Response {
     json_ok(credit_usage::get_statistics(query_flag_enabled(query.as_deref(), "refresh")).await)
 }
 
-async fn api_token_statistics() -> Response {
-    json_ok(token_stats::get_statistics())
+async fn api_token_statistics(RawQuery(query): RawQuery) -> Response {
+    let days = query.as_deref().and_then(|value| {
+        value.split('&').find_map(|part| {
+            part.strip_prefix("days=")?.parse::<i64>().ok()
+        })
+    });
+    json_ok(token_stats::get_statistics(days))
 }
 
 async fn api_checkin(Json(body): Json<Value>) -> Response {

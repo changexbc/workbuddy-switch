@@ -145,3 +145,9 @@
     overflow: hidden;
   }
 }
+
+@media (min-width: 900px) {
+  [aria-label="Token 总览"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

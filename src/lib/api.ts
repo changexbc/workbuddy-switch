@@ -336,7 +336,7 @@ export function getCreditStatistics(refresh = false): Promise<CreditStatistics> 
   return call("get_credit_statistics", refresh ? { refresh: true } : undefined);
 }
 
-export function getTokenStatistics(): Promise<TokenStatistics> { return call("get_token_statistics"); }
+export function getTokenStatistics(days?: number): Promise<TokenStatistics> { return call("get_token_statistics", days ? { days } : undefined); }
 
 export function checkin(accountId: string): Promise<CheckinResult> {
   return call("checkin", { accountId });
