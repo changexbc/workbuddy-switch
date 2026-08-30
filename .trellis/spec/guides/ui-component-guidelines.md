@@ -20,6 +20,17 @@ Before choosing step 4, document the missing capability or concrete incompatibil
 - The project brand accent is the emerald color used by the account-card credit-package link. Product-specific actions may keep an explicitly approved color, such as the blue OAuth CTA.
 - Shared interactive components belong in `src/components/ui/`; feature components should consume the wrapper rather than import a primitive directly.
 
+## Statistics Page Layout Parity
+
+Keep sibling statistics pages structurally consistent so users can transfer the same visual model between Token and Credit views:
+
+- Put the page title, update timestamp, source selector, and refresh action in the page header, outside cards.
+- Put each section heading in an external `h2`, then use the card only for that section's content.
+- Keep section-specific filters in the corresponding `CardHeader`; date ranges should use the shared order `近 30 天 / 今天 / 近 7 天 / 本月`.
+- A date-range change may filter the trend series and its range summary, but must not silently change full-period overview, composition, heatmap, or ranking data.
+
+This prevents mixed card hierarchy and keeps the Token page aligned with `CreditStatsPage` while preserving source-specific data semantics.
+
 ## Interaction Requirements
 
 Prefer component primitives that already provide the complete interaction contract:
