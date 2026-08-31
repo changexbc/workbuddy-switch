@@ -31,6 +31,17 @@ Keep sibling statistics pages structurally consistent so users can transfer the 
 
 This prevents mixed card hierarchy and keeps the Token page aligned with `CreditStatsPage` while preserving source-specific data semantics.
 
+## Statistics Chart Semantics
+
+Keep chart encodings explicit and consistent across sibling statistics pages:
+
+- Use the shared `--data-series-*` theme tokens for series colors so light and dark themes retain the same semantic mapping.
+- When Token usage and call counts share a time axis, prefer one composed chart: absolute stacked Token bars encode both the daily total (stack height) and its components, while a dashed secondary-axis line encodes call counts. Keep a persistent legend and detailed tooltip so smaller segments remain identifiable.
+- Keep a persistent legend and repeat the encoding in the tooltip. Show Token totals and components as compact `K/M/B` values (plus percentages where useful), preserve exact integers in `title` / `aria-label`, and include the call count.
+- Reuse the shared stacked-bar visual layout for Token and credit charts: separate segments with a 2px background stroke, give every non-zero segment a 5px visual minimum without mutating source data, keep the stack baseline fixed, and apply a 6px top radius only to the highest non-zero segment for each date. Do not round only the final declared series, because sparse data would leave most bars square.
+
+This prevents users from having to infer whether an area is a component or a total, and keeps rounded chart surfaces visible when data is sparse.
+
 ## Interaction Requirements
 
 Prefer component primitives that already provide the complete interaction contract:
