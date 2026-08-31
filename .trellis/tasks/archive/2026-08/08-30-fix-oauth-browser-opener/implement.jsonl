@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/ui-component-guidelines.md", "reason": "前端交互修改需遵循现有 shadcn/Rhea 与宿主能力分流约定"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有 api.isWebui 与链接打开模式，避免重复原语"}

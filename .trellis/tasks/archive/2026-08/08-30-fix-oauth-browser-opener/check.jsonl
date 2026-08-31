@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/ui-component-guidelines.md", "reason": "检查 WebUI/Tauri 交互一致性与可点击兜底"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查是否遗漏现有打开链接模式或引入重复逻辑"}

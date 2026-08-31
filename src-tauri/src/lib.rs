@@ -116,6 +116,7 @@ pub fn run() {
             commands::get_checkin_status,
             commands::get_credit_expiry,
             commands::get_credit_statistics,
+            commands::get_token_statistics,
             commands::checkin,
             commands::checkin_all,
             commands::get_auto_checkin_config,
