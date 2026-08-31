@@ -131,6 +131,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      # dmgbuild writes Finder metadata without opening Finder, so DMGs keep
+      # their large icons and drag arrow in headless macOS runners.
+      - name: Set up Python for dmgbuild
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dmgbuild (macOS only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          DMGBUILD_VENV="$RUNNER_TEMP/dmgbuild-venv"
+          python3 -m venv "$DMGBUILD_VENV"
+          "$DMGBUILD_VENV/bin/python" -m pip install --disable-pip-version-check --no-input \
+            "dmgbuild==1.6.7"
+          echo "$DMGBUILD_VENV/bin" >> "$GITHUB_PATH"
+
       # 前端构建产物（CLI 二进制 rust-embed 嵌入 + Tauri App 使用）
       - name: Build frontend
         run: |
