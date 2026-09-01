@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import {
   CircleAlert,
-  ChartNoAxesCombined,
   ArrowDownToLine,
   ArrowUpFromLine,
   Gauge,
@@ -33,6 +32,7 @@ import { DemoAction } from "@/components/demo-action";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import * as api from "@/lib/api";
 import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
@@ -576,9 +576,20 @@ function TrendTooltipContent({
 
 function TrendChart({ source }: { source: TokenStatsSource }) {
   const [range, setRange] = useState<RangeKey>("30d");
+  const [modelFilter, setModelFilter] = useState("all");
+  const modelOptions = useMemo(
+    () => (source.dailyByModel ? source.models.map((model) => model.key).filter(Boolean) : []),
+    [source.dailyByModel, source.models],
+  );
+  useEffect(() => {
+    if (modelFilter !== "all" && !modelOptions.includes(modelFilter)) setModelFilter("all");
+  }, [modelFilter, modelOptions]);
+  const dailySeries = modelFilter === "all"
+    ? source.daily
+    : source.dailyByModel?.[modelFilter] ?? [];
   const points = useMemo(
-    () => fillRangePoints(rangePoints(source.daily, range), range),
-    [range, source.daily],
+    () => fillRangePoints(rangePoints(dailySeries, range), range),
+    [range, dailySeries],
   );
   const totals = useMemo(() => rangeTotals(points), [points]);
   const chartData: TrendChartPoint[] = points.map((point) => ({
@@ -589,10 +600,7 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
   return (
     <section className="min-w-0 space-y-2.5" aria-labelledby="token-trend-title">
       <SectionTitle id="token-trend-title">
-        <span className="inline-flex items-center gap-1.5">
-          <ChartNoAxesCombined className="size-3.5 text-muted-foreground" aria-hidden="true" />
-          Token 与调用趋势
-        </span>
+        Token 与调用趋势
       </SectionTitle>
       <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
         <CardHeader className="gap-0 px-4 pt-3 pb-0 sm:px-5">
@@ -600,10 +608,17 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
             <CardDescription className="min-w-0 text-xs">
               彩色堆叠柱表示每日总 Token 及构成，虚线表示调用次数。
             </CardDescription>
-            <div
-              className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1"
-              aria-label="趋势范围"
-            >
+            <div className="flex max-w-full flex-wrap items-center gap-2">
+              <Select value={modelFilter} onValueChange={setModelFilter}>
+                <SelectTrigger size="sm" className="w-[9rem]" aria-label="按模型筛选">
+                  <SelectValue placeholder="所有模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">所有模型</SelectItem>
+                  {modelOptions.map((model) => <SelectItem key={model} value={model}>{model}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
               {RANGE_OPTIONS.map((option) => (
                 <button
                   key={option.key}
@@ -619,6 +634,7 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
                   {option.label}
                 </button>
               ))}
+              </div>
             </div>
           </div>
         </CardHeader>

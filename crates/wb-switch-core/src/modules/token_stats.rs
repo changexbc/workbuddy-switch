@@ -334,6 +334,7 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>) -> Value {
     let mut projects = HashMap::new();
     let mut sessions = Vec::new();
     let mut daily = HashMap::new();
+    let mut daily_by_model: HashMap<String, HashMap<String, Totals>> = HashMap::new();
     let mut hours = HashMap::new();
     let mut parse_errors = 0_u64;
     let mut coverage_start_at: Option<i64> = None;
@@ -392,8 +393,9 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>) -> Value {
             }
             session_totals.add(usage);
             total.add(usage);
+            let model_name = model(&value);
             models
-                .entry(model(&value))
+                .entry(model_name.clone())
                 .or_insert_with(Totals::default)
                 .add(usage);
             projects
@@ -402,8 +404,14 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>) -> Value {
                 .add(usage);
             if let Some(day) = date(&value) {
                 daily
-                    .entry(day)
+                    .entry(day.clone())
                     .or_insert_with(Totals::default)
+                    .add(usage);
+                daily_by_model
+                    .entry(model_name)
+                    .or_default()
+                    .entry(day)
+                    .or_default()
                     .add(usage);
             }
             if let Some(hour) = hour(&value) {
@@ -442,6 +450,10 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>) -> Value {
         }
     }
 
+    let daily_by_model = daily_by_model
+        .into_iter()
+        .map(|(model, points)| (model, Value::Array(groups(points))))
+        .collect::<Map<String, Value>>();
     json!({
         "source": name,
         "summary": total.value(),
@@ -449,6 +461,7 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>) -> Value {
         "projects": groups(projects),
         "sessions": session_groups(sessions),
         "daily": groups(daily),
+        "dailyByModel": daily_by_model,
         "hours": groups(hours),
         "filesScanned": paths.len(),
         "parseErrors": parse_errors,
@@ -626,6 +639,8 @@ mod tests {
         assert_eq!(result["summary"]["cacheRead"], 4);
         assert_eq!(result["summary"]["total"], 13);
         assert_eq!(result["summary"]["records"], 1);
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert_eq!(result["dailyByModel"]["fixture-model"][0]["key"], today);
         assert_eq!(result["projects"][0]["key"], "fixture-project");
         fs::remove_dir_all(root).expect("remove fixture");
     }
