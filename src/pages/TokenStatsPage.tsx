@@ -4,10 +4,12 @@ import {
   CircleAlert,
   ArrowDownToLine,
   ArrowUpFromLine,
+  Check,
   Gauge,
   Loader2,
   MessagesSquare,
   RefreshCw,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -32,7 +34,7 @@ import { DemoAction } from "@/components/demo-action";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import * as api from "@/lib/api";
 import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
@@ -609,15 +611,33 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
               彩色堆叠柱表示每日总 Token 及构成，虚线表示调用次数。
             </CardDescription>
             <div className="flex max-w-full flex-wrap items-center gap-2">
-              <Select value={modelFilter} onValueChange={setModelFilter}>
-                <SelectTrigger size="sm" className="w-[9rem]" aria-label="按模型筛选">
-                  <SelectValue placeholder="所有模型" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">所有模型</SelectItem>
-                  {modelOptions.map((model) => <SelectItem key={model} value={model}>{model}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 max-w-[190px] gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                    aria-label="按模型筛选"
+                  >
+                    <SlidersHorizontal className="size-3.5 shrink-0" />
+                    <span className="truncate">{modelFilter === "all" ? "所有模型" : modelFilter}</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-y-auto">
+                  <DropdownMenuItem onSelect={() => setModelFilter("all")}>
+                    <SlidersHorizontal className="size-3.5 shrink-0" />
+                    所有模型
+                    {modelFilter === "all" && <Check className="ml-auto size-3.5 shrink-0" />}
+                  </DropdownMenuItem>
+                  {modelOptions.length > 0 && <DropdownMenuSeparator />}
+                  {modelOptions.map((model) => (
+                    <DropdownMenuItem key={model} onSelect={() => setModelFilter(model)}>
+                      <span className="min-w-0 flex-1 truncate">{model}</span>
+                      {modelFilter === model && <Check className="ml-auto size-3.5 shrink-0" />}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
               <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
               {RANGE_OPTIONS.map((option) => (
                 <button
@@ -647,10 +667,8 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
             <>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <TrendLegend />
-                <span className="text-[11px] text-muted-foreground">单位：Token / 次调用</span>
               </div>
-              <div className="mb-1 flex items-center justify-between px-1 text-[11px] font-medium text-muted-foreground">
-                <span>Token 总量、构成与调用</span>
+              <div className="mb-1 flex items-center justify-end px-1 text-[11px] font-medium text-muted-foreground">
                 <span className="font-normal">左轴：Token · 右轴：调用次数</span>
               </div>
               <ChartContainer config={chartConfig} className="h-64 w-full sm:h-72">
