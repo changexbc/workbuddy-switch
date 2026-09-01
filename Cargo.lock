@@ -5252,7 +5252,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-core"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -5266,7 +5266,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-rust"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "objc2",
  "objc2-app-kit",
@@ -5287,7 +5287,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-server"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "axum",
  "rust-embed",
