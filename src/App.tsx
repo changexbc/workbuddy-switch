@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { ArrowUpCircle, ChartBar, Loader2, Settings, User } from "lucide-react";
+import { ArrowUpCircle, Loader2, MessagesSquare, Settings, Sparkles, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
 import type { UpdateInfo } from "@/lib/types";
 import AccountsPage from "@/pages/AccountsPage";
 import CreditStatsPage from "@/pages/CreditStatsPage";
+import TokenStatsPage from "@/pages/TokenStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
@@ -59,14 +60,19 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
         </div>
         <div className="mt-1 text-sidebar-foreground/50">v{version || "?"}</div>
         {hasUpdate && (
-          <button
-            type="button"
-            className="mt-3 flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 text-left text-[13px] text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
-            onClick={() => setDialogOpen(true)}
-          >
-            <ArrowUpCircle className="size-3.5" />
-            发现新版本 v{info?.latest}
-          </button>
+          <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/[0.07] p-2 shadow-sm">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+              <ArrowUpCircle className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1 text-xs font-medium text-sidebar-foreground/75">有新版本</span>
+            <button
+              type="button"
+              className="inline-flex h-6 shrink-0 items-center justify-center rounded-full bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/70"
+              onClick={() => setDialogOpen(true)}
+            >
+              更新
+            </button>
+          </div>
         )}
       </section>
       <UpdateInstallDialog
@@ -135,6 +141,7 @@ function Layout() {
             <User className="size-4" />
             账号管理
           </NavLink>
+          <NavLink to="/token-stats" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><MessagesSquare className="size-4" />Token 统计</NavLink>
           <NavLink
             to="/credit-stats"
             className={({ isActive }) =>
@@ -146,7 +153,7 @@ function Layout() {
               )
             }
           >
-            <ChartBar className="size-4" />
+            <Sparkles className="size-4" />
             积分统计
           </NavLink>
           <NavLink
@@ -164,7 +171,7 @@ function Layout() {
             设置
           </NavLink>
         </nav>
-        {api.isWebui() ? null : <UpdateCenter running={running} />}
+        {api.isWebui() && !demoModeEnabled ? null : <UpdateCenter running={running} />}
       </aside>
       <main
         className={cn(
@@ -188,6 +195,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<AccountsPage />} />
             <Route path="/credit-stats" element={<CreditStatsPage />} />
+            <Route path="/token-stats" element={<TokenStatsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

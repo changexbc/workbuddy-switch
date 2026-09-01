@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { useCallback, useEffect, useState, type ComponentProps } from "react";
+import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
 import {
   CalendarDays,
   CalendarRange,
@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import * as api from "@/lib/api";
+import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
   CreditExpiry,
   CreditOfficialUsage,
@@ -267,8 +268,17 @@ function StatMetric({
   );
 }
 
-/** 层叠柱状图的模型固定色板（区分度高，深浅模式通用）。 */
-const MODEL_COLORS = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#06b6d4", "#f97316", "#84cc16"];
+/** 模型趋势共享数据色板；颜色由浅色/深色主题 token 提供。 */
+const MODEL_COLORS = [
+  "var(--data-series-emerald)",
+  "var(--data-series-teal)",
+  "var(--data-series-violet)",
+  "var(--data-series-amber)",
+  "var(--data-series-rose)",
+  "var(--data-series-indigo)",
+  "var(--data-series-sky)",
+  "var(--data-series-lime)",
+];
 const MAX_MODELS = 5;
 const OTHER_MODEL = "其他";
 
@@ -276,6 +286,54 @@ interface ModelChartPoint {
   date: string;
   total: number;
   [model: string]: number | string;
+}
+
+type CreditBarShapeProps = ComponentProps<typeof Rectangle> & {
+  segmentKey: string;
+  seriesKeys: string[];
+  payload?: ModelChartPoint;
+  value?: number | [number, number];
+};
+
+function CreditBarShape({
+  segmentKey,
+  seriesKeys,
+  payload,
+  x = 0,
+  y = 0,
+  width = 0,
+  height = 0,
+  value,
+  fill,
+  stroke,
+  strokeWidth,
+  ...rest
+}: CreditBarShapeProps) {
+  if (width <= 0 || height <= 0) return null;
+  const segmentIndex = seriesKeys.indexOf(segmentKey);
+  const stackStart = Array.isArray(value) ? Number(value[0]) : 0;
+  const layout = payload
+    ? getStackedSegmentVisualLayout({
+        values: seriesKeys.map((key) => Number(payload[key] ?? 0)),
+        segmentIndex,
+        segmentHeight: height,
+        segmentY: y,
+        stackStart,
+      })
+    : null;
+  return (
+    <Rectangle
+      {...rest}
+      x={x}
+      y={layout?.y ?? y}
+      width={width}
+      height={layout?.height ?? height}
+      fill={fill}
+      radius={layout?.isTop ? [6, 6, 0, 0] : 0}
+      stroke={stroke ?? "var(--background)"}
+      strokeWidth={strokeWidth ?? 2}
+    />
+  );
 }
 
 /** 从官方 daily（全量按模型聚合）构建层叠数据；模型按总消耗取前 N，其余并入「其他」。 */
@@ -360,20 +418,19 @@ function TrendChart({
     ? stacked.points
     : basePoints.map((point) => ({ date: point.date, total: point.usage }));
 
-  const series = stacked ? stacked.models : ["总消耗"];
+  // 单层本地数据实际使用 `total` 字段；官方数据才按模型名称分层。
+  const series = stacked ? stacked.models : ["total"];
   const chartConfig: ChartConfig = {};
   for (const model of series) {
     chartConfig[model] = {
-      label: model,
+      label: model === "total" ? "总消耗" : model,
       ...(stacked
         ? { color: MODEL_COLORS[series.indexOf(model) % MODEL_COLORS.length] }
-        : { theme: { light: "var(--primary)", dark: "var(--primary)" } as const }),
+        : { color: "var(--data-series-emerald)" }),
     };
   }
 
   const hasObservedUsage = chartData.some((point) => point.total > 0);
-  const barRadius = stacked ? [2, 2, 0, 0] as [number, number, number, number] : [3, 3, 0, 0] as [number, number, number, number];
-
   return (
     <section className="min-w-0 space-y-2.5" aria-labelledby="trend-chart-title">
       <div className="px-1">
@@ -401,7 +458,7 @@ function TrendChart({
                   <button
                     key={option.key}
                     type="button"
-                    className={`rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                    className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs transition-colors ${
                       range === option.key
                         ? "bg-background font-medium text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
@@ -454,8 +511,12 @@ function TrendChart({
                     key={model}
                     dataKey={model}
                     stackId="usage"
-                    fill={stacked ? MODEL_COLORS[index % MODEL_COLORS.length] : "var(--color-总消耗)"}
-                    radius={index === series.length - 1 ? barRadius : undefined}
+                    fill={stacked ? MODEL_COLORS[index % MODEL_COLORS.length] : "var(--color-total)"}
+                    stroke="var(--background)"
+                    strokeWidth={2}
+                    maxBarSize={28}
+                    shape={<CreditBarShape segmentKey={model} seriesKeys={series} />}
+                    isAnimationActive={false}
                   />
                 ))}
               </BarChart>

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { ArrowUpCircle, CircleCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -774,9 +774,11 @@ function UpdateCard() {
         </div>
 
         {info?.ok && (
-          <Alert variant="default" className="!w-auto mx-4 my-4 sm:mx-5">
+          <Alert variant="default" className={cn("!w-auto mx-4 my-4 sm:mx-5", info.hasUpdate && "border-primary/35 bg-primary/[0.06]")}>
+            {info.hasUpdate && <ArrowUpCircle className="text-primary" />}
             <AlertDescription className="space-y-2">
-              <div>
+              <AlertTitle className={cn(info.hasUpdate && "text-primary")}>{info.hasUpdate ? "发现新版本" : "更新检查完成"}</AlertTitle>
+              <div className="text-sm">
                 {info.hasUpdate
                   ? `发现新版本 v${info.latest}（当前 v${info.current}）`
                   : `已是最新版本 v${info.current}`}

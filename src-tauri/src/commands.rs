@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, credit_usage, credits, export_import, oauth,
-    process, refresh, rotate, session, switch, update,
+    process, refresh, rotate, session, switch, token_stats, update,
 };
 
 #[derive(Serialize)]
@@ -286,6 +286,13 @@ pub async fn get_credit_expiry(account_id: String) -> Result<Value, String> {
 #[tauri::command]
 pub async fn get_credit_statistics(refresh: Option<bool>) -> Value {
     credit_usage::get_statistics(refresh.unwrap_or(false)).await
+}
+
+#[tauri::command]
+pub async fn get_token_statistics(days: Option<i64>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || token_stats::get_statistics(days))
+        .await
+        .map_err(|error| format!("扫描 Token 统计失败: {error}"))
 }
 
 /// POST /api/checkin —— 单账号立即签到。

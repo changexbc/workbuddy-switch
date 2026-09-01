@@ -81,9 +81,8 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
       const res = await api.oauthStart();
       setLoginId(res.loginId);
       setUri(res.verificationUri);
-      // 在系统浏览器打开验证页
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(res.verificationUri);
+      // 按当前宿主能力打开验证页
+      await openInBrowser(res.verificationUri);
     } catch (e) {
       setError(api.asError(e));
     } finally {
@@ -120,6 +119,9 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
                   rel="noreferrer"
                   className="text-primary underline-offset-2 hover:underline"
                   onClick={(e) => {
+                    // WebUI 直接使用浏览器默认链接行为，确保即使自动弹窗被拦截
+                    // 也能通过用户点击打开验证页。
+                    if (api.isWebui()) return;
                     e.preventDefault();
                     void openInBrowser(uri);
                   }}
@@ -161,8 +163,19 @@ export function OAuthLoginDialog({ open, onOpenChange }: Props) {
   );
 }
 
-/** 在系统浏览器打开链接。 */
-async function openInBrowser(url: string) {
+/** WebUI 使用浏览器新标签页，Tauri 使用系统 opener。 */
+async function openInBrowser(url: string): Promise<void> {
+  if (api.isWebui()) {
+    // 浏览器环境没有 Tauri 注入的 invoke；window.open 被拦截时由弹窗中的
+    // 原生链接作为兜底，因此这里不把拦截视为 OAuth 失败。
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch {
+      // 忽略自动弹窗失败；弹窗中已展示的原生链接仍可点击。
+    }
+    return;
+  }
+
   const { openUrl } = await import("@tauri-apps/plugin-opener");
   return openUrl(url);
 }
