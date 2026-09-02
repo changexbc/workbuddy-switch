@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import {
   CircleAlert,
-  ChartNoAxesCombined,
   ArrowDownToLine,
   ArrowUpFromLine,
+  Check,
   Gauge,
   Loader2,
   MessagesSquare,
   RefreshCw,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -33,6 +34,7 @@ import { DemoAction } from "@/components/demo-action";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import * as api from "@/lib/api";
 import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
@@ -576,9 +578,20 @@ function TrendTooltipContent({
 
 function TrendChart({ source }: { source: TokenStatsSource }) {
   const [range, setRange] = useState<RangeKey>("30d");
+  const [modelFilter, setModelFilter] = useState("all");
+  const modelOptions = useMemo(
+    () => (source.dailyByModel ? source.models.map((model) => model.key).filter(Boolean) : []),
+    [source.dailyByModel, source.models],
+  );
+  useEffect(() => {
+    if (modelFilter !== "all" && !modelOptions.includes(modelFilter)) setModelFilter("all");
+  }, [modelFilter, modelOptions]);
+  const dailySeries = modelFilter === "all"
+    ? source.daily
+    : source.dailyByModel?.[modelFilter] ?? [];
   const points = useMemo(
-    () => fillRangePoints(rangePoints(source.daily, range), range),
-    [range, source.daily],
+    () => fillRangePoints(rangePoints(dailySeries, range), range),
+    [range, dailySeries],
   );
   const totals = useMemo(() => rangeTotals(points), [points]);
   const chartData: TrendChartPoint[] = points.map((point) => ({
@@ -589,10 +602,7 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
   return (
     <section className="min-w-0 space-y-2.5" aria-labelledby="token-trend-title">
       <SectionTitle id="token-trend-title">
-        <span className="inline-flex items-center gap-1.5">
-          <ChartNoAxesCombined className="size-3.5 text-muted-foreground" aria-hidden="true" />
-          Token 与调用趋势
-        </span>
+        Token 与调用趋势
       </SectionTitle>
       <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
         <CardHeader className="gap-0 px-4 pt-3 pb-0 sm:px-5">
@@ -600,10 +610,35 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
             <CardDescription className="min-w-0 text-xs">
               彩色堆叠柱表示每日总 Token 及构成，虚线表示调用次数。
             </CardDescription>
-            <div
-              className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1"
-              aria-label="趋势范围"
-            >
+            <div className="flex max-w-full flex-wrap items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 max-w-[190px] gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                    aria-label="按模型筛选"
+                  >
+                    <SlidersHorizontal className="size-3.5 shrink-0" />
+                    <span className="truncate">{modelFilter === "all" ? "所有模型" : modelFilter}</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-y-auto">
+                  <DropdownMenuItem onSelect={() => setModelFilter("all")}>
+                    <SlidersHorizontal className="size-3.5 shrink-0" />
+                    所有模型
+                    {modelFilter === "all" && <Check className="ml-auto size-3.5 shrink-0" />}
+                  </DropdownMenuItem>
+                  {modelOptions.length > 0 && <DropdownMenuSeparator />}
+                  {modelOptions.map((model) => (
+                    <DropdownMenuItem key={model} onSelect={() => setModelFilter(model)}>
+                      <span className="min-w-0 flex-1 truncate">{model}</span>
+                      {modelFilter === model && <Check className="ml-auto size-3.5 shrink-0" />}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
               {RANGE_OPTIONS.map((option) => (
                 <button
                   key={option.key}
@@ -619,6 +654,7 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
                   {option.label}
                 </button>
               ))}
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -631,10 +667,8 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
             <>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <TrendLegend />
-                <span className="text-[11px] text-muted-foreground">单位：Token / 次调用</span>
               </div>
-              <div className="mb-1 flex items-center justify-between px-1 text-[11px] font-medium text-muted-foreground">
-                <span>Token 总量、构成与调用</span>
+              <div className="mb-1 flex items-center justify-end px-1 text-[11px] font-medium text-muted-foreground">
                 <span className="font-normal">左轴：Token · 右轴：调用次数</span>
               </div>
               <ChartContainer config={chartConfig} className="h-64 w-full sm:h-72">
