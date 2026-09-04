@@ -22,6 +22,9 @@ pub const CHECKIN_API_PREFIX: &str = "/v2/billing/meter";
 pub const CHECKIN_LOG_KEEP_DAYS: i64 = 30;
 pub const CHECKIN_LOG_MAX_RECORDS: usize = 500;
 
+/// 派猫猫旅行接口前缀（成长中心，非 /v2/plugin 体系，直接挂在 API 域名下）。
+pub const TRAVEL_API_PREFIX: &str = "/activity/growth/buddy/travel";
+
 static CHECKIN_LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 pub const ROTATE_LOG_MAX_RECORDS: usize = 200;
@@ -52,6 +55,14 @@ pub fn checkin_config_file() -> PathBuf {
 
 pub fn checkin_logs_file() -> PathBuf {
     store_dir().join("auto_checkin_logs.json")
+}
+
+pub fn travel_config_file() -> PathBuf {
+    store_dir().join("auto_travel_config.json")
+}
+
+pub fn travel_cache_file() -> PathBuf {
+    store_dir().join("travel_cache.json")
 }
 
 pub fn credit_usage_snapshots_file() -> PathBuf {
@@ -314,6 +325,62 @@ pub fn add_checkin_log(entry: &Value) {
     let mut logs = load_checkin_logs();
     logs.push(entry.clone());
     let _ = save_checkin_logs_unlocked(&logs);
+}
+
+// ---------------------------------------------------------------------------
+// 派猫猫旅行配置 / 缓存
+// ---------------------------------------------------------------------------
+
+/// 默认自动旅行配置。
+pub fn default_travel_config() -> Value {
+    json!({ "enabled": true })
+}
+
+/// 读取自动旅行配置（缺失/损坏时合并默认值）。
+pub fn load_travel_config() -> Value {
+    let mut cfg = default_travel_config();
+    let f = travel_config_file();
+    if f.exists() {
+        if let Ok(text) = std::fs::read_to_string(&f) {
+            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
+                if let Some(enabled) = map.get("enabled").and_then(Value::as_bool) {
+                    cfg["enabled"] = json!(enabled);
+                }
+            }
+        }
+    }
+    cfg
+}
+
+/// 保存自动旅行配置（只保留已知字段）。
+pub fn save_travel_config(cfg: &Value) -> std::io::Result<()> {
+    let mut merged = default_travel_config();
+    if let Some(enabled) = cfg.get("enabled").and_then(Value::as_bool) {
+        merged["enabled"] = json!(enabled);
+    }
+    std::fs::create_dir_all(store_dir())?;
+    let content = serde_json::to_string_pretty(&merged).unwrap_or_default();
+    atomic_write(&travel_config_file(), &content)
+}
+
+/// 读取旅行缓存（`{ date, completed, results: { accountId: {...} } }`）。
+pub fn load_travel_cache() -> Value {
+    let f = travel_cache_file();
+    if f.exists() {
+        if let Ok(text) = std::fs::read_to_string(&f) {
+            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
+                return Value::Object(map);
+            }
+        }
+    }
+    json!({})
+}
+
+/// 保存旅行缓存。
+pub fn save_travel_cache(cache: &Value) -> std::io::Result<()> {
+    std::fs::create_dir_all(store_dir())?;
+    let content = serde_json::to_string_pretty(cache).unwrap_or_default();
+    atomic_write(&travel_cache_file(), &content)
 }
 
 // ---------------------------------------------------------------------------

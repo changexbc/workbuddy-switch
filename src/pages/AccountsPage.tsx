@@ -34,7 +34,7 @@ import { ImportAccountsDialog } from "@/components/import-accounts-dialog";
 import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import * as api from "@/lib/api";
-import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CreditExpiry } from "@/lib/types";
+import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CreditExpiry, TravelConfig, TravelStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -94,6 +94,29 @@ async function fetchTodayCheckinMap(
   return next;
 }
 
+/** 并行查询各账号今日旅行状态；失败的账号不写入，由调用方保留原值。 */
+async function fetchTravelMap(
+  accountIds: string[],
+  isStale?: () => boolean,
+): Promise<Record<string, TravelStatus>> {
+  const entries = await Promise.all(
+    accountIds.map(async (id) => {
+      try {
+        const res = await api.getTravelStatus(id);
+        if (isStale?.()) return null;
+        return [id, res] as const;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const next: Record<string, TravelStatus> = {};
+  for (const entry of entries) {
+    if (entry) next[entry[0]] = entry[1];
+  }
+  return next;
+}
+
 export default function AccountsPage() {
   const {
     accounts,
@@ -119,6 +142,10 @@ export default function AccountsPage() {
   const [autoCheckinSaving, setAutoCheckinSaving] = useState(false);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
+  const [autoTravelConfig, setAutoTravelConfig] = useState<TravelConfig | null>(null);
+  const [autoTravelSaving, setAutoTravelSaving] = useState(false);
+  /** 账号 id -> 今日旅行状态（undefined=查询中/未知） */
+  const [travelMap, setTravelMap] = useState<Record<string, TravelStatus>>({});
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
@@ -170,6 +197,23 @@ export default function AccountsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getAutoTravelConfig()
+      .then((config) => {
+        if (!cancelled) setAutoTravelConfig(config);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          toast.error("自动旅行配置加载失败", { description: api.asError(e) });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   /** 首次启动自动导入本机账号（本会话只尝试一次，无本机账号时静默） */
   const autoImportTried = useRef(false);
   useEffect(() => {
@@ -211,6 +255,23 @@ export default function AccountsPage() {
     };
   }, [accounts]);
 
+  // 账号列表变化后并行查询各账号今日旅行状态
+  useEffect(() => {
+    if (!accounts.length) return;
+    let cancelled = false;
+    void fetchTravelMap(
+      accounts.map((account) => account.id),
+      () => cancelled,
+    ).then((next) => {
+      if (!cancelled && Object.keys(next).length > 0) {
+        setTravelMap((prev) => ({ ...prev, ...next }));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts]);
+
   // 只给尚未缓存的账号拉积分；切回首页不重复请求。点「刷新积分」才强制更新。
   useEffect(() => {
     if (!accounts.length) return;
@@ -242,6 +303,22 @@ export default function AccountsPage() {
       toast.error("自动签到设置保存失败", { description: api.asError(e) });
     } finally {
       setAutoCheckinSaving(false);
+    }
+  }
+
+  async function onAutoTravelChange(enabled: boolean) {
+    if (!autoTravelConfig || autoTravelSaving) return;
+    const previous = autoTravelConfig;
+    const next = { ...previous, enabled };
+    setAutoTravelConfig(next);
+    setAutoTravelSaving(true);
+    try {
+      setAutoTravelConfig(await api.saveAutoTravelConfig(next));
+    } catch (e) {
+      setAutoTravelConfig(previous);
+      toast.error("自动旅行设置保存失败", { description: api.asError(e) });
+    } finally {
+      setAutoTravelSaving(false);
     }
   }
 
@@ -591,6 +668,21 @@ export default function AccountsPage() {
                 </DemoAction>
                 {autoCheckinSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label="正在保存自动签到设置" />}
               </div>
+              <div className="mr-1 flex items-center gap-2.5">
+                <label htmlFor="accounts-auto-travel" className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  自动旅行
+                </label>
+                <DemoAction>
+                  <Switch
+                    id="accounts-auto-travel"
+                    checked={autoTravelConfig?.enabled ?? false}
+                    disabled={!autoTravelConfig || autoTravelSaving}
+                    onCheckedChange={(enabled) => void onAutoTravelChange(enabled)}
+                    aria-label="自动旅行"
+                  />
+                </DemoAction>
+                {autoTravelSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label="正在保存自动旅行设置" />}
+              </div>
               <Separator orientation="vertical" className="mx-2 h-5" />
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -649,6 +741,7 @@ export default function AccountsPage() {
                 onCheckin={onCheckin}
                 onRefresh={onRefresh}
                 todayCheckedIn={checkinMap[a.id]}
+                travelStatus={travelMap[a.id]}
                 credit={creditMap[a.id]}
                 creditLoading={creditLoadingMap[a.id]}
                 creditUpdatedAt={creditUpdatedAtMap[a.id]}

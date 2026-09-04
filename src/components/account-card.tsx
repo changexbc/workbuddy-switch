@@ -16,7 +16,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { cn } from "@/lib/utils";
 import { demoModeEnabled } from "@/lib/demo-mode";
-import type { AccountMeta, CreditExpiry, CreditResource } from "@/lib/types";
+import type { AccountMeta, CreditExpiry, CreditResource, TravelStatus } from "@/lib/types";
 
 const AVATAR_TONES = [
   "bg-emerald-100 text-emerald-800",
@@ -88,6 +88,22 @@ function accountIdentity(account: AccountMeta): string {
 
 const chipClass = "rounded-md px-1.5 py-0 text-[11px] font-medium";
 
+/** 按旅行状态渲染标签：无 Buddy / 未旅行 / 旅行中 / 已结束。 */
+function travelChip(status: TravelStatus | undefined) {
+  if (!status) return null;
+  switch (status.label) {
+    case "no-buddy":
+      return <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>无 Buddy</Badge>;
+    case "traveling":
+      return <Badge variant="secondary" className={chipClass}>旅行中</Badge>;
+    case "finished":
+      return <Badge variant="success" className={chipClass}>已结束</Badge>;
+    case "untraveled":
+    default:
+      return <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>未旅行</Badge>;
+  }
+}
+
 interface Props {
   account: AccountMeta;
   onDelete: (a: AccountMeta) => void;
@@ -95,6 +111,8 @@ interface Props {
   onRefresh?: (a: AccountMeta) => void;
   onSwitch?: (a: AccountMeta) => void;
   todayCheckedIn?: boolean;
+  /** 今日旅行状态（undefined=查询中/未知，不渲染标签） */
+  travelStatus?: TravelStatus;
   credit?: CreditExpiry;
   creditLoading?: boolean;
   /** 该账号积分最近一次查询完成时间（时间戳） */
@@ -132,7 +150,7 @@ function ProductCurrentState({ product, compact = false }: { product: "workbuddy
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch, todayCheckedIn, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, featuresDisabled = true, compact = false }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch, todayCheckedIn, travelStatus, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, featuresDisabled = true, compact = false }: Props) {
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const name = account.nickname || account.uid || "未命名账号";
   const expired = typeof account.expiresAt === "number" && account.expiresAt < Date.now();
@@ -156,6 +174,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
       {todayCheckedIn !== undefined && (
         <Badge variant={todayCheckedIn ? "success" : "secondary"} className={cn(chipClass, !todayCheckedIn && "text-muted-foreground")}><CircleCheck /> {todayCheckedIn ? "已签到" : "未签到"}</Badge>
       )}
+      {travelChip(travelStatus)}
       {(account.needsRelogin || expired) && <Badge variant="warning" className={chipClass}>{account.needsRelogin ? "需重新登录" : "Token 已过期"}</Badge>}
       {creditPriority && <Badge variant="warning" className={chipClass}>建议优先</Badge>}
       {!compact && workbuddyActive && codebuddyCliActive && <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>2 个工具正在使用</Badge>}

@@ -2,6 +2,7 @@ import type {
   AccountMeta, AppStatus, AutoRotateConfig, CheckinConfig, CheckinLog,
   CodeBuddyCliStatus, CodeBuddyCliSwitchResult, CreditExpiry, CreditOfficialUsageModel, CreditStatistics,
   GithubConfig, RotateLog, RotateStatus, TokenStatistics, TokenStatsGroup, TokenStatsSource, TokenStatsTotals,
+  TravelConfig, TravelStatus,
 } from "./types";
 import { demoModeEnabled } from "./demo-mode";
 
@@ -326,6 +327,18 @@ function checkinConfig(): CheckinConfig {
   return { enabled: true, keepalive_days: 7, lazy_refresh_hours: 12 };
 }
 
+function travelConfig(): TravelConfig {
+  return { enabled: true };
+}
+
+function travelStatus(accountId: string): TravelStatus {
+  const index = Math.max(0, accounts.findIndex((account) => account.id === accountId));
+  // 演示三种状态：旅行中 / 已结束 / 无 Buddy
+  if (index % 3 === 0) return { label: "traveling", rewardCredit: null };
+  if (index % 3 === 1) return { label: "finished", rewardCredit: 20 };
+  return { label: "no-buddy", rewardCredit: null };
+}
+
 function rotateConfig(): AutoRotateConfig {
   return { enabled: true, check_interval_minutes: 15, cooldown_minutes: 120, min_gap_hours: 24, min_urgency_hours: 72, active_guard_minutes: 30, min_remaining_credits: 50 };
 }
@@ -415,6 +428,8 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "get_token_statistics": return demoTokenStatistics(typeof args?.days === "number" ? args.days : undefined);
     case "get_auto_checkin_config": return checkinConfig();
     case "get_checkin_logs": return { logs: checkinLogs() };
+    case "get_travel_status": return travelStatus(String(args?.accountId ?? ""));
+    case "get_auto_travel_config": return travelConfig();
     case "get_auto_rotate_config": return config;
     case "rotate_status": return rotateStatus;
     case "get_rotate_logs": return { logs: rotateLogs() };
