@@ -125,6 +125,17 @@ export interface CheckinResult {
   error?: string;
 }
 
+export interface TravelConfig {
+  enabled: boolean;
+}
+
+export type TravelStatusLabel = "untraveled" | "no-buddy" | "traveling" | "finished";
+
+export interface TravelStatus {
+  label: TravelStatusLabel;
+  rewardCredit: number | null;
+}
+
 export interface AutoRotateConfig {
   enabled: boolean;
   check_interval_minutes: number;
