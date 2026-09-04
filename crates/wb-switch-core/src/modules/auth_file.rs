@@ -26,7 +26,7 @@ pub fn auth_file_path() -> PathBuf {
 /// WorkBuddy 应用路径。
 pub fn workbuddy_app_path() -> PathBuf {
     #[cfg(target_os = "macos")]
-    return PathBuf::from("/Applications/WorkBuddy.app");
+    return crate::modules::process::macos_workbuddy_app_path();
 
     #[cfg(target_os = "windows")]
     {
