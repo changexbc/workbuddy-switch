@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, credit_usage, credits, export_import, oauth,
-    process, refresh, rotate, session, switch, token_stats, update,
+    process, refresh, rotate, session, switch, token_stats, travel, update,
 };
 
 #[derive(Serialize)]
@@ -325,6 +325,30 @@ pub fn save_auto_checkin_config(config: Value) -> Result<Value, String> {
 #[tauri::command]
 pub fn get_checkin_logs() -> Value {
     json!({ "logs": crate::modules::config::load_checkin_logs() })
+}
+
+// ---------------------------------------------------------------------------
+// 派猫猫旅行
+// ---------------------------------------------------------------------------
+
+/// GET /api/travel/status —— 查询单账号今日旅行状态标签。
+#[tauri::command]
+pub fn get_travel_status(account_id: String) -> Result<Value, String> {
+    account::find_account(&account_id).ok_or("账号不存在")?;
+    Ok(travel::travel_display(&account_id))
+}
+
+/// GET /api/travel/config —— 自动旅行配置。
+#[tauri::command]
+pub fn get_auto_travel_config() -> Value {
+    crate::modules::config::load_travel_config()
+}
+
+/// POST /api/travel/config —— 保存自动旅行配置。
+#[tauri::command]
+pub fn save_auto_travel_config(config: Value) -> Result<Value, String> {
+    crate::modules::config::save_travel_config(&config).map_err(|e| e.to_string())?;
+    Ok(crate::modules::config::load_travel_config())
 }
 
 // ---------------------------------------------------------------------------

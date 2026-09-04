@@ -23,6 +23,8 @@ import type {
   RotateStatus,
   Session,
   SwitchResult,
+  TravelConfig,
+  TravelStatus,
   UpdateInfo,
 } from "./types";
 import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled } from "./demo-mode";
@@ -41,6 +43,7 @@ const DEMO_READ_COMMANDS = new Set([
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
   "get_github_config", "check_update", "get_launch_at_login_enabled", "switch_progress",
+  "get_travel_status", "get_auto_travel_config",
 ]);
 
 export function isDemoMode(): boolean {
@@ -95,6 +98,9 @@ const ROUTES: Record<string, Route> = {
   get_auto_checkin_config: { method: "GET", path: "/api/checkin/config" },
   save_auto_checkin_config: { method: "POST", path: "/api/checkin/config" },
   get_checkin_logs: { method: "GET", path: "/api/checkin/logs" },
+  get_travel_status: { method: "GET", path: "/api/travel/status" },
+  get_auto_travel_config: { method: "GET", path: "/api/travel/config" },
+  save_auto_travel_config: { method: "POST", path: "/api/travel/config" },
   get_auto_rotate_config: { method: "GET", path: "/api/rotate/config" },
   save_auto_rotate_config: { method: "POST", path: "/api/rotate/config" },
   rotate_status: { method: "GET", path: "/api/rotate/status" },
@@ -362,6 +368,31 @@ export function saveAutoCheckinConfig(config: CheckinConfig): Promise<CheckinCon
 
 export function getCheckinLogs(): Promise<{ logs: CheckinLog[] }> {
   return call("get_checkin_logs");
+}
+
+export async function getTravelStatus(accountId: string): Promise<TravelStatus> {
+  if (demoModeEnabled) {
+    return screenshotDemoResponse("get_travel_status", { accountId }) as TravelStatus;
+  }
+  if (isWebui()) {
+    // webui 端为批量接口，按 accountId 过滤
+    const all = await httpCall<{
+      accounts: { accountId: string; email: string; label: TravelStatus["label"]; rewardCredit: number | null }[];
+    }>("get_travel_status");
+    const one = all.accounts.find((a) => a.accountId === accountId);
+    return one ? { label: one.label, rewardCredit: one.rewardCredit } : { label: "untraveled", rewardCredit: null };
+  }
+  return call("get_travel_status", { accountId });
+}
+
+export function getAutoTravelConfig(): Promise<TravelConfig> {
+  return call("get_auto_travel_config");
+}
+
+export function saveAutoTravelConfig(config: TravelConfig): Promise<TravelConfig> {
+  return call("save_auto_travel_config", {
+    config: config as unknown as Record<string, unknown>,
+  });
 }
 
 export function getAutoRotateConfig(): Promise<AutoRotateConfig> {

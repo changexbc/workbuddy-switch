@@ -44,3 +44,4 @@ npm/platform/*/bin/
 .agents/
 .codex/
 .grok/
+/.workbuddy/
