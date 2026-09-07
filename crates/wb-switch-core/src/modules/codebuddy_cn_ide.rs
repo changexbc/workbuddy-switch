@@ -5,7 +5,9 @@
 //! secret，并可选重启 CodeBuddy CN。与 CodeBuddy CLI（`~/.codebuddy`）完全独立。
 
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 #[cfg(not(target_os = "macos"))]
