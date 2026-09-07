@@ -7,12 +7,16 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 #[cfg(not(target_os = "macos"))]
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 use crate::modules::account::{self, get_str};
-use crate::modules::config::{atomic_write, home_dir, now_ms, store_dir};
+#[cfg(target_os = "macos")]
+use crate::modules::config::home_dir;
+use crate::modules::config::{atomic_write, now_ms, store_dir};
 // 复用 process 模块带并发管道读取的正确实现；本地轮询版会在子进程输出
 // 超过 64KB（如 `ps -axo pid=,args=`）时因管道写满而死锁到超时。
 use crate::modules::process::run_cmd_timeout as run_cmd;
@@ -22,7 +26,9 @@ use crate::modules::vscode_cn_inject::{
 };
 
 const STATE_FILE: &str = "codebuddy_cn_ide.json";
+#[cfg(target_os = "macos")]
 const MACOS_BUNDLE_ID: &str = "com.tencent.codebuddycn";
+#[cfg(target_os = "macos")]
 const MACOS_APP_NAME: &str = "CodeBuddy CN.app";
 
 fn state_path() -> PathBuf {
@@ -189,6 +195,7 @@ fn match_account_for_token(uid: Option<&str>, token: &str) -> Option<Value> {
         .find(|a| get_str(a, "access_token").as_deref() == Some(token))
 }
 
+#[cfg(target_os = "macos")]
 fn macos_app_candidates() -> Vec<PathBuf> {
     let home = home_dir();
     vec![
@@ -197,6 +204,7 @@ fn macos_app_candidates() -> Vec<PathBuf> {
     ]
 }
 
+#[cfg(target_os = "macos")]
 fn is_app_bundle(path: &Path) -> bool {
     path.is_dir() && path.join("Contents").join("Info.plist").is_file()
 }
