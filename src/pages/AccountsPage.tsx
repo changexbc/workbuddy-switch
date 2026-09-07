@@ -14,7 +14,7 @@ import {
 
 import { AccountCard } from "@/components/account-card";
 import { DemoAction } from "@/components/demo-action";
-import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
+import { CodeBuddyCnIdeMark, CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -391,18 +391,18 @@ export default function AccountsPage() {
   async function onSwitchCodebuddyCnIde(account: AccountMeta) {
     if (codebuddyCnIdeSwitchingId !== null) return;
     setCodebuddyCnIdeSwitchingId(account.id);
-    const toastId = toast.loading("正在切换 CodeBuddy CN IDE…", {
-      description: "将注入凭证并重启 CodeBuddy CN",
+    const toastId = toast.loading("正在切换 CodeBuddy IDE…", {
+      description: "将注入凭证并重启 CodeBuddy IDE",
     });
     try {
       const result = await api.switchCodebuddyCnIdeAccount(account.id, true);
       await refreshCodebuddyCnIdeStatus();
-      toast.success("CodeBuddy CN IDE 已切换", {
+      toast.success("CodeBuddy IDE 已切换", {
         id: toastId,
         description: result.message || result.account,
       });
     } catch (error) {
-      toast.error("CodeBuddy CN IDE 切换失败", {
+      toast.error("CodeBuddy IDE 切换失败", {
         id: toastId,
         description: api.asError(error),
       });
@@ -477,7 +477,7 @@ export default function AccountsPage() {
           <div className="min-w-0">
             <h1 className="text-[28px] font-semibold tracking-tight">账号管理</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              统一管理 WorkBuddy、CodeBuddy CLI 与 CodeBuddy CN IDE 账号、积分和签到状态。
+              统一管理 WorkBuddy、CodeBuddy IDE 与 CodeBuddy CLI 账号、积分和签到状态。
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-4 pt-1">
@@ -494,6 +494,20 @@ export default function AccountsPage() {
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
                   WorkBuddy：{status?.running ? "运行中" : "未运行"} · 当前账号：{workbuddyCurrentName}
+                </span>
+              </span>
+              <span className="group relative inline-flex cursor-default">
+                <span
+                  className={
+                    codebuddyCnIde?.installed
+                      ? "inline-flex rounded-[22%] bg-primary p-[2px] shadow-sm shadow-primary/40"
+                      : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
+                  }
+                >
+                  <CodeBuddyCnIdeMark size={28} />
+                </span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
+                  CodeBuddy IDE：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
                 </span>
               </span>
               <span className="group relative inline-flex cursor-default">
@@ -559,17 +573,6 @@ export default function AccountsPage() {
           <AlertTitle>加载失败</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
-      )}
-
-      {codebuddyCnIde && (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Badge variant={codebuddyCnIde.installed ? "secondary" : "outline"} className="gap-1.5">
-            <CodeBuddyMark size={14} />
-            CodeBuddy CN IDE：{codebuddyCnIde.installed ? (codebuddyCnIde.running ? "运行中" : "已安装") : "未安装"}
-            · 当前账号：{cnIdeCurrentName}
-          </Badge>
-          <span className="text-[11px] text-muted-foreground">与 CodeBuddy CLI 独立；切换会重启桌面客户端</span>
-        </div>
       )}
 
       {codebuddyCli &&

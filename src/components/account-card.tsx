@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
+import { CodeBuddyCnIdeMark, CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { cn } from "@/lib/utils";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import type { AccountMeta, CreditExpiry, CreditResource } from "@/lib/types";
@@ -124,7 +124,7 @@ function ProductCurrentState({ product, compact = false }: { product: "workbuddy
     product === "workbuddy"
       ? "WorkBuddy 当前账号"
       : product === "codebuddy-cn"
-        ? "CodeBuddy CN IDE 当前账号"
+        ? "CodeBuddy IDE 当前账号"
         : "CodeBuddy CLI 当前账号";
   return (
     <span
@@ -138,13 +138,10 @@ function ProductCurrentState({ product, compact = false }: { product: "workbuddy
     >
       {product === "workbuddy" ? (
         <WorkBuddyMark size={compact ? 18 : 22} />
+      ) : product === "codebuddy-cn" ? (
+        <CodeBuddyCnIdeMark size={compact ? 18 : 22} />
       ) : (
-        <span className="relative inline-flex">
-          <CodeBuddyMark size={compact ? 18 : 22} />
-          {product === "codebuddy-cn" && (
-            <span className="absolute -bottom-1 -right-1 rounded bg-primary px-0.5 text-[8px] font-bold leading-none text-primary-foreground">CN</span>
-          )}
-        </span>
+        <CodeBuddyMark size={compact ? 18 : 22} />
       )}
       <Check className={compact ? "size-3.5" : "size-4"} strokeWidth={2.25} />
     </span>
@@ -170,6 +167,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
     })
     .map(({ resource }) => resource);
 
+  const activeProductCount = [workbuddyActive, codebuddyCliActive, codebuddyCnIdeActive].filter(Boolean).length;
+
   const statusChips = (
     <>
       {todayCheckedIn !== undefined && (
@@ -177,7 +176,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
       )}
       {(account.needsRelogin || expired) && <Badge variant="warning" className={chipClass}>{account.needsRelogin ? "需重新登录" : "Token 已过期"}</Badge>}
       {creditPriority && <Badge variant="warning" className={chipClass}>建议优先</Badge>}
-      {!compact && workbuddyActive && codebuddyCliActive && <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>2 个工具正在使用</Badge>}
+      {!compact && activeProductCount >= 2 && <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>{activeProductCount} 个工具正在使用</Badge>}
     </>
   );
 
@@ -238,8 +237,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy || codebuddyCnIdeActive}
                   onSelect={() => onSwitchCodebuddyCnIde?.(account)}
                 >
-                  <CodeBuddyMark size={14} />
-                  {codebuddyCnIdeLoading ? "正在切换 CN IDE…" : codebuddyCnIdeActive ? "已是 CN IDE 当前账号" : "切换到 CodeBuddy CN IDE"}
+                  <CodeBuddyCnIdeMark size={14} />
+                  {codebuddyCnIdeLoading ? "正在切换 IDE…" : codebuddyCnIdeActive ? "已是 IDE 当前账号" : "切换到 CodeBuddy IDE"}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem className="text-destructive focus:bg-destructive/5 focus:text-destructive" onSelect={() => onDelete(account)}>
@@ -283,6 +282,28 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   <TooltipContent side="top">设为 WorkBuddy 当前账号（会重启 WorkBuddy）</TooltipContent>
                 </Tooltip>
               )}
+              {codebuddyCnIdeActive ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+                      <CodeBuddyCnIdeMark size={15} />
+                      <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                        <Check className="size-2.5" strokeWidth={3} />
+                      </span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">CodeBuddy IDE 当前账号</TooltipContent>
+                </Tooltip>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="outline" size="icon" className="relative size-7 rounded-lg" disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy} onClick={() => onSwitchCodebuddyCnIde?.(account)} aria-label={codebuddyCnIdeLoading ? "正在切换 CodeBuddy IDE" : "切换到 CodeBuddy IDE"} aria-busy={codebuddyCnIdeLoading}>
+                      {codebuddyCnIdeLoading ? <Loader2 className="size-3.5 animate-spin" /> : <CodeBuddyCnIdeMark size={15} />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy IDE（会重启 IDE）" : "未检测到 CodeBuddy IDE"}</TooltipContent>
+                </Tooltip>
+              )}
               {codebuddyCliActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -303,30 +324,6 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="top">{codebuddyCliConfigured ? "设为 CodeBuddy CLI 当前账号" : "请先接入 CodeBuddy CLI"}</TooltipContent>
-                </Tooltip>
-              )}
-              {codebuddyCnIdeActive ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
-                      <CodeBuddyMark size={15} />
-                      <span className="absolute -bottom-0.5 -left-0.5 rounded bg-primary px-0.5 text-[8px] font-bold leading-none text-primary-foreground">CN</span>
-                      <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                        <Check className="size-2.5" strokeWidth={3} />
-                      </span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">CodeBuddy CN IDE 当前账号</TooltipContent>
-                </Tooltip>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="outline" size="icon" className="relative size-7 rounded-lg" disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy} onClick={() => onSwitchCodebuddyCnIde?.(account)} aria-label={codebuddyCnIdeLoading ? "正在切换 CodeBuddy CN IDE" : "切换到 CodeBuddy CN IDE"} aria-busy={codebuddyCnIdeLoading}>
-                      {codebuddyCnIdeLoading ? <Loader2 className="size-3.5 animate-spin" /> : <CodeBuddyMark size={15} />}
-                      <span className="absolute -bottom-0.5 -right-0.5 rounded bg-muted-foreground/90 px-0.5 text-[8px] font-bold leading-none text-background">CN</span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy CN IDE（会重启 IDE）" : "未检测到 CodeBuddy CN IDE"}</TooltipContent>
                 </Tooltip>
               )}
             </div>
@@ -412,6 +409,16 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               <TooltipContent side="top">设为 WorkBuddy 当前账号（会重启 WorkBuddy）</TooltipContent>
             </Tooltip>
           )}
+          {codebuddyCnIdeActive ? <ProductCurrentState product="codebuddy-cn" compact /> : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy} onClick={() => onSwitchCodebuddyCnIde?.(account)} aria-label={codebuddyCnIdeLoading ? "正在切换 CodeBuddy IDE" : "切换到 CodeBuddy IDE"} aria-busy={codebuddyCnIdeLoading}>
+                  {codebuddyCnIdeLoading ? <Loader2 className="size-4 animate-spin" /> : <CodeBuddyCnIdeMark size={18} />}<span>{codebuddyCnIdeLoading ? "切换中…" : "IDE"}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy IDE（会重启 IDE）" : "未检测到 CodeBuddy IDE"}</TooltipContent>
+            </Tooltip>
+          )}
           {codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -420,16 +427,6 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">{codebuddyCliConfigured ? "设为 CodeBuddy CLI 当前账号" : "请先接入 CodeBuddy CLI"}</TooltipContent>
-            </Tooltip>
-          )}
-          {codebuddyCnIdeActive ? <ProductCurrentState product="codebuddy-cn" compact /> : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy} onClick={() => onSwitchCodebuddyCnIde?.(account)} aria-label={codebuddyCnIdeLoading ? "正在切换 CodeBuddy CN IDE" : "切换到 CodeBuddy CN IDE"} aria-busy={codebuddyCnIdeLoading}>
-                  {codebuddyCnIdeLoading ? <Loader2 className="size-4 animate-spin" /> : <CodeBuddyMark size={18} />}<span>{codebuddyCnIdeLoading ? "切换中…" : "CN IDE"}</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy CN IDE（会重启 IDE）" : "未检测到 CodeBuddy CN IDE"}</TooltipContent>
             </Tooltip>
           )}
         </footer>
