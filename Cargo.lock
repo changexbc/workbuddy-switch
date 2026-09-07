@@ -5084,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "tracing-attributes"
-version = "0.1.31"
+version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
 dependencies = [
@@ -5413,7 +5413,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-core"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -5434,7 +5434,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-rust"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "objc2",
  "objc2-app-kit",
@@ -5455,7 +5455,7 @@ dependencies = [
 
 [[package]]
 name = "wb-switch-server"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "axum",
  "rust-embed",
