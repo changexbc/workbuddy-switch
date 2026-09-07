@@ -7,6 +7,8 @@ import type {
   CodeBuddyCliInstallResult,
   CodeBuddyCliStatus,
   CodeBuddyCliSwitchResult,
+  CodeBuddyCnIdeStatus,
+  CodeBuddyCnIdeSwitchResult,
   CheckinConfig,
   CheckinLog,
   CheckinResult,
@@ -36,7 +38,7 @@ import { screenshotDemoResponse } from "./screenshot-demo";
 const API_BASE = "http://127.0.0.1:57890";
 
 const DEMO_READ_COMMANDS = new Set([
-  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_checkin_status",
+  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_checkin_status",
   "get_credit_expiry", "get_credit_statistics", "get_auto_checkin_config",
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
@@ -75,6 +77,9 @@ const ROUTES: Record<string, Route> = {
   get_codebuddy_cli_status: { method: "GET", path: "/api/codebuddy-cli/status" },
   install_codebuddy_cli_helper: { method: "POST", path: "/api/codebuddy-cli/install-helper" },
   switch_codebuddy_cli_account: { method: "POST", path: "/api/codebuddy-cli/switch" },
+  get_codebuddy_cn_ide_status: { method: "GET", path: "/api/codebuddy-cn-ide/status" },
+  switch_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/switch" },
+  detect_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/detect" },
   delete_account: { method: "POST", path: "/api/delete" },
   oauth_start: { method: "POST", path: "/api/oauth/start" },
   oauth_status: { method: "POST", path: "/api/oauth/status" },
@@ -188,6 +193,28 @@ export function switchCodebuddyCliAccount(accountId: string): Promise<CodeBuddyC
   }
   return call("switch_codebuddy_cli_account", { accountId });
 }
+
+export function getCodebuddyCnIdeStatus(): Promise<CodeBuddyCnIdeStatus> {
+  return call("get_codebuddy_cn_ide_status");
+}
+
+export function switchCodebuddyCnIdeAccount(
+  accountId: string,
+  restart = true,
+): Promise<CodeBuddyCnIdeSwitchResult> {
+  return call("switch_codebuddy_cn_ide_account", { accountId, restart });
+}
+
+export function detectCodebuddyCnIdeAccount(): Promise<{
+  ok: boolean;
+  found: boolean;
+  matched?: boolean;
+  accountId?: string;
+  message?: string;
+}> {
+  return call("detect_codebuddy_cn_ide_account");
+}
+
 
 export function deleteAccount(accountId: string): Promise<{ ok: boolean }> {
   return call("delete_account", { accountId });

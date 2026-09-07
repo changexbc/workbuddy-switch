@@ -379,3 +379,27 @@ export interface UpdateInfo {
   error?: string;
   message?: string;
 }
+
+/** CodeBuddy CN IDE（桌面客户端）状态；与 CodeBuddy CLI 独立。 */
+export interface CodeBuddyCnIdeStatus {
+  installed: boolean;
+  running: boolean;
+  dataDir: string | null;
+  dbPath: string | null;
+  dbExists: boolean;
+  appPath: string | null;
+  activeAccountId: string | null;
+  activeAccountName: string | null;
+  detectedFrom?: string;
+  statePath?: string;
+}
+
+export interface CodeBuddyCnIdeSwitchResult {
+  ok: boolean;
+  account: string;
+  accountId: string;
+  dbPath?: string;
+  restarted?: boolean;
+  message?: string;
+}
+

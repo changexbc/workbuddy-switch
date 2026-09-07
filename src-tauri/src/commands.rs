@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use tauri::Emitter;
 use wb_switch_core::modules::{
-    account, auth_file, checkin, codebuddy_cli, credit_usage, credits, export_import, oauth,
+    account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, credit_usage, credits, export_import, oauth,
     process, refresh, rotate, session, switch, token_stats, update,
 };
 
@@ -80,6 +80,25 @@ pub fn install_codebuddy_cli_helper() -> Result<Value, String> {
 pub fn switch_codebuddy_cli_account(account_id: String) -> Result<Value, String> {
     codebuddy_cli::set_active_account(&account_id)
 }
+
+/// GET /api/codebuddy-cn-ide/status —— CodeBuddy CN IDE 安装/运行/当前账号。
+#[tauri::command]
+pub fn get_codebuddy_cn_ide_status() -> Value {
+    codebuddy_cn_ide::status()
+}
+
+/// POST /api/codebuddy-cn-ide/switch —— 注入凭证并可选重启 CodeBuddy CN IDE。
+#[tauri::command(rename_all = "camelCase")]
+pub fn switch_codebuddy_cn_ide_account(account_id: String, restart: Option<bool>) -> Result<Value, String> {
+    codebuddy_cn_ide::switch_account(&account_id, restart.unwrap_or(true))
+}
+
+/// POST /api/codebuddy-cn-ide/detect —— 读取本机 CN IDE 当前登录并尝试匹配账号库。
+#[tauri::command]
+pub fn detect_codebuddy_cn_ide_account() -> Result<Value, String> {
+    codebuddy_cn_ide::detect_current_account()
+}
+
 
 /// DELETE /api/delete —— 删除账号。
 #[tauri::command]
