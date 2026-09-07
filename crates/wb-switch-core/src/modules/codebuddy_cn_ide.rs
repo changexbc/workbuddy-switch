@@ -6,11 +6,16 @@
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(target_os = "macos"))]
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use crate::modules::account::{self, get_str};
 use crate::modules::config::{atomic_write, home_dir, now_ms, store_dir};
+// 复用 process 模块带并发管道读取的正确实现；本地轮询版会在子进程输出
+// 超过 64KB（如 `ps -axo pid=,args=`）时因管道写满而死锁到超时。
+use crate::modules::process::run_cmd_timeout as run_cmd;
 use crate::modules::vscode_cn_inject::{
     codebuddy_cn_data_dir, codebuddy_cn_state_db_path, inject_codebuddy_cn_secret,
     read_codebuddy_cn_secret,
@@ -58,7 +63,7 @@ fn active_account_id_from_state() -> Option<String> {
         .map(str::to_string)
 }
 
-/// 构造注入到 CN IDE 的会话 JSON（对齐 cockpit build_session_json）。
+/// 构造注入到 CN IDE 的会话 JSON（与 CN 客户端登录态写入结构一致）。
 pub fn build_session_json(acc: &Value) -> String {
     let uid = get_str(acc, "uid").unwrap_or_default();
     let nickname = get_str(acc, "nickname").unwrap_or_default();
@@ -197,11 +202,19 @@ fn is_app_bundle(path: &Path) -> bool {
 }
 
 /// 解析 CodeBuddy CN.app 路径。
+///
+/// macOS 命中后缓存结果：状态查询会频繁调用本函数，而 mdfind（Spotlight）
+/// 冷启动可能耗时数秒。未命中不缓存，以便运行期间新安装应用后能立即识别。
 pub fn codebuddy_cn_app_path() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
+        static CACHED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        if let Some(path) = CACHED.get() {
+            return Some(path.clone());
+        }
         for p in macos_app_candidates() {
             if is_app_bundle(&p) {
+                let _ = CACHED.set(p.clone());
                 return Some(p);
             }
         }
@@ -218,6 +231,7 @@ pub fn codebuddy_cn_app_path() -> Option<PathBuf> {
                 {
                     let p = PathBuf::from(line);
                     if is_app_bundle(&p) {
+                        let _ = CACHED.set(p.clone());
                         return Some(p);
                     }
                 }
@@ -255,30 +269,6 @@ pub fn codebuddy_cn_app_path() -> Option<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .find(|p| p.is_file())
-    }
-}
-
-fn run_cmd(program: &str, args: &[&str], timeout_secs: u64) -> Option<std::process::Output> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().ok(),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => return None,
-        }
     }
 }
 
@@ -581,9 +571,9 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
         "dbPath": db_path.to_string_lossy(),
         "restarted": restart,
         "message": if restart {
-            format!("已切换 CodeBuddy CN IDE 到 {} 并重启", account::account_display_name(&acc))
+            format!("已切换 CodeBuddy IDE 到 {} 并重启", account::account_display_name(&acc))
         } else {
-            format!("已写入 CodeBuddy CN IDE 凭证（{}）；请手动重启 CodeBuddy CN 生效", account::account_display_name(&acc))
+            format!("已写入 CodeBuddy IDE 凭证（{}）；请手动重启 CodeBuddy CN 生效", account::account_display_name(&acc))
         },
     }))
 }

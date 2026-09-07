@@ -35,7 +35,7 @@ fn cmd_builder(program: impl AsRef<std::ffi::OsStr>) -> Command {
 /// 注意：stdout/stderr 必须与等待并发读取——先等退出再读会在输出超过
 /// 64KB 管道缓冲时死锁（`ps -axo` 全量输出在进程多的机器上很容易超过），
 /// 子进程写满阻塞永不退出，最终被超时 kill 并返回 None。
-fn run_cmd_timeout(program: &str, args: &[&str], timeout_secs: u64) -> Option<Output> {
+pub(crate) fn run_cmd_timeout(program: &str, args: &[&str], timeout_secs: u64) -> Option<Output> {
     let mut child = cmd_builder(program)
         .args(args)
         .stdout(Stdio::piped())

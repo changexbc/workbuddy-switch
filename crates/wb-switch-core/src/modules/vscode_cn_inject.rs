@@ -9,8 +9,6 @@
 //! - Linux: secret-tool / peanuts 固定密钥 → AES-128-CBC `v11`/`v10`
 
 use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use std::process::Command;
 
 #[cfg(not(target_os = "windows"))]
 use aes::Aes128;
@@ -196,9 +194,14 @@ fn encrypt_cbc_prefixed(
     Ok(result)
 }
 
+/// 运行命令并取 trim 后的 stdout；带超时兜底。
+///
+/// macOS 上 `security find-generic-password` 可能因 Keychain 授权弹窗而长时间
+/// 挂起（甚至无限期等待用户决定），因此不能使用无超时的阻塞式 `.output()`；
+/// 子进程输出也需并发读取（复用 process 模块实现），避免写满管道死锁。
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn run_command_get_trimmed(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+fn run_command_get_trimmed(program: &str, args: &[&str], timeout_secs: u64) -> Option<String> {
+    let output = crate::modules::process::run_cmd_timeout(program, args, timeout_secs)?;
     if !output.status.success() {
         return None;
     }
@@ -247,13 +250,16 @@ fn get_macos_safe_storage_password() -> Result<String, String> {
                     "-a",
                     account_value,
                 ],
+                10,
             ) {
                 return Ok(password);
             }
         }
-        if let Some(password) =
-            run_command_get_trimmed("security", &["find-generic-password", "-w", "-s", &service])
-        {
+        if let Some(password) = run_command_get_trimmed(
+            "security",
+            &["find-generic-password", "-w", "-s", &service],
+            10,
+        ) {
             return Ok(password);
         }
     }
@@ -278,7 +284,7 @@ fn get_linux_v11_key() -> Option<[u8; 16]> {
         "codebuddycn",
     ] {
         if let Some(password) =
-            run_command_get_trimmed("secret-tool", &["lookup", "application", app])
+            run_command_get_trimmed("secret-tool", &["lookup", "application", app], 10)
         {
             return Some(pbkdf2_sha1_key(&password, 1));
         }
