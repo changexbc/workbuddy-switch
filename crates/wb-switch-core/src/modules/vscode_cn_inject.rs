@@ -214,56 +214,18 @@ fn run_command_get_trimmed(program: &str, args: &[&str], timeout_secs: u64) -> O
 }
 
 #[cfg(target_os = "macos")]
-fn macos_safe_storage_candidates() -> Vec<(String, Option<String>)> {
-    vec![
-        (
-            "CodeBuddy CN Safe Storage".to_string(),
-            Some("CodeBuddy CN".to_string()),
-        ),
-        (
-            "CodeBuddy CN Safe Storage".to_string(),
-            Some("codebuddy cn".to_string()),
-        ),
-        (
-            "CodeBuddy CN Safe Storage".to_string(),
-            Some("CodeBuddy CN Key".to_string()),
-        ),
-        ("CodeBuddy CN Safe Storage".to_string(), None),
-        (
-            "CodeBuddy CN Safe Storage".to_string(),
-            Some("CodeBuddy CN Safe Storage".to_string()),
-        ),
-    ]
-}
-
-#[cfg(target_os = "macos")]
 fn get_macos_safe_storage_password() -> Result<String, String> {
-    for (service, account) in macos_safe_storage_candidates() {
-        if let Some(account_value) = account.as_deref() {
-            if let Some(password) = run_command_get_trimmed(
-                "security",
-                &[
-                    "find-generic-password",
-                    "-w",
-                    "-s",
-                    &service,
-                    "-a",
-                    account_value,
-                ],
-                10,
-            ) {
-                return Ok(password);
-            }
-        }
-        if let Some(password) = run_command_get_trimmed(
-            "security",
-            &["find-generic-password", "-w", "-s", &service],
-            10,
-        ) {
-            return Ok(password);
-        }
-    }
-    Err("无法从 Keychain 读取 CodeBuddy CN Safe Storage 密码。请先手动打开 CodeBuddy CN 并登录一次。".to_string())
+    // 只查询一次：解密只依赖 password 本身、与 account 属性无关，
+    // 单次查询最多触发一次钥匙串授权弹窗（多候选循环会逐次弹窗）。
+    run_command_get_trimmed(
+        "security",
+        &["find-generic-password", "-w", "-s", "CodeBuddy CN Safe Storage"],
+        10,
+    )
+    .ok_or_else(|| {
+        "无法从 Keychain 读取 CodeBuddy CN Safe Storage 密码。请先手动打开 CodeBuddy CN 并登录一次。"
+            .to_string()
+    })
 }
 
 #[cfg(target_os = "linux")]

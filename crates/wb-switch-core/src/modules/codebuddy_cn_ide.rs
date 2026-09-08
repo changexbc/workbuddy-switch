@@ -483,7 +483,7 @@ pub fn launch_codebuddy_cn() -> Result<(), String> {
     }
 }
 
-/// 状态：是否安装、是否运行、当前账号（优先本地状态文件，其次尝试读 secret）。
+/// 状态：是否安装、是否运行、当前账号（仅来自本地状态文件 + 账号库，不读取钥匙串）。
 pub fn status() -> Value {
     let data_dir = codebuddy_cn_data_dir();
     let db_path = codebuddy_cn_state_db_path();
@@ -494,26 +494,13 @@ pub fn status() -> Value {
 
     let mut active_account_id = active_account_id_from_state();
     let mut active_account_name: Option<String> = None;
-    let mut detected_from = "state".to_string();
 
     if let Some(id) = active_account_id.clone() {
         if let Some(acc) = account::find_account(&id) {
             active_account_name = Some(account::account_display_name(&acc));
         } else {
+            // 状态文件有记录但账号库已无此账号：视为未检测到，不回退读取钥匙串
             active_account_id = None;
-        }
-    }
-
-    // 尝试从本机 secret 匹配（Keychain 可用时）
-    if active_account_id.is_none() {
-        if let Ok(Some(secret)) = read_codebuddy_cn_secret(None) {
-            if let Some((uid, token)) = parse_token_from_secret(&secret) {
-                if let Some(acc) = match_account_for_token(uid.as_deref(), &token) {
-                    active_account_id = get_str(&acc, "id");
-                    active_account_name = Some(account::account_display_name(&acc));
-                    detected_from = "local-secret".to_string();
-                }
-            }
         }
     }
 
@@ -526,7 +513,7 @@ pub fn status() -> Value {
         "appPath": codebuddy_cn_app_path().map(|p| p.to_string_lossy().to_string()),
         "activeAccountId": active_account_id,
         "activeAccountName": active_account_name,
-        "detectedFrom": detected_from,
+        "detectedFrom": "state",
         "statePath": state_path().to_string_lossy(),
     })
 }

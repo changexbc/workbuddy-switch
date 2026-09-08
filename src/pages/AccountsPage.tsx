@@ -9,6 +9,7 @@ import {
   QrCode,
   RefreshCw,
   Rows3,
+  ScanSearch,
   Terminal,
 } from "lucide-react";
 
@@ -123,6 +124,8 @@ export default function AccountsPage() {
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [codebuddyCnIde, setCodebuddyCnIde] = useState<CodeBuddyCnIdeStatus | null>(null);
   const [codebuddyCnIdeSwitchingId, setCodebuddyCnIdeSwitchingId] = useState<string | null>(null);
+  /** 「检测本机登录」进行中（读钥匙串可能等待授权数秒） */
+  const [detectingCodebuddyCnIde, setDetectingCodebuddyCnIde] = useState(false);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
   /** 刷新按钮触发的批量签到进行中 */
   const [checkinAllRunning, setCheckinAllRunning] = useState(false);
@@ -411,6 +414,41 @@ export default function AccountsPage() {
     }
   }
 
+  /** 显式检测本机 CodeBuddy IDE 登录态（会读钥匙串，可能触发一次系统授权弹窗）。 */
+  async function onDetectCodebuddyCnIde() {
+    if (detectingCodebuddyCnIde) return;
+    setDetectingCodebuddyCnIde(true);
+    const toastId = toast.loading("正在检测本机 CodeBuddy IDE 登录…", {
+      description: "检测过程可能需要系统授权，请按提示允许",
+    });
+    try {
+      const result = await api.detectCodebuddyCnIdeAccount();
+      if (result.found) {
+        // 匹配成功时后端会把账号写回状态文件；刷新以高亮对应账号卡
+        await refreshCodebuddyCnIdeStatus();
+      }
+      if (result.found && result.matched) {
+        toast.success("检测成功", {
+          id: toastId,
+          description: "已在本机检测到 CodeBuddy IDE 登录账号并匹配到账号库",
+        });
+      } else if (result.found) {
+        toast.info("已检测到本机登录，但未匹配到账号", {
+          id: toastId,
+          description: result.message,
+        });
+      } else {
+        toast.info("未检测到本机 CodeBuddy IDE 登录", {
+          id: toastId,
+          description: result.message ?? "本机 CodeBuddy CN 未找到登录 secret",
+        });
+      }
+    } catch (error) {
+      toast.error("检测失败", { id: toastId, description: api.asError(error) });
+    } finally {
+      setDetectingCodebuddyCnIde(false);
+    }
+  }
 
   async function onInstallCodebuddyCli() {
     // 桌面 App（Tauri WebView）不支持 window.confirm，改用 Dialog 确认
@@ -510,6 +548,33 @@ export default function AccountsPage() {
                   CodeBuddy IDE：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
                 </span>
               </span>
+              {codebuddyCnIde?.installed && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <DemoAction>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="size-8 rounded-lg"
+                          disabled={detectingCodebuddyCnIde}
+                          onClick={() => void onDetectCodebuddyCnIde()}
+                          aria-label="检测本机 CodeBuddy IDE 登录账号"
+                        >
+                          {detectingCodebuddyCnIde ? (
+                            <Loader2 className="animate-spin" />
+                          ) : (
+                            <ScanSearch />
+                          )}
+                        </Button>
+                      </DemoAction>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {api.isDemoMode() ? "演示模式下不可操作" : "检测本机 CodeBuddy IDE 登录账号"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
               <span className="group relative inline-flex cursor-default">
                 <span
                   className={
