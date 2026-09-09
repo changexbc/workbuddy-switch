@@ -106,6 +106,35 @@ pub fn clear_workbuddy_exe_cache() {
     let _ = std::fs::remove_file(workbuddy_exe_cache_file());
 }
 
+pub fn codebuddy_cn_app_cache_file() -> PathBuf {
+    store_dir().join("codebuddy_cn_app.json")
+}
+
+fn parse_codebuddy_cn_app_cache_json(text: &str) -> Option<PathBuf> {
+    parse_workbuddy_exe_cache_json(text)
+}
+
+/// 读取上次成功解析到的 CodeBuddy CN 应用路径；损坏或空文件视为无缓存。
+pub fn load_codebuddy_cn_app_cache() -> Option<PathBuf> {
+    let f = codebuddy_cn_app_cache_file();
+    if !f.exists() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&f).ok()?;
+    parse_codebuddy_cn_app_cache_json(&text)
+}
+
+pub fn save_codebuddy_cn_app_cache(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(store_dir())?;
+    let content =
+        serde_json::to_string_pretty(&json!({ "exe": path.to_string_lossy() })).unwrap_or_default();
+    atomic_write(&codebuddy_cn_app_cache_file(), &content)
+}
+
+pub fn clear_codebuddy_cn_app_cache() {
+    let _ = std::fs::remove_file(codebuddy_cn_app_cache_file());
+}
+
 // ---------------------------------------------------------------------------
 // 签到配置 / 日志（对照 server.py load/save_checkin_config / load/save/add_checkin_log）
 // ---------------------------------------------------------------------------
@@ -860,5 +889,32 @@ mod tests {
         assert!(parse_workbuddy_exe_cache_json("not-json").is_none());
         assert!(parse_workbuddy_exe_cache_json(r#"{ "exe": "  " }"#).is_none());
         assert!(parse_workbuddy_exe_cache_json("{}").is_none());
+    }
+
+    #[test]
+    fn parse_codebuddy_cn_app_cache_json_reads_exe() {
+        let path = parse_codebuddy_cn_app_cache_json(
+            r#"{ "exe": "/Applications/CodeBuddy CN.app" }"#,
+        )
+        .expect("valid cache");
+        assert_eq!(path.to_string_lossy(), "/Applications/CodeBuddy CN.app");
+    }
+
+    #[test]
+    fn parse_codebuddy_cn_app_cache_json_ignores_corrupt_and_empty() {
+        assert!(parse_codebuddy_cn_app_cache_json("not-json").is_none());
+        assert!(parse_codebuddy_cn_app_cache_json(r#"{ "exe": "  " }"#).is_none());
+        assert!(parse_codebuddy_cn_app_cache_json("{}").is_none());
+    }
+
+    #[test]
+    fn codebuddy_cn_app_cache_file_is_not_workbuddy_exe_cache() {
+        assert_ne!(
+            codebuddy_cn_app_cache_file(),
+            workbuddy_exe_cache_file()
+        );
+        assert!(codebuddy_cn_app_cache_file()
+            .file_name()
+            .is_some_and(|n| n == "codebuddy_cn_app.json"));
     }
 }

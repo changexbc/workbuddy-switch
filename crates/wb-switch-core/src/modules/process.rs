@@ -19,7 +19,7 @@ use crate::modules::config;
 
 /// 创建子进程命令。Windows 上加 CREATE_NO_WINDOW，避免每次执行 tasklist/powershell
 /// 等控制台命令时闪出 cmd 黑窗口（GUI 应用卡顿/跳动的主因）。
-fn cmd_builder(program: impl AsRef<std::ffi::OsStr>) -> Command {
+pub(crate) fn cmd_builder(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut c = Command::new(program);
     #[cfg(target_os = "windows")]
@@ -97,7 +97,7 @@ fn image_name_from_path_str(s: &str) -> &str {
 }
 
 /// 本工具自身的映像名（忽略 .exe、大小写）。
-fn is_self_image_name(name: &str) -> bool {
+pub(crate) fn is_self_image_name(name: &str) -> bool {
     let stem = image_stem(image_name_from_path_str(name));
     stem.eq_ignore_ascii_case("workbuddy-switch") || stem.eq_ignore_ascii_case("wb-switch")
 }
@@ -108,14 +108,14 @@ fn is_workbuddy_image_name(name: &str) -> bool {
     stem.eq_ignore_ascii_case("WorkBuddy") || stem.eq_ignore_ascii_case("CodeBuddy")
 }
 
-fn is_crashpad_helper_name(name: &str) -> bool {
+pub(crate) fn is_crashpad_helper_name(name: &str) -> bool {
     image_name_from_path_str(name)
         .to_ascii_lowercase()
         .contains("crashpad_handler")
 }
 
 /// 解析卸载项 DisplayIcon：去掉引号和可选的 `,0` 图标索引。
-fn parse_windows_display_icon(raw: &str) -> Option<String> {
+pub(crate) fn parse_windows_display_icon(raw: &str) -> Option<String> {
     let s = raw.trim();
     if s.is_empty() {
         return None;
@@ -219,10 +219,10 @@ fn windows_fallback_exe_candidates(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct WindowsProcessRow {
-    pid: u32,
-    name: String,
-    exe_path: Option<PathBuf>,
+pub(crate) struct WindowsProcessRow {
+    pub(crate) pid: u32,
+    pub(crate) name: String,
+    pub(crate) exe_path: Option<PathBuf>,
 }
 
 fn parse_simple_csv_line(line: &str) -> Vec<String> {
@@ -242,7 +242,7 @@ fn parse_simple_csv_line(line: &str) -> Vec<String> {
     out
 }
 
-fn parse_tasklist_csv(stdout: &str) -> Vec<WindowsProcessRow> {
+pub(crate) fn parse_tasklist_csv(stdout: &str) -> Vec<WindowsProcessRow> {
     stdout
         .lines()
         .filter_map(|line| {
@@ -265,7 +265,7 @@ fn parse_tasklist_csv(stdout: &str) -> Vec<WindowsProcessRow> {
         .collect()
 }
 
-fn parse_windows_process_rows(stdout: &str) -> Vec<WindowsProcessRow> {
+pub(crate) fn parse_windows_process_rows(stdout: &str) -> Vec<WindowsProcessRow> {
     stdout
         .lines()
         .filter_map(|line| {
@@ -370,7 +370,7 @@ fn persist_workbuddy_exe(path: &Path) {
 
 /// Windows：执行 PowerShell 并取 stdout。
 #[cfg(target_os = "windows")]
-fn ps_output(script: &str, timeout_secs: u64) -> Option<String> {
+pub(crate) fn ps_output(script: &str, timeout_secs: u64) -> Option<String> {
     let out = run_cmd_timeout(
         "powershell",
         &["-NoProfile", "-NonInteractive", "-Command", script],
@@ -380,7 +380,7 @@ fn ps_output(script: &str, timeout_secs: u64) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_tasklist_image_rows(image: &str) -> Vec<WindowsProcessRow> {
+pub(crate) fn windows_tasklist_image_rows(image: &str) -> Vec<WindowsProcessRow> {
     let filter = format!("IMAGENAME eq {image}");
     let Some(out) = run_cmd_timeout("tasklist", &["/FI", &filter, "/FO", "CSV", "/NH"], 5) else {
         return Vec::new();
@@ -413,7 +413,7 @@ fn is_windows_pid_running(pid: u32) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn wait_windows_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32> {
+pub(crate) fn wait_windows_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32> {
     if pids.is_empty() {
         return Vec::new();
     }
@@ -432,7 +432,7 @@ fn wait_windows_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32> {
 }
 
 #[cfg(target_os = "windows")]
-fn existing_windows_drives() -> Vec<char> {
+pub(crate) fn existing_windows_drives() -> Vec<char> {
     ('A'..='Z')
         .filter(|c| Path::new(&format!(r"{c}:\")).exists())
         .collect()
@@ -589,7 +589,7 @@ const MACOS_BUNDLE_LITERAL_NAMES: [&str; 4] = [
 /// 解析单行 `ps -axo pid=,args=` 输出为 (pid, args)。
 /// ps 输出 pid 列无表头、可能带前导空格，args 保留原始大小写。
 #[cfg(target_os = "macos")]
-fn parse_ps_row(line: &str) -> Option<(u32, String)> {
+pub(crate) fn parse_ps_row(line: &str) -> Option<(u32, String)> {
     let line = line.trim_start();
     if line.is_empty() {
         return None;
@@ -615,7 +615,7 @@ fn ps_row_matches_any(args: &str, patterns: &[String]) -> bool {
 /// 结果按 pid 去重。残留误杀面仅剩「用户进程的 args 主动引用目标 .app 路径」
 /// 这一刻意场景（对齐 Windows 契约记录的残余风险）。
 #[cfg(target_os = "macos")]
-fn filter_ps_rows(stdout: &str, patterns: &[String], self_pid: u32) -> Vec<(u32, String)> {
+pub(crate) fn filter_ps_rows(stdout: &str, patterns: &[String], self_pid: u32) -> Vec<(u32, String)> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in stdout.lines() {
@@ -674,13 +674,13 @@ fn ps_all_rows() -> String {
 
 /// 按模式枚举命中进程（含自排除），去重后返回 (pid, args)。
 #[cfg(target_os = "macos")]
-fn macos_rows_by_patterns(patterns: &[String]) -> Vec<(u32, String)> {
+pub(crate) fn macos_rows_by_patterns(patterns: &[String]) -> Vec<(u32, String)> {
     filter_ps_rows(&ps_all_rows(), patterns, std::process::id())
 }
 
 /// 按模式枚举命中 PID（含自排除）。
 #[cfg(target_os = "macos")]
-fn macos_pids_by_patterns(patterns: &[String]) -> Vec<u32> {
+pub(crate) fn macos_pids_by_patterns(patterns: &[String]) -> Vec<u32> {
     macos_rows_by_patterns(patterns)
         .into_iter()
         .map(|(pid, _)| pid)
@@ -691,7 +691,7 @@ fn macos_pids_by_patterns(patterns: &[String]) -> Vec<u32> {
 /// argv 形如 `<dir>/<Name>.app/Contents/MacOS/<binary>`，取首个 `.app/Contents/MacOS`
 /// 出现位置、截到 `.app` 结尾。shell 调用层保持薄，不做复杂解析。
 #[cfg(target_os = "macos")]
-fn extract_app_bundle_from_args(args: &str) -> Option<PathBuf> {
+pub(crate) fn extract_app_bundle_from_args(args: &str) -> Option<PathBuf> {
     let idx = args.find(".app/Contents/MacOS")?;
     let path = &args[..idx + 4]; // 含 `.app`
     if path.is_empty() {
@@ -703,7 +703,7 @@ fn extract_app_bundle_from_args(args: &str) -> Option<PathBuf> {
 
 /// macOS app bundle 谓词：目录存在且含 Contents/Info.plist。
 #[cfg(target_os = "macos")]
-fn is_app_bundle(path: &Path) -> bool {
+pub(crate) fn is_app_bundle(path: &Path) -> bool {
     path.is_dir() && path.join("Contents").join("Info.plist").is_file()
 }
 
@@ -811,7 +811,7 @@ pub fn macos_workbuddy_app_path() -> PathBuf {
 
 /// `kill -9` 按 PID 批量强杀；不按字符串匹配。失败仅打日志。
 #[cfg(target_os = "macos")]
-fn kill_macos_pids(pids: &[u32]) {
+pub(crate) fn kill_macos_pids(pids: &[u32]) {
     if pids.is_empty() {
         return;
     }
@@ -833,7 +833,7 @@ fn kill_macos_pids(pids: &[u32]) {
 
 /// 轮询等待「按模式命中」的进程集合为空；超时返回仍存活的 pid。
 #[cfg(target_os = "macos")]
-fn wait_macos_patterns_empty(patterns: &[String], timeout: Duration) -> Vec<u32> {
+pub(crate) fn wait_macos_patterns_empty(patterns: &[String], timeout: Duration) -> Vec<u32> {
     if patterns.is_empty() {
         return Vec::new();
     }
@@ -850,7 +850,7 @@ fn wait_macos_patterns_empty(patterns: &[String], timeout: Duration) -> Vec<u32>
 /// 轮询等待「主进程层」消失；超时返回是否已消失。语义同 `wait_process_gone`，
 /// 但使用显式主进程模式，避免每轮重新解析 app 路径。
 #[cfg(target_os = "macos")]
-fn wait_macos_main_gone(main_patterns: &[String], timeout: Duration) -> bool {
+pub(crate) fn wait_macos_main_gone(main_patterns: &[String], timeout: Duration) -> bool {
     wait_macos_patterns_empty(main_patterns, timeout).is_empty()
 }
 
