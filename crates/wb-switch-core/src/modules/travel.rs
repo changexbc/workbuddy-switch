@@ -2,6 +2,7 @@
 //!
 //! 对照 WorkDaddy `daemon.js` + `growth-travel.js` 的派猫猫旅行实现。
 //! 状态机以服务端 `data.state` 为准：idle ->(depart)-> traveling ->(到点)-> arrived ->(claim)-> idle。
+//! 官网 `idle` + `daily_limit_reached` 对应「累了，明天再来吧」，展示为已结束，不能再按 traveling 倒计时。
 
 use chrono::Local;
 use serde_json::{json, Map, Value};
@@ -11,7 +12,7 @@ use std::time::Duration;
 
 use crate::modules::account::{account_display_name, build_auth_headers, load_accounts};
 use crate::modules::config::{
-    http_request, load_checkin_config, load_travel_cache, load_travel_config, now_ms,
+    http_request, load_checkin_config, load_travel_cache, load_travel_config, now_ms, now_secs,
     save_travel_cache, with_travel_cache_lock, RunFlagGuard, TRAVEL_API_PREFIX,
     WORKBUDDY_API_ENDPOINT,
 };
@@ -330,6 +331,7 @@ enum TravelAction {
 }
 
 /// 与官方网页同一套判断：先看 state，再看 daily_limit_reached。
+/// idle + daily_limit_reached 即官网「累了，明天再来吧」。
 fn decide_travel_action(state: &str, daily_limit_reached: bool) -> TravelAction {
     match state {
         "arrived" => TravelAction::Claim,
@@ -524,6 +526,38 @@ fn apply_status_record(result: &mut Value, status: &Value) {
     }
 }
 
+fn arrive_at_secs(arrive_at: i64) -> i64 {
+    if arrive_at > 1_000_000_000_000 {
+        arrive_at / 1000
+    } else {
+        arrive_at
+    }
+}
+
+/// 旅行中且已过到达时间（或缓存没有到达时间）时，需要再问一次官方 status。
+fn in_flight_due(entry: &Value, now: i64) -> bool {
+    if !result_in_flight(entry) {
+        return false;
+    }
+    let arrive_at = entry.get("arriveAt").and_then(Value::as_i64).unwrap_or(0);
+    let arrive_secs = arrive_at_secs(arrive_at);
+    arrive_secs <= 0 || arrive_secs <= now
+}
+
+/// 官网 idle + daily_limit_reached：当日已完成，保留地点/积分只改完结标记。
+fn apply_daily_limit_reached(result: &mut Value, status: &Value) {
+    result["ok"] = json!(true);
+    result["already"] = json!(true);
+    result["skip"] = json!("daily-limit");
+    result["claimed"] = json!(true);
+    result["state"] = json!("idle");
+    result["message"] = json!("今日已派");
+    if result.get("claimedAt").and_then(Value::as_i64).unwrap_or(0) == 0 {
+        result["claimedAt"] = json!(now_ms());
+    }
+    apply_status_record(result, status);
+}
+
 /// 合并领取状态：旧记录已领取则保留；积分按非空优先。
 /// 官方状态显示新的 traveling/arrived 时，视为新行程，不把上一趟的 claimed 盖回去。
 fn merge_claim_state(prior: &Value, new: &Value) -> Value {
@@ -650,7 +684,13 @@ async fn claim_travel_for_account(account: &Value, prior: &Value) -> Value {
             apply_claim_response(&acc, &mut result, record_id).await;
         }
         "idle" => {
-            if result_claimed(&result) {
+            let daily_limit = status
+                .get("dailyLimitReached")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if daily_limit {
+                apply_daily_limit_reached(&mut result, &status);
+            } else if result_claimed(&result) {
                 result["state"] = json!("idle");
             } else if result.get("ok").and_then(Value::as_bool) == Some(true) {
                 apply_claim_response(&acc, &mut result, record_id).await;
@@ -754,15 +794,7 @@ async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Va
                     "今日已派",
                 )
             });
-            result["ok"] = json!(true);
-            result["already"] = json!(true);
-            result["skip"] = json!("daily-limit");
-            result["claimed"] = json!(true);
-            result["state"] = json!("idle");
-            if result.get("claimedAt").and_then(Value::as_i64).unwrap_or(0) == 0 {
-                result["claimedAt"] = json!(now_ms());
-            }
-            apply_status_record(&mut result, &status);
+            apply_daily_limit_reached(&mut result, &status);
             result
         }
         TravelAction::Depart => depart_travel_for_account(account).await,
@@ -895,10 +927,69 @@ fn display_record(label: &str, result: &Value) -> Value {
     })
 }
 
+fn display_label(same_day: bool, result: &Value) -> &'static str {
+    if result_in_flight(result) {
+        "traveling"
+    } else if same_day && result.get("skip").and_then(Value::as_str) == Some("no-buddy") {
+        "no-buddy"
+    } else if same_day && result_claimed(result) {
+        "finished"
+    } else {
+        "untraveled"
+    }
+}
+
+/// 到点仍卡在 traveling 的缓存，按官方 status 再对一次。
+/// 官网 idle + daily_limit_reached 会落成已结束，避免卡片一直显示「即将到达」。
+pub async fn reconcile_due_travel(account_id: Option<&str>) {
+    let cache = load_travel_cache();
+    let Some(results) = cache_results(&cache) else {
+        return;
+    };
+    let now = now_secs();
+    let due: Vec<String> = results
+        .iter()
+        .filter(|(id, entry)| {
+            if let Some(filter) = account_id {
+                if filter != id.as_str() {
+                    return false;
+                }
+            }
+            in_flight_due(entry, now)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    if due.is_empty() {
+        return;
+    }
+
+    let accounts = load_accounts();
+    let mut overlay_results = Map::new();
+    for id in due {
+        let Some(account) = accounts
+            .iter()
+            .find(|a| account_key(a).as_str() == id.as_str())
+        else {
+            continue;
+        };
+        let prior = results.get(&id).cloned().unwrap_or_else(|| json!({}));
+        let updated = sync_account_for_dispatch(account, Some(&prior)).await;
+        let updated = merge_claim_state(&prior, &updated);
+        overlay_results.insert(id, updated);
+    }
+    if overlay_results.is_empty() {
+        return;
+    }
+    persist_travel_cache(&json!({
+        "date": cache.get("date").cloned().unwrap_or(Value::Null),
+        "results": Value::Object(overlay_results),
+    }));
+}
+
 /// 某账号旅行状态的展示值：`{ label, rewardCredit, locationName }`。
 ///
 /// label 取值：`untraveled`（未旅行）、`no-buddy`、`traveling`（旅行中）、
-/// `finished`（已结束+获得积分）。跨日未领的 traveling/arrived 仍显示旅行中。
+/// `finished`（已结束，含官网「累了，明天再来吧」）。跨日未领的 traveling/arrived 仍显示旅行中。
 pub fn travel_display(account_id: &str) -> Value {
     let today = today_str();
     let cache = load_travel_cache();
@@ -906,16 +997,12 @@ pub fn travel_display(account_id: &str) -> Value {
         return display_record("untraveled", &json!({}));
     };
     let same_day = cache.get("date").and_then(Value::as_str) == Some(today.as_str());
-    if result_in_flight(r) {
-        return display_record("traveling", r);
+    let label = display_label(same_day, r);
+    if label == "untraveled" {
+        display_record("untraveled", &json!({}))
+    } else {
+        display_record(label, r)
     }
-    if same_day && r.get("skip").and_then(Value::as_str) == Some("no-buddy") {
-        return display_record("no-buddy", r);
-    }
-    if same_day && result_claimed(r) {
-        return display_record("finished", r);
-    }
-    display_record("untraveled", &json!({}))
 }
 
 #[cfg(test)]
@@ -1081,5 +1168,69 @@ mod tests {
         assert_eq!(cache["results"]["a"]["state"], "traveling");
         assert!(cache["results"].get("b").is_none());
         assert!(cache["results"].get("c").is_none());
+    }
+
+    #[test]
+    fn in_flight_due_when_arrive_at_passed_or_missing() {
+        let traveling = json!({ "ok": true, "claimed": false, "arriveAt": 100 });
+        assert!(in_flight_due(&traveling, 100));
+        assert!(in_flight_due(&traveling, 101));
+        assert!(!in_flight_due(&traveling, 99));
+        assert!(in_flight_due(
+            &json!({ "ok": true, "claimed": false }),
+            1
+        ));
+        assert!(!in_flight_due(
+            &json!({ "ok": true, "claimed": true, "arriveAt": 1 }),
+            100
+        ));
+        let millis = json!({
+            "ok": true,
+            "claimed": false,
+            "arriveAt": 1_788_964_568_000_i64,
+        });
+        assert!(in_flight_due(&millis, 1_788_964_568));
+        assert!(!in_flight_due(&millis, 1_788_964_567));
+    }
+
+    #[test]
+    fn daily_limit_marks_finished_and_keeps_trip_details() {
+        let mut result = json!({
+            "ok": true,
+            "claimed": false,
+            "state": "traveling",
+            "message": "已在旅行中",
+            "locationName": "咖啡馆",
+            "rewardCredit": 9,
+            "arriveAt": 1788964568_i64,
+        });
+        apply_daily_limit_reached(
+            &mut result,
+            &json!({
+                "locationName": "",
+                "rewardCredit": 0,
+                "arriveAt": 0,
+            }),
+        );
+        assert_eq!(result["claimed"], true);
+        assert_eq!(result["skip"], "daily-limit");
+        assert_eq!(result["state"], "idle");
+        assert_eq!(result["message"], "今日已派");
+        assert_eq!(result["locationName"], "咖啡馆");
+        assert_eq!(result["rewardCredit"], 9);
+        assert_eq!(display_label(true, &result), "finished");
+        assert_eq!(
+            display_label(
+                true,
+                &json!({
+                    "ok": true,
+                    "claimed": false,
+                    "state": "traveling",
+                    "locationName": "咖啡馆",
+                    "rewardCredit": 9,
+                })
+            ),
+            "traveling"
+        );
     }
 }

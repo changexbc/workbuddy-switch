@@ -389,8 +389,9 @@ pub fn get_checkin_logs() -> Value {
 
 /// GET /api/travel/status —— 查询单账号今日旅行状态标签。
 #[tauri::command]
-pub fn get_travel_status(account_id: String) -> Result<Value, String> {
+pub async fn get_travel_status(account_id: String) -> Result<Value, String> {
     account::find_account(&account_id).ok_or("账号不存在")?;
+    travel::reconcile_due_travel(Some(account_id.as_str())).await;
     Ok(travel::travel_display(&account_id))
 }
 

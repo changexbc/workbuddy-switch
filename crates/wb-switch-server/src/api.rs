@@ -507,6 +507,7 @@ async fn api_checkin_logs() -> Response {
 }
 
 async fn api_travel_status() -> Response {
+    travel::reconcile_due_travel(None).await;
     let items = account::load_accounts()
         .iter()
         .map(|acc| {
