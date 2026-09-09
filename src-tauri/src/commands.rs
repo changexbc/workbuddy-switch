@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 
 use tauri::Emitter;
 use wb_switch_core::modules::{
-    account, auth_file, checkin, codebuddy_cli, credit_usage, credits, export_import, oauth,
-    process, refresh, rotate, session, switch, token_stats, travel, update,
+    account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, credit_usage, credits,
+    export_import, oauth, process, refresh, rotate, session, switch, token_stats, travel, update,
 };
 
 #[derive(Serialize)]
@@ -64,22 +64,78 @@ pub fn get_accounts() -> Value {
 }
 
 /// GET /api/codebuddy-cli/status —— CodeBuddy CLI helper 轮换状态（不含 token）。
+///
+/// async + spawn_blocking：状态检测可能执行 ps / helper 定位等子进程，
+/// 避免在账号页挂载刷新时阻塞主线程造成页面卡顿。
 #[tauri::command]
-pub fn get_codebuddy_cli_status() -> Value {
-    codebuddy_cli::status()
+pub async fn get_codebuddy_cli_status() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(codebuddy_cli::status)
+        .await
+        .map_err(|error| format!("查询 CodeBuddy CLI 状态失败: {error}"))
 }
 
 /// POST /api/codebuddy-cli/install-helper —— 显式安装/升级 CLI helper。
 #[tauri::command]
-pub fn install_codebuddy_cli_helper() -> Result<Value, String> {
-    codebuddy_cli::install_helper()
+pub async fn install_codebuddy_cli_helper() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(codebuddy_cli::install_helper)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// POST /api/codebuddy-cli/switch —— 只切换 CodeBuddy CLI，不重启 WorkBuddy。
+///
+/// async + spawn_blocking：切换会用登录 shell 定位 node 并执行 apiKeyHelper
+/// 校验账号（子进程无超时），同步 command 会阻塞主线程造成 UI 卡顿。
 #[tauri::command(rename_all = "camelCase")]
-pub fn switch_codebuddy_cli_account(account_id: String) -> Result<Value, String> {
-    codebuddy_cli::set_active_account(&account_id)
+pub async fn switch_codebuddy_cli_account(account_id: String) -> Result<Value, String> {
+    if account_id.trim().is_empty() {
+        return Err("缺少 accountId".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || codebuddy_cli::set_active_account(&account_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
+
+/// GET /api/codebuddy-cn-ide/status —— CodeBuddy IDE 安装/运行/当前账号。
+///
+/// async + spawn_blocking：状态检测会跑 ps / mdfind 等子进程（mdfind 可能
+/// 耗时数秒），账号页每次挂载都会刷新，若在主线程执行会造成页面卡顿。
+#[tauri::command]
+pub async fn get_codebuddy_cn_ide_status() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(codebuddy_cn_ide::status)
+        .await
+        .map_err(|error| format!("查询 CodeBuddy IDE 状态失败: {error}"))
+}
+
+/// POST /api/codebuddy-cn-ide/switch —— 注入凭证并可选重启 CodeBuddy CN IDE。
+///
+/// async + spawn_blocking：切换会关闭并重启 CodeBuddy CN，可能阻塞数十秒，
+/// 与 WorkBuddy 切换同理，若在同步 command（主线程）执行会卡死整个 UI。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn switch_codebuddy_cn_ide_account(
+    account_id: String,
+    restart: Option<bool>,
+) -> Result<Value, String> {
+    if account_id.trim().is_empty() {
+        return Err("缺少 accountId".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        codebuddy_cn_ide::switch_account(&account_id, restart.unwrap_or(true))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// POST /api/codebuddy-cn-ide/detect —— 读取本机 CN IDE 当前登录并尝试匹配账号库。
+///
+/// async + spawn_blocking：会通过 Keychain/secret 读取子进程，避免阻塞主线程。
+#[tauri::command]
+pub async fn detect_codebuddy_cn_ide_account() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(codebuddy_cn_ide::detect_current_account)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 
 /// DELETE /api/delete —— 删除账号。
 #[tauri::command]

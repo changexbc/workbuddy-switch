@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Folder, Loader2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
-import type { AccountMeta, Session, SwitchResult } from "@/lib/types";
+import type { AccountMeta, Session } from "@/lib/types";
 
 interface Props {
   open: boolean;
@@ -37,7 +38,6 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<SwitchResult | null>(null);
   const [currentUid, setCurrentUid] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
 
@@ -69,7 +69,6 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       setSelected(new Set());
       setExpanded(new Set());
       setError("");
-      setResult(null);
       setLoadingSessions(true);
       api
         .listSessions()
@@ -120,7 +119,16 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         accountId: account.id,
         copySessionIds: copySessions ? [...selected] : undefined,
       });
-      setResult(res);
+      const nickname = account.nickname || account.email || account.uid || "该账号";
+      const parts: string[] = [];
+      if (res.sessionCopy?.copied.length) {
+        parts.push(`已复制 ${res.sessionCopy.copied.length} 个会话`);
+      }
+      if (res.backup) parts.push(`备份: ${res.backup}`);
+      toast.success(`已切换至「${nickname}」`, {
+        description: parts.length ? parts.join("；") : "WorkBuddy 已重启为目标账号。",
+      });
+      onOpenChange(false);
       onDone?.();
     } catch (e) {
       setError(api.asError(e));
@@ -382,29 +390,15 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
               </AlertDescription>
             </Alert>
           )}
-          {result && (
-            <Alert>
-              <AlertDescription>
-                已切换至「{result.account}」。
-                {result.sessionCopy
-                  ? ` 已复制 ${result.sessionCopy.copied.length} 个会话`
-                  : ""}
-                {result.backup ? ` 认证文件备份：${result.backup}` : ""}
-                {" CodeBuddy CLI 保持原当前账号；如需切换，请在对应账号卡片上单独点击 CLI 切换。"}
-              </AlertDescription>
-            </Alert>
-          )}
         </div>
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             取消
           </Button>
-          {!result && (
-            <Button onClick={doSwitch} disabled={busy || (copySessions && copyCount === 0)}>
-              {busy ? "切换中…" : "确认切换"}
-            </Button>
-          )}
+          <Button onClick={doSwitch} disabled={busy || (copySessions && copyCount === 0)}>
+            {busy ? "切换中…" : "确认切换"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

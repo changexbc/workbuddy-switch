@@ -14,7 +14,7 @@ import {
 
 import { AccountCard } from "@/components/account-card";
 import { DemoAction } from "@/components/demo-action";
-import { CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
+import { CodeBuddyCnIdeMark, CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import { ImportAccountsDialog } from "@/components/import-accounts-dialog";
 import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import * as api from "@/lib/api";
-import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CreditExpiry, TravelConfig, TravelStatus } from "@/lib/types";
+import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, TravelConfig, TravelStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -148,6 +148,8 @@ export default function AccountsPage() {
   const [travelMap, setTravelMap] = useState<Record<string, TravelStatus>>({});
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
+  const [codebuddyCnIde, setCodebuddyCnIde] = useState<CodeBuddyCnIdeStatus | null>(null);
+  const [codebuddyCnIdeSwitchingId, setCodebuddyCnIdeSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
   /** 刷新按钮触发的批量签到进行中 */
   const [checkinAllRunning, setCheckinAllRunning] = useState(false);
@@ -234,8 +236,17 @@ export default function AccountsPage() {
     }
   }
 
+  async function refreshCodebuddyCnIdeStatus() {
+    try {
+      setCodebuddyCnIde(await api.getCodebuddyCnIdeStatus());
+    } catch {
+      setCodebuddyCnIde(null);
+    }
+  }
+
   useEffect(() => {
     void refreshCodebuddyCliStatus();
+    void refreshCodebuddyCnIdeStatus();
   }, [accounts.length]);
 
   // 账号列表变化后并行查询各账号今日签到状态
@@ -454,6 +465,30 @@ export default function AccountsPage() {
     }
   }
 
+  async function onSwitchCodebuddyCnIde(account: AccountMeta) {
+    if (codebuddyCnIdeSwitchingId !== null) return;
+    setCodebuddyCnIdeSwitchingId(account.id);
+    const toastId = toast.loading("正在切换 CodeBuddy IDE…", {
+      description: "将注入凭证并重启 CodeBuddy IDE",
+    });
+    try {
+      const result = await api.switchCodebuddyCnIdeAccount(account.id, true);
+      await refreshCodebuddyCnIdeStatus();
+      toast.success("CodeBuddy IDE 已切换", {
+        id: toastId,
+        description: result.message || result.account,
+      });
+    } catch (error) {
+      toast.error("CodeBuddy IDE 切换失败", {
+        id: toastId,
+        description: api.asError(error),
+      });
+    } finally {
+      setCodebuddyCnIdeSwitchingId(null);
+    }
+  }
+
+
   async function onInstallCodebuddyCli() {
     // 桌面 App（Tauri WebView）不支持 window.confirm，改用 Dialog 确认
     setInstallConfirmOpen(true);
@@ -507,6 +542,10 @@ export default function AccountsPage() {
   const codebuddyCurrentName = codebuddyCli?.configured
     ? codebuddyCli.activeAccountName || "未检测到"
     : "尚未接入";
+  const cnIdeCurrentAccountId = codebuddyCnIde?.activeAccountId;
+  const cnIdeCurrentName = codebuddyCnIde?.installed
+    ? codebuddyCnIde.activeAccountName || "未检测到"
+    : "未安装";
   const codebuddyUsesSettingsEnv = codebuddyCli?.authMode === "settings-env";
   return (
     <div className="mx-auto w-full max-w-[1180px] px-6 py-8 sm:px-8 sm:py-9">
@@ -515,7 +554,7 @@ export default function AccountsPage() {
           <div className="min-w-0">
             <h1 className="text-[28px] font-semibold tracking-tight">账号管理</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              统一管理 WorkBuddy 与 CodeBuddy CLI 账号、积分和签到状态。
+              统一管理 WorkBuddy、CodeBuddy IDE 与 CodeBuddy CLI 账号、积分和签到状态。
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-4 pt-1">
@@ -532,6 +571,20 @@ export default function AccountsPage() {
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
                   WorkBuddy：{status?.running ? "运行中" : "未运行"} · 当前账号：{workbuddyCurrentName}
+                </span>
+              </span>
+              <span className="group relative inline-flex cursor-default">
+                <span
+                  className={
+                    codebuddyCnIde?.installed
+                      ? "inline-flex rounded-[22%] bg-primary p-[2px] shadow-sm shadow-primary/40"
+                      : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
+                  }
+                >
+                  <CodeBuddyCnIdeMark size={28} />
+                </span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
+                  CodeBuddy IDE：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
                 </span>
               </span>
               <span className="group relative inline-flex cursor-default">
@@ -598,6 +651,7 @@ export default function AccountsPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+
       {codebuddyCli &&
         (!codebuddyCli.configured ||
           (!codebuddyUsesSettingsEnv && !codebuddyCli.helperSupportsAccountIds) ||
@@ -752,6 +806,11 @@ export default function AccountsPage() {
                 codebuddyCliBusy={codebuddyCliSwitchingId !== null}
                 onSwitchCodebuddyCli={onSwitchCodebuddyCli}
                 codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
+                codebuddyCnIdeAvailable={Boolean(codebuddyCnIde?.installed)}
+                codebuddyCnIdeActive={a.id === cnIdeCurrentAccountId}
+                codebuddyCnIdeBusy={codebuddyCnIdeSwitchingId !== null}
+                codebuddyCnIdeLoading={codebuddyCnIdeSwitchingId === a.id}
+                onSwitchCodebuddyCnIde={onSwitchCodebuddyCnIde}
                 featuresDisabled={false}
               />
             ))}
@@ -780,6 +839,7 @@ export default function AccountsPage() {
         onDone={() => {
           void fetchAll();
           void refreshCodebuddyCliStatus();
+          void refreshCodebuddyCnIdeStatus();
         }}
       />
 

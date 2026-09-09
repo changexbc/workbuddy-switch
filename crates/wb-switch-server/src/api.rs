@@ -17,8 +17,8 @@ use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
-    account, auth_file, checkin, codebuddy_cli, config, credit_usage, credits, export_import,
-    oauth, process, refresh, rotate, session, switch, token_stats, travel, update,
+    account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, config, credit_usage, credits,
+    export_import, oauth, process, refresh, rotate, session, switch, token_stats, travel, update,
 };
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
@@ -63,6 +63,9 @@ pub fn router() -> Router {
             post(api_codebuddy_cli_install_helper),
         )
         .route("/api/codebuddy-cli/switch", post(api_codebuddy_cli_switch))
+        .route("/api/codebuddy-cn-ide/status", get(api_codebuddy_cn_ide_status))
+        .route("/api/codebuddy-cn-ide/switch", post(api_codebuddy_cn_ide_switch))
+        .route("/api/codebuddy-cn-ide/detect", post(api_codebuddy_cn_ide_detect))
         .route("/api/delete", post(api_delete))
         .route("/api/oauth/start", post(api_oauth_start))
         .route("/api/oauth/status", post(api_oauth_status))
@@ -170,6 +173,31 @@ async fn api_codebuddy_cli_switch(Json(body): Json<Value>) -> Response {
         Err(error) => json_err(error, StatusCode::BAD_REQUEST),
     }
 }
+
+async fn api_codebuddy_cn_ide_status() -> Response {
+    json_ok(codebuddy_cn_ide::status())
+}
+
+async fn api_codebuddy_cn_ide_switch(Json(body): Json<Value>) -> Response {
+    let account_id = body
+        .get("accountId")
+        .or_else(|| body.get("account_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let restart = body.get("restart").and_then(|v| v.as_bool()).unwrap_or(true);
+    match codebuddy_cn_ide::switch_account(account_id, restart) {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_codebuddy_cn_ide_detect() -> Response {
+    match codebuddy_cn_ide::detect_current_account() {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
 
 async fn api_delete(Json(body): Json<Value>) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");

@@ -1,6 +1,6 @@
 [package]
 name = "wb-switch-core"
-version = "0.1.30"
+version = "0.1.33"
 edition = "2021"
 description = "wb-switch 核心逻辑（账号/切换/会话/签到/更新），不依赖 Tauri，可被桌面端与 HTTP server 复用"
 
@@ -13,3 +13,15 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 chrono = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# CodeBuddy CN IDE Safe Storage (state.vscdb secret inject)
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = "0.12"
+sha1 = "0.10"
+aes-gcm = "0.10"
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
