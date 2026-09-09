@@ -134,6 +134,8 @@ export type TravelStatusLabel = "untraveled" | "no-buddy" | "traveling" | "finis
 export interface TravelStatus {
   label: TravelStatusLabel;
   rewardCredit: number | null;
+  locationName?: string | null;
+  arriveAt?: number | null;
 }
 
 export interface AutoRotateConfig {

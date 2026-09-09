@@ -527,7 +527,16 @@ async fn api_travel_config() -> Response {
 async fn api_save_travel_config(Json(body): Json<Value>) -> Response {
     let submitted = body.get("config").unwrap_or(&body);
     match config::save_travel_config(submitted) {
-        Ok(()) => json_ok(config::load_travel_config()),
+        Ok(()) => {
+            let saved = config::load_travel_config();
+            if saved.get("enabled").and_then(Value::as_bool) == Some(true) {
+                tokio::spawn(async {
+                    let _ = travel::run_travel_cycle().await;
+                    let _ = travel::run_travel_claim_cycle().await;
+                });
+            }
+            json_ok(saved)
+        }
         Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
     }
 }

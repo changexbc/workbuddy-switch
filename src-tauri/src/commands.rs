@@ -400,11 +400,18 @@ pub fn get_auto_travel_config() -> Value {
     crate::modules::config::load_travel_config()
 }
 
-/// POST /api/travel/config —— 保存自动旅行配置。
+/// POST /api/travel/config —— 保存自动旅行配置。开启时立刻跑一轮派发/领取。
 #[tauri::command]
 pub fn save_auto_travel_config(config: Value) -> Result<Value, String> {
     crate::modules::config::save_travel_config(&config).map_err(|e| e.to_string())?;
-    Ok(crate::modules::config::load_travel_config())
+    let saved = crate::modules::config::load_travel_config();
+    if saved.get("enabled").and_then(Value::as_bool) == Some(true) {
+        tauri::async_runtime::spawn(async {
+            let _ = travel::run_travel_cycle().await;
+            let _ = travel::run_travel_claim_cycle().await;
+        });
+    }
+    Ok(saved)
 }
 
 // ---------------------------------------------------------------------------

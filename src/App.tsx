@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { ArrowUpCircle, Loader2, MessagesSquare, Settings, Sparkles, User } from "lucide-react";
+import { ArrowUp, MessagesSquare, Settings, Sparkles, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -12,8 +12,9 @@ import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
@@ -22,21 +23,17 @@ import { useAccountsStore } from "@/stores/accounts";
 function UpdateCenter({ running }: { running: boolean | undefined }) {
   const version = useAccountsStore((s) => s.status?.version);
   const [info, setInfo] = useState<UpdateInfo | null>(null);
-  const [checking, setChecking] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   useEffect(() => {
     let disposed = false;
 
     async function checkForUpdate() {
-      setChecking(true);
       try {
         const result = await api.checkUpdate();
         if (!disposed) setInfo(result.ok ? result : null);
       } catch {
         // 左下角只展示可操作的升级状态，网络错误不打扰正常使用。
-      } finally {
-        if (!disposed) setChecking(false);
       }
     }
 
@@ -53,27 +50,29 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
   return (
     <>
       <section className="mt-auto border-t border-sidebar-border px-2 pt-3 text-xs">
-        <div className="flex items-center gap-1.5 text-[13px] text-sidebar-foreground">
+        <div className="flex items-center gap-2 text-[13px] text-sidebar-foreground">
           <StatusDot on={Boolean(running)} />
-          <span>WorkBuddy：{running ? "运行中" : "未运行"}</span>
-          {checking && <Loader2 className="size-3 animate-spin text-sidebar-foreground/40" aria-label="检查更新中" />}
-        </div>
-        <div className="mt-1 text-sidebar-foreground/50">v{version || "?"}</div>
-        {hasUpdate && (
-          <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/[0.07] p-2 shadow-sm">
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-              <ArrowUpCircle className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1 text-xs font-medium text-sidebar-foreground/75">有新版本</span>
-            <button
-              type="button"
-              className="inline-flex h-6 shrink-0 items-center justify-center rounded-full bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/70"
-              onClick={() => setDialogOpen(true)}
-            >
-              更新
-            </button>
+          <span className="min-w-0 flex-1 truncate">WorkBuddy</span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="text-sidebar-foreground/50">v{version || "?"}</span>
+            {hasUpdate && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon"
+                    className="size-5 rounded-full p-0"
+                    aria-label="更新"
+                    onClick={() => setDialogOpen(true)}
+                  >
+                    <ArrowUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">更新</TooltipContent>
+              </Tooltip>
+            )}
           </div>
-        )}
+        </div>
       </section>
       <UpdateInstallDialog
         open={dialogOpen}

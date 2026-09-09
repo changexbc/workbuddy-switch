@@ -1,10 +1,10 @@
 //! 派猫猫旅行：状态机、接口封装、每日缓存与自动派发/领取奖励。
 //!
 //! 对照 WorkDaddy `daemon.js` + `growth-travel.js` 的派猫猫旅行实现。
-//! 状态机：idle ->(depart)-> traveling ->(到点)-> arrived ->(claim)-> idle。
+//! 状态机以服务端 `data.state` 为准：idle ->(depart)-> traveling ->(到点)-> arrived ->(claim)-> idle。
 
 use chrono::Local;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -12,7 +12,8 @@ use std::time::Duration;
 use crate::modules::account::{account_display_name, build_auth_headers, load_accounts};
 use crate::modules::config::{
     http_request, load_checkin_config, load_travel_cache, load_travel_config, now_ms,
-    save_travel_cache, RunFlagGuard, TRAVEL_API_PREFIX, WORKBUDDY_API_ENDPOINT,
+    save_travel_cache, with_travel_cache_lock, RunFlagGuard, TRAVEL_API_PREFIX,
+    WORKBUDDY_API_ENDPOINT,
 };
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 
@@ -21,15 +22,25 @@ static TRAVEL_CLAIM_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// 派发周期：启动即派发，之后每 30 分钟补一轮（并重试 no-buddy / 瞬时错误）。
 pub const TRAVEL_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
-/// 领取奖励检查周期：旅行到点后每隔 15 分钟检查并领取。
+/// 领取奖励检查周期：启动立刻查一轮，之后每隔 15 分钟检查并领取。
 pub const TRAVEL_CLAIM_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+const KNOWN_STATES: [&str; 3] = ["idle", "traveling", "arrived"];
 
 /// 判定为「可重试」的跳过原因：这些情况下当日不算完成，后续轮次继续重试。
 ///
 /// 针对参考项目 Bug：账号初始无 Buddy 时缓存了 no-buddy 且标记 completed，
 /// 之后账号有了 Buddy 也不会再重试，导致一直显示「无 Buddy」。
 fn is_retryable_skip(skip: Option<&str>) -> bool {
-    matches!(skip, Some("no-buddy") | Some("error") | Some("config-error"))
+    matches!(
+        skip,
+        Some("no-buddy")
+            | Some("error")
+            | Some("config-error")
+            | Some("no-location")
+            | Some("location-unavailable")
+            | Some("status-error")
+    )
 }
 
 fn today_str() -> String {
@@ -73,12 +84,7 @@ fn is_unauthorized(resp: &Value) -> bool {
 }
 
 /// 发旅行接口请求；遇到未授权且存在 refresh token 时刷新一次并重试。
-async fn travel_request(
-    path: &str,
-    method: &str,
-    body: Option<Value>,
-    account: &Value,
-) -> Value {
+async fn travel_request(path: &str, method: &str, body: Option<Value>, account: &Value) -> Value {
     let url = format!("{WORKBUDDY_API_ENDPOINT}{path}");
     let headers = build_travel_headers(account);
     let mut resp = http_request(&url, method, body.clone(), Some(&headers)).await;
@@ -104,15 +110,54 @@ fn resp_error(resp: &Value, fallback_code: i64) -> String {
         .unwrap_or_else(|| format!("code={fallback_code}"))
 }
 
+fn parse_travel_state(raw: Option<&str>) -> Option<&'static str> {
+    let normalized = raw.map(|s| s.trim().to_ascii_lowercase())?;
+    KNOWN_STATES
+        .iter()
+        .copied()
+        .find(|state| *state == normalized)
+}
+
+fn result_claimed(entry: &Value) -> bool {
+    entry.get("claimed").and_then(Value::as_bool) == Some(true)
+}
+
+fn result_in_flight(entry: &Value) -> bool {
+    entry.get("ok").and_then(Value::as_bool) == Some(true) && !result_claimed(entry)
+}
+
+fn cache_results(cache: &Value) -> Option<&Map<String, Value>> {
+    cache.get("results").and_then(Value::as_object)
+}
+
+/// 跨日时丢掉已结束/失败记录，但保留仍在 traveling/arrived 的未领奖励。
+fn roll_cache_to_today(cache: &mut Value, today: &str) {
+    if cache.get("date").and_then(Value::as_str) == Some(today) {
+        return;
+    }
+    let kept = cache_results(cache)
+        .map(|results| {
+            results
+                .iter()
+                .filter(|(_, entry)| result_in_flight(entry))
+                .map(|(id, entry)| (id.clone(), entry.clone()))
+                .collect::<Map<String, Value>>()
+        })
+        .unwrap_or_default();
+    cache["date"] = json!(today);
+    cache["completed"] = json!(false);
+    cache["results"] = Value::Object(kept);
+}
+
+fn has_retryable_results(results: &Map<String, Value>) -> bool {
+    results
+        .values()
+        .any(|entry| is_retryable_skip(entry.get("skip").and_then(Value::as_str)))
+}
+
 /// 读取旅行配置（地点列表等）。返回 `{ ok, enabled, locations: [{ id, name }] }`。
 async fn fetch_travel_config(account: &Value) -> Value {
-    let resp = travel_request(
-        &format!("{TRAVEL_API_PREFIX}/config"),
-        "GET",
-        None,
-        account,
-    )
-    .await;
+    let resp = travel_request(&format!("{TRAVEL_API_PREFIX}/config"), "GET", None, account).await;
     let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code == 0 || code == 200 {
         let data = resp.get("data").cloned().unwrap_or_else(|| json!({}));
@@ -142,21 +187,28 @@ async fn fetch_travel_config(account: &Value) -> Value {
     })
 }
 
-/// 读取当前旅行状态。返回 `{ ok, state, locationId, departAt, arriveAt }`。
+/// 读取当前旅行状态。缺 state / 未知 state 视为失败，避免被当成 idle 后误标已领取。
+///
+/// 官方以 `data.state` + `data.daily_limit_reached` 判断能否派出：
+/// arrived → 领奖；traveling → 等待；idle 且未达每日上限 → 可 depart。
 async fn fetch_travel_status(account: &Value) -> Value {
-    let resp = travel_request(
-        &format!("{TRAVEL_API_PREFIX}/status"),
-        "GET",
-        None,
-        account,
-    )
-    .await;
+    let resp = travel_request(&format!("{TRAVEL_API_PREFIX}/status"), "GET", None, account).await;
     let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code == 0 || code == 200 {
         let data = resp.get("data").cloned().unwrap_or_else(|| json!({}));
+        let raw_state = data.get("state").and_then(Value::as_str);
+        let Some(state) = parse_travel_state(raw_state) else {
+            return json!({
+                "ok": false,
+                "error": match raw_state {
+                    Some(value) if !value.trim().is_empty() => format!("unknown travel state: {value}"),
+                    _ => "missing travel state".to_string(),
+                },
+            });
+        };
         return json!({
             "ok": true,
-            "state": data.get("state").and_then(Value::as_str).unwrap_or("idle"),
+            "state": state,
             "locationId": data
                 .get("location")
                 .and_then(|l| l.get("id"))
@@ -164,6 +216,16 @@ async fn fetch_travel_status(account: &Value) -> Value {
                 .unwrap_or(Value::Null),
             "departAt": data.get("depart_at").and_then(Value::as_i64).unwrap_or(0),
             "arriveAt": data.get("arrive_at").and_then(Value::as_i64).unwrap_or(0),
+            "dailyLimitReached": data.get("daily_limit_reached").and_then(Value::as_bool).unwrap_or(false),
+            "buddyId": data.get("buddy_id").and_then(Value::as_i64).unwrap_or(0),
+            "recordId": data.get("record_id").and_then(Value::as_i64).unwrap_or(0),
+            "serverNow": data.get("server_now").and_then(Value::as_i64).unwrap_or(0),
+            "locationName": data
+                .get("location")
+                .and_then(|location| location.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            "rewardCredit": data.get("reward_credit").cloned().unwrap_or(Value::Null),
         });
     }
     json!({
@@ -197,11 +259,16 @@ async fn depart_travel(account: &Value, location_id: &Value) -> Value {
 }
 
 /// 领取旅行奖励（state==='arrived' 时调用）。返回 `{ ok, rewardCredit }` 或 `{ ok:false, message }`。
-async fn claim_travel(account: &Value) -> Value {
+async fn claim_travel(account: &Value, record_id: i64) -> Value {
+    let payload = if record_id > 0 {
+        json!({ "record_id": record_id })
+    } else {
+        json!({})
+    };
     let resp = travel_request(
         &format!("{TRAVEL_API_PREFIX}/claim"),
         "POST",
-        Some(json!({})),
+        Some(payload),
         account,
     )
     .await;
@@ -220,7 +287,15 @@ async fn claim_travel(account: &Value) -> Value {
     })
 }
 
-fn depart_result(account: &Value, uid: Option<&str>, ok: bool, already: bool, skip: Option<&str>, state: Option<&str>, message: &str) -> Value {
+fn depart_result(
+    account: &Value,
+    uid: Option<&str>,
+    ok: bool,
+    already: bool,
+    skip: Option<&str>,
+    state: Option<&str>,
+    message: &str,
+) -> Value {
     json!({
         "accountId": account_key(account),
         "uid": uid,
@@ -236,7 +311,52 @@ fn depart_result(account: &Value, uid: Option<&str>, ok: bool, already: bool, sk
     })
 }
 
-/// 对单个账号执行派猫猫旅行：取 config 第一个地点 -> depart，报错分类处理。
+#[derive(Debug, PartialEq, Eq)]
+enum DepartClass {
+    AlreadyTraveling,
+    DailyLimit,
+    NoBuddy,
+    LocationUnavailable,
+    Other,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TravelAction {
+    Claim,
+    WaitTraveling,
+    SkipDailyLimit,
+    Depart,
+    StatusError,
+}
+
+/// 与官方网页同一套判断：先看 state，再看 daily_limit_reached。
+fn decide_travel_action(state: &str, daily_limit_reached: bool) -> TravelAction {
+    match state {
+        "arrived" => TravelAction::Claim,
+        "traveling" => TravelAction::WaitTraveling,
+        "idle" if daily_limit_reached => TravelAction::SkipDailyLimit,
+        "idle" => TravelAction::Depart,
+        _ => TravelAction::StatusError,
+    }
+}
+
+/// HTTP 429 是限流，不是「今日已派」。只有文案明确 daily limit 才算当日完成。
+fn classify_depart_error(_code: i64, message: &str) -> DepartClass {
+    let raw = message.to_lowercase();
+    if raw.contains("already traveling") {
+        DepartClass::AlreadyTraveling
+    } else if raw.contains("daily limit") || raw.contains("daily_limit") {
+        DepartClass::DailyLimit
+    } else if raw.contains("no active buddy") {
+        DepartClass::NoBuddy
+    } else if raw.contains("location not available") {
+        DepartClass::LocationUnavailable
+    } else {
+        DepartClass::Other
+    }
+}
+
+/// 对单个账号执行派猫猫旅行：依次尝试地点列表，报错分类处理。
 pub async fn depart_travel_for_account(account: &Value) -> Value {
     let cfg = load_checkin_config();
     let acc = ensure_fresh_token(account.clone(), &cfg).await;
@@ -252,49 +372,125 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
             false,
             Some("config-error"),
             None,
-            config.get("error").and_then(Value::as_str).unwrap_or("读取旅行配置失败"),
+            config
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("读取旅行配置失败"),
         );
     }
-    if config.get("enabled").and_then(Value::as_bool) != Some(true) {
-        return depart_result(&acc, uid_ref, false, false, Some("no-location"), None, "无旅行地点");
-    }
-    let location_id = config
+    let locations = config
         .get("locations")
         .and_then(Value::as_array)
-        .and_then(|locations| locations.first())
-        .and_then(|location| location.get("id"))
         .cloned()
-        .unwrap_or(Value::Null);
-
-    let res = depart_travel(&acc, &location_id).await;
-    if res.get("ok").and_then(Value::as_bool) == Some(true) {
+        .unwrap_or_default();
+    if config.get("enabled").and_then(Value::as_bool) != Some(true) || locations.is_empty() {
         return depart_result(
             &acc,
             uid_ref,
-            true,
             false,
+            false,
+            Some("no-location"),
             None,
-            Some(res.get("state").and_then(Value::as_str).unwrap_or("traveling")),
-            "",
+            "无旅行地点",
         );
     }
 
-    let raw = res
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_lowercase();
-    let code = res.get("code").and_then(Value::as_i64).unwrap_or(-1);
-    if raw.contains("already traveling") {
-        depart_result(&acc, uid_ref, true, true, None, Some("traveling"), "已在旅行中")
-    } else if raw.contains("daily limit") || code == 429 {
-        depart_result(&acc, uid_ref, true, true, Some("daily-limit"), Some("traveling"), "今日已派")
-    } else if raw.contains("no active buddy") {
-        depart_result(&acc, uid_ref, false, false, Some("no-buddy"), None, "无 Buddy")
-    } else if raw.contains("location not available") {
-        depart_result(&acc, uid_ref, false, false, Some("location-unavailable"), None, "地点不可用")
+    let mut last_unavailable = false;
+    for location in &locations {
+        let location_id = location.get("id").cloned().unwrap_or(Value::Null);
+        let res = depart_travel(&acc, &location_id).await;
+        if res.get("ok").and_then(Value::as_bool) == Some(true) {
+            let mut result = depart_result(
+                &acc,
+                uid_ref,
+                true,
+                false,
+                None,
+                Some(
+                    res.get("state")
+                        .and_then(Value::as_str)
+                        .unwrap_or("traveling"),
+                ),
+                "",
+            );
+            if let Some(name) = nonempty_str(location.get("name").unwrap_or(&Value::Null)) {
+                result["locationName"] = json!(name);
+            }
+            let status = fetch_travel_status(&acc).await;
+            if status.get("ok").and_then(Value::as_bool) == Some(true) {
+                apply_status_record(&mut result, &status);
+            }
+            return result;
+        }
+
+        let raw = res.get("message").and_then(Value::as_str).unwrap_or("");
+        let code = res.get("code").and_then(Value::as_i64).unwrap_or(-1);
+        match classify_depart_error(code, raw) {
+            DepartClass::AlreadyTraveling => {
+                return depart_result(
+                    &acc,
+                    uid_ref,
+                    true,
+                    true,
+                    None,
+                    Some("traveling"),
+                    "已在旅行中",
+                );
+            }
+            DepartClass::DailyLimit => {
+                let mut result = depart_result(
+                    &acc,
+                    uid_ref,
+                    true,
+                    true,
+                    Some("daily-limit"),
+                    Some("idle"),
+                    "今日已派",
+                );
+                result["claimed"] = json!(true);
+                result["claimedAt"] = json!(now_ms());
+                return result;
+            }
+            DepartClass::NoBuddy => {
+                return depart_result(
+                    &acc,
+                    uid_ref,
+                    false,
+                    false,
+                    Some("no-buddy"),
+                    None,
+                    "无 Buddy",
+                );
+            }
+            DepartClass::LocationUnavailable => {
+                last_unavailable = true;
+            }
+            DepartClass::Other => {
+                return depart_result(
+                    &acc,
+                    uid_ref,
+                    false,
+                    false,
+                    Some("error"),
+                    None,
+                    &truncate_message(&raw.to_lowercase()),
+                );
+            }
+        }
+    }
+
+    if last_unavailable {
+        depart_result(
+            &acc,
+            uid_ref,
+            false,
+            false,
+            Some("location-unavailable"),
+            None,
+            "地点不可用",
+        )
     } else {
-        depart_result(&acc, uid_ref, false, false, Some("error"), None, &truncate_message(&raw))
+        depart_result(&acc, uid_ref, false, false, Some("error"), None, "派发失败")
     }
 }
 
@@ -302,61 +498,129 @@ fn truncate_message(msg: &str) -> String {
     msg.chars().take(80).collect()
 }
 
-/// 合并领取状态：旧记录已领取且有积分、新记录未领取或积分为空时，继承旧的领取结果。
-///
-/// 两类场景：
-/// - 同日重试轮重建缓存：新 depart 结果 `claimed=false`，不能丢当日已领取状态；
-/// - 并发领取（桌面端与 server CLI 同时运行，另一进程先领了）：新结果
-///   `claimed=true` 但响应为“no unclaimed travel”，拿不到积分数额。
+fn nonempty_str(value: &Value) -> Option<&str> {
+    value.as_str().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn nonzero_credit(value: &Value) -> Option<Value> {
+    match value {
+        Value::Null => None,
+        Value::Number(n) if n.as_i64() == Some(0) || n.as_f64() == Some(0.0) => None,
+        other if !other.is_null() => Some(other.clone()),
+        _ => None,
+    }
+}
+
+fn apply_status_record(result: &mut Value, status: &Value) {
+    if let Some(name) = nonempty_str(status.get("locationName").unwrap_or(&Value::Null)) {
+        result["locationName"] = json!(name);
+    }
+    if let Some(credit) = nonzero_credit(status.get("rewardCredit").unwrap_or(&Value::Null)) {
+        result["rewardCredit"] = credit;
+    }
+    let arrive_at = status.get("arriveAt").and_then(Value::as_i64).unwrap_or(0);
+    if arrive_at > 0 {
+        result["arriveAt"] = json!(arrive_at);
+    }
+}
+
+/// 合并领取状态：旧记录已领取则保留；积分按非空优先。
+/// 官方状态显示新的 traveling/arrived 时，视为新行程，不把上一趟的 claimed 盖回去。
 fn merge_claim_state(prior: &Value, new: &Value) -> Value {
     let mut merged = new.clone();
-    let prior_has_credit = prior.get("claimed").and_then(Value::as_bool) == Some(true)
-        && prior.get("rewardCredit").map(|v| !v.is_null()).unwrap_or(false);
-    if !prior_has_credit {
+    if result_in_flight(&merged) {
+        if nonempty_str(merged.get("locationName").unwrap_or(&Value::Null)).is_none() {
+            if let Some(name) = nonempty_str(prior.get("locationName").unwrap_or(&Value::Null)) {
+                merged["locationName"] = json!(name);
+            }
+        }
+        // 上一趟已领取的积分不能带到新行程上当「预计奖励」。
+        if result_in_flight(prior)
+            && nonzero_credit(merged.get("rewardCredit").unwrap_or(&Value::Null)).is_none()
+        {
+            if let Some(credit) = nonzero_credit(prior.get("rewardCredit").unwrap_or(&Value::Null)) {
+                merged["rewardCredit"] = credit;
+            }
+        }
+        if result_in_flight(prior)
+            && merged.get("arriveAt").and_then(Value::as_i64).unwrap_or(0) <= 0
+        {
+            if let Some(arrive_at) = prior.get("arriveAt").and_then(Value::as_i64).filter(|v| *v > 0)
+            {
+                merged["arriveAt"] = json!(arrive_at);
+            }
+        }
         return merged;
     }
-    let new_claimed = merged.get("claimed").and_then(Value::as_bool) == Some(true);
-    let new_has_credit = merged
-        .get("rewardCredit")
-        .map(|v| !v.is_null())
-        .unwrap_or(false);
-    if !new_claimed || !new_has_credit {
-        merged["claimed"] = json!(true);
+    if !result_claimed(prior) {
+        return merged;
+    }
+    let new_has_credit = nonzero_credit(merged.get("rewardCredit").unwrap_or(&Value::Null)).is_some();
+    merged["claimed"] = json!(true);
+    if !new_has_credit {
         merged["rewardCredit"] = prior.get("rewardCredit").cloned().unwrap_or(Value::Null);
         merged["claimedAt"] = prior.get("claimedAt").cloned().unwrap_or(json!(0));
-        merged["state"] = json!("idle");
     }
+    if nonempty_str(merged.get("locationName").unwrap_or(&Value::Null)).is_none() {
+        if let Some(name) = nonempty_str(prior.get("locationName").unwrap_or(&Value::Null)) {
+            merged["locationName"] = json!(name);
+        }
+    }
+    merged["state"] = json!("idle");
     merged
 }
 
-/// 保存前重读磁盘并逐账号合并领取状态。
-///
-/// 桌面端（Tauri）与 server CLI 可能同时运行，各自“整份读-改-写”travel_cache.json；
-/// 直接覆盖会把另一方刚写入的 claimed/rewardCredit 擦掉，表现为部分账号
-/// 标签“已结束”但积分丢失。
-fn merge_disk_claim_state(cache: &mut Value, today: &str) {
-    let disk = load_travel_cache();
-    if disk.get("date").and_then(Value::as_str) != Some(today) {
-        return;
-    }
-    let Some(disk_results) = disk
-        .get("results")
-        .and_then(Value::as_object)
-        .cloned()
-    else {
-        return;
-    };
-    let Some(results) = cache.get_mut("results").and_then(Value::as_object_mut) else {
-        return;
-    };
-    for (id, entry) in results.iter_mut() {
-        if let Some(prior) = disk_results.get(id.as_str()) {
-            *entry = merge_claim_state(prior, entry);
+fn persist_travel_cache(overlay: &Value) {
+    with_travel_cache_lock(|| {
+        let mut disk = load_travel_cache();
+        let today = today_str();
+        let overlay_date = overlay.get("date").and_then(Value::as_str);
+        if overlay_date == Some(today.as_str()) {
+            roll_cache_to_today(&mut disk, &today);
+            disk["date"] = json!(today);
         }
+        let overlay_results = overlay
+            .get("results")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut results = cache_results(&disk).cloned().unwrap_or_default();
+        for (id, entry) in overlay_results {
+            let merged = if let Some(prior) = results.get(&id) {
+                merge_claim_state(prior, &entry)
+            } else {
+                entry
+            };
+            results.insert(id, merged);
+        }
+        if overlay_date == Some(today.as_str()) {
+            disk["date"] = json!(today);
+        } else if disk.get("date").and_then(Value::as_str).is_none() {
+            if let Some(date) = overlay_date {
+                disk["date"] = json!(date);
+            }
+        }
+        disk["completed"] = json!(!has_retryable_results(&results));
+        disk["results"] = Value::Object(results);
+        let _ = save_travel_cache(&disk);
+    });
+}
+
+fn mark_claimed(result: &mut Value, reward_credit: Option<Value>, message: Option<&str>) {
+    result["claimed"] = json!(true);
+    if let Some(credit) = reward_credit {
+        if !credit.is_null() {
+            result["rewardCredit"] = credit;
+        }
+    }
+    result["claimedAt"] = json!(now_ms());
+    result["state"] = json!("idle");
+    if let Some(message) = message {
+        result["message"] = json!(message);
     }
 }
 
-/// 领取单账号旅行奖励。状态机：traveling=跳过；arrived=调 claim；idle=奖励已领取。
+/// 领取单账号旅行奖励。未知/缺 state 保持未领取；idle 不默认当成已领。
 async fn claim_travel_for_account(account: &Value, prior: &Value) -> Value {
     let mut result = prior.clone();
     let cfg = load_checkin_config();
@@ -372,47 +636,146 @@ async fn claim_travel_for_account(account: &Value, prior: &Value) -> Value {
         return result;
     }
 
-    let state = status.get("state").and_then(Value::as_str).unwrap_or("idle");
+    let state = status.get("state").and_then(Value::as_str).unwrap_or("");
+    let record_id = status.get("recordId").and_then(Value::as_i64).unwrap_or(0);
     match state {
         "traveling" => {
             result["claimed"] = json!(false);
+            result["ok"] = json!(true);
             result["state"] = json!("traveling");
+            apply_status_record(&mut result, &status);
         }
         "arrived" => {
-            let claim = claim_travel(&acc).await;
-            if claim.get("ok").and_then(Value::as_bool) == Some(true) {
-                result["claimed"] = json!(true);
-                result["rewardCredit"] = claim.get("rewardCredit").cloned().unwrap_or(Value::Null);
-                result["claimedAt"] = json!(now_ms());
+            apply_status_record(&mut result, &status);
+            apply_claim_response(&acc, &mut result, record_id).await;
+        }
+        "idle" => {
+            if result_claimed(&result) {
                 result["state"] = json!("idle");
+            } else if result.get("ok").and_then(Value::as_bool) == Some(true) {
+                apply_claim_response(&acc, &mut result, record_id).await;
             } else {
-                let raw = claim
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_lowercase();
-                if raw.contains("no unclaimed travel") {
-                    result["claimed"] = json!(true);
-                    result["claimedAt"] = json!(now_ms());
-                    result["state"] = json!("idle");
-                    result["message"] = json!("已领取（网页端）");
-                } else if raw.contains("not arrived yet") {
-                    result["claimed"] = json!(false);
-                    result["state"] = json!("arrived");
-                } else {
-                    result["skip"] = json!("claim-error");
-                    result["message"] = json!(truncate_message(&raw));
-                }
+                result["claimed"] = json!(false);
+                result["state"] = json!("idle");
             }
         }
         _ => {
-            // idle：今日确有派出记录但状态已复位 => 旅行已结束且奖励已领取
-            result["claimed"] = json!(true);
-            result["claimedAt"] = json!(now_ms());
-            result["state"] = json!("idle");
+            result["skip"] = json!("status-error");
+            result["claimed"] = json!(false);
+            result["message"] = json!(format!("unknown travel state: {state}"));
         }
     }
     result
+}
+
+async fn apply_claim_response(account: &Value, result: &mut Value, record_id: i64) {
+    let claim = claim_travel(account, record_id).await;
+    if claim.get("ok").and_then(Value::as_bool) == Some(true) {
+        mark_claimed(
+            result,
+            Some(claim.get("rewardCredit").cloned().unwrap_or(Value::Null)),
+            None,
+        );
+        return;
+    }
+    let raw = claim
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_lowercase();
+    if raw.contains("no unclaimed travel") || raw.contains("daily_limit") {
+        mark_claimed(result, None, Some("已领取（网页端）"));
+    } else if raw.contains("not arrived yet") {
+        result["claimed"] = json!(false);
+        result["ok"] = json!(true);
+        result["state"] = json!("arrived");
+    } else {
+        result["skip"] = json!("claim-error");
+        result["message"] = json!(truncate_message(&raw));
+    }
+}
+
+async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Value {
+    let cfg = load_checkin_config();
+    let acc = ensure_fresh_token(account.clone(), &cfg).await;
+    let uid = acc.get("uid").and_then(Value::as_str).map(String::from);
+    let uid_ref = uid.as_deref();
+
+    let status = fetch_travel_status(&acc).await;
+    if status.get("ok").and_then(Value::as_bool) != Some(true) {
+        return depart_result(
+            &acc,
+            uid_ref,
+            false,
+            false,
+            Some("status-error"),
+            None,
+            status
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("查询旅行状态失败"),
+        );
+    }
+
+    let state = status.get("state").and_then(Value::as_str).unwrap_or("");
+    let daily_limit = status
+        .get("dailyLimitReached")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match decide_travel_action(state, daily_limit) {
+        TravelAction::WaitTraveling => {
+            let mut result = depart_result(
+                &acc,
+                uid_ref,
+                true,
+                true,
+                None,
+                Some("traveling"),
+                "已在旅行中",
+            );
+            apply_status_record(&mut result, &status);
+            result
+        }
+        TravelAction::Claim => {
+            let stub = prior.cloned().unwrap_or_else(|| {
+                depart_result(&acc, uid_ref, true, true, None, Some("arrived"), "已到达")
+            });
+            claim_travel_for_account(account, &stub).await
+        }
+        TravelAction::SkipDailyLimit => {
+            let mut result = prior.cloned().unwrap_or_else(|| {
+                depart_result(
+                    &acc,
+                    uid_ref,
+                    true,
+                    true,
+                    Some("daily-limit"),
+                    Some("idle"),
+                    "今日已派",
+                )
+            });
+            result["ok"] = json!(true);
+            result["already"] = json!(true);
+            result["skip"] = json!("daily-limit");
+            result["claimed"] = json!(true);
+            result["state"] = json!("idle");
+            if result.get("claimedAt").and_then(Value::as_i64).unwrap_or(0) == 0 {
+                result["claimedAt"] = json!(now_ms());
+            }
+            apply_status_record(&mut result, &status);
+            result
+        }
+        TravelAction::Depart => depart_travel_for_account(account).await,
+        TravelAction::StatusError => depart_result(
+            &acc,
+            uid_ref,
+            false,
+            false,
+            Some("status-error"),
+            None,
+            &format!("unknown travel state: {state}"),
+        ),
+    }
 }
 
 /// 对所有账号依次派猫猫旅行（每日缓存幂等；存在可重试项时不标记当日完成）。
@@ -430,31 +793,22 @@ pub async fn run_travel_cycle() -> Value {
     }
 
     let today = today_str();
-    let cache = load_travel_cache();
-    if cache.get("date").and_then(Value::as_str) == Some(today.as_str())
-        && cache.get("completed").and_then(Value::as_bool) == Some(true)
-    {
-        return json!({"status": "ok", "completed": true});
-    }
+    let mut cache = load_travel_cache();
+    roll_cache_to_today(&mut cache, &today);
 
-    // 新的一天从头开始；同一天内重试时覆盖旧结果，
-    // 但保留各账号当日已领取的奖励状态（claimed/rewardCredit）。
-    let same_day = cache.get("date").and_then(Value::as_str) == Some(today.as_str());
-    let mut results = serde_json::Map::new();
-    let mut has_retryable = false;
+    let prior_results = cache_results(&cache).cloned().unwrap_or_default();
+    let mut results = Map::new();
     let mut summary_accounts = Vec::new();
     for acc in &accounts {
-        let mut r = depart_travel_for_account(acc).await;
         let id = account_key(acc);
-        if same_day {
-            if let Some(prior) = cache.get("results").and_then(|m| m.get(id.as_str())) {
-                r = merge_claim_state(prior, &r);
-            }
-        }
+        let prior = prior_results.get(&id);
+        let r = sync_account_for_dispatch(acc, prior).await;
+        let r = if let Some(prior) = prior {
+            merge_claim_state(prior, &r)
+        } else {
+            r
+        };
         let skip = r.get("skip").and_then(Value::as_str);
-        if is_retryable_skip(skip) {
-            has_retryable = true;
-        }
         let result = if r.get("ok").and_then(Value::as_bool) == Some(true) {
             "success"
         } else {
@@ -470,40 +824,32 @@ pub async fn run_travel_cycle() -> Value {
         results.insert(id, r);
     }
 
-    let mut cache = json!({
+    let overlay = json!({
         "date": today,
-        "completed": !has_retryable,
-        "results": Value::Object(results),
+        "results": Value::Object(results.clone()),
     });
-    merge_disk_claim_state(&mut cache, &today);
-    let _ = save_travel_cache(&cache);
+    persist_travel_cache(&overlay);
 
     json!({
         "status": "ok",
-        "completed": !has_retryable,
+        "completed": !has_retryable_results(&results),
         "accounts": summary_accounts,
     })
 }
 
-/// 对所有今天派出过旅行的账号检查并领取奖励（只查待领取的，报错跳过）。
+/// 检查并领取未领奖励。不绑死「今天」的 cache.date，跨日仍处理 traveling/arrived。
 pub async fn run_travel_claim_cycle() -> Value {
     let Some(_guard) = RunFlagGuard::try_acquire(&TRAVEL_CLAIM_RUNNING) else {
         return json!({"status": "skipped", "reason": "already_running"});
     };
-    let today = today_str();
     let mut cache = load_travel_cache();
-    if cache.get("date").and_then(Value::as_str) != Some(today.as_str()) {
-        return json!({"status": "skipped", "reason": "nothing-to-claim"});
-    }
     let Some(results) = cache.get_mut("results").and_then(Value::as_object_mut) else {
         return json!({"status": "skipped", "reason": "nothing-to-claim"});
     };
 
-    // 收集待领取账号（今天派过且尚未领取）。
     let ids: Vec<String> = results
         .iter()
-        .filter(|(_, r)| r.get("ok").and_then(Value::as_bool) == Some(true)
-            && r.get("claimed").and_then(Value::as_bool) != Some(true))
+        .filter(|(_, r)| result_in_flight(r))
         .map(|(id, _)| id.clone())
         .collect();
     if ids.is_empty() {
@@ -513,46 +859,63 @@ pub async fn run_travel_claim_cycle() -> Value {
     let accounts = load_accounts();
     let mut claimed = 0;
     let total = ids.len();
+    let mut overlay_results = Map::new();
     for id in &ids {
-        let Some(account) = accounts.iter().find(|a| account_key(a).as_str() == id.as_str()) else {
+        let Some(account) = accounts
+            .iter()
+            .find(|a| account_key(a).as_str() == id.as_str())
+        else {
             continue;
         };
         let prior = results.get(id).cloned().unwrap_or_else(|| json!({}));
         let updated = claim_travel_for_account(account, &prior).await;
-        if updated.get("claimed").and_then(Value::as_bool) == Some(true) {
+        if result_claimed(&updated) {
             claimed += 1;
         }
-        results.insert(id.clone(), updated);
+        overlay_results.insert(id.clone(), updated);
     }
-    merge_disk_claim_state(&mut cache, &today);
-    let _ = save_travel_cache(&cache);
+    let overlay = json!({
+        "date": cache.get("date").cloned().unwrap_or(Value::Null),
+        "results": Value::Object(overlay_results),
+    });
+    persist_travel_cache(&overlay);
 
     json!({ "status": "ok", "total": total, "claimed": claimed })
 }
 
-/// 某账号今日旅行状态的展示值：`{ label, rewardCredit }`。
+fn display_record(label: &str, result: &Value) -> Value {
+    let arrive_at = result.get("arriveAt").and_then(Value::as_i64).unwrap_or(0);
+    json!({
+        "label": label,
+        "rewardCredit": nonzero_credit(result.get("rewardCredit").unwrap_or(&Value::Null))
+            .unwrap_or(Value::Null),
+        "locationName": nonempty_str(result.get("locationName").unwrap_or(&Value::Null))
+            .map(str::to_string),
+        "arriveAt": if arrive_at > 0 { json!(arrive_at) } else { Value::Null },
+    })
+}
+
+/// 某账号旅行状态的展示值：`{ label, rewardCredit, locationName }`。
 ///
 /// label 取值：`untraveled`（未旅行）、`no-buddy`、`traveling`（旅行中）、
-/// `finished`（已结束+获得积分）。前端据此渲染四个状态标签。
+/// `finished`（已结束+获得积分）。跨日未领的 traveling/arrived 仍显示旅行中。
 pub fn travel_display(account_id: &str) -> Value {
     let today = today_str();
     let cache = load_travel_cache();
-    if cache.get("date").and_then(Value::as_str) != Some(today.as_str()) {
-        return json!({ "label": "untraveled", "rewardCredit": Value::Null });
-    }
-    let Some(r) = cache.get("results").and_then(|m| m.get(account_id)) else {
-        return json!({ "label": "untraveled", "rewardCredit": Value::Null });
+    let Some(r) = cache_results(&cache).and_then(|results| results.get(account_id)) else {
+        return display_record("untraveled", &json!({}));
     };
-    if r.get("skip").and_then(Value::as_str) == Some("no-buddy") {
-        return json!({ "label": "no-buddy", "rewardCredit": Value::Null });
+    let same_day = cache.get("date").and_then(Value::as_str) == Some(today.as_str());
+    if result_in_flight(r) {
+        return display_record("traveling", r);
     }
-    if r.get("claimed").and_then(Value::as_bool) == Some(true) {
-        return json!({ "label": "finished", "rewardCredit": r.get("rewardCredit").cloned().unwrap_or(Value::Null) });
+    if same_day && r.get("skip").and_then(Value::as_str) == Some("no-buddy") {
+        return display_record("no-buddy", r);
     }
-    if r.get("ok").and_then(Value::as_bool) == Some(true) {
-        return json!({ "label": "traveling", "rewardCredit": Value::Null });
+    if same_day && result_claimed(r) {
+        return display_record("finished", r);
     }
-    json!({ "label": "untraveled", "rewardCredit": Value::Null })
+    display_record("untraveled", &json!({}))
 }
 
 #[cfg(test)]
@@ -564,9 +927,10 @@ mod tests {
         assert!(is_retryable_skip(Some("no-buddy")));
         assert!(is_retryable_skip(Some("error")));
         assert!(is_retryable_skip(Some("config-error")));
-        assert!(!is_retryable_skip(Some("no-location")));
+        assert!(is_retryable_skip(Some("no-location")));
+        assert!(is_retryable_skip(Some("location-unavailable")));
+        assert!(is_retryable_skip(Some("status-error")));
         assert!(!is_retryable_skip(Some("daily-limit")));
-        assert!(!is_retryable_skip(Some("location-unavailable")));
         assert!(!is_retryable_skip(None));
     }
 
@@ -581,6 +945,36 @@ mod tests {
         assert_eq!(truncate_message("a"), "a");
         let long: String = "x".repeat(200);
         assert_eq!(truncate_message(&long).chars().count(), 80);
+    }
+
+    #[test]
+    fn parse_travel_state_accepts_known_case_insensitive() {
+        assert_eq!(parse_travel_state(Some("idle")), Some("idle"));
+        assert_eq!(parse_travel_state(Some("Arrived")), Some("arrived"));
+        assert_eq!(parse_travel_state(Some(" TRAVELING ")), Some("traveling"));
+        assert_eq!(parse_travel_state(None), None);
+        assert_eq!(parse_travel_state(Some("")), None);
+        assert_eq!(parse_travel_state(Some("unknown")), None);
+    }
+
+    #[test]
+    fn classify_depart_does_not_treat_http_429_as_daily_limit() {
+        assert_eq!(
+            classify_depart_error(429, "too many requests"),
+            DepartClass::Other
+        );
+        assert_eq!(
+            classify_depart_error(429, "daily limit reached"),
+            DepartClass::DailyLimit
+        );
+        assert_eq!(
+            classify_depart_error(0, "daily_limit_reached"),
+            DepartClass::DailyLimit
+        );
+        assert_eq!(
+            classify_depart_error(0, "already traveling"),
+            DepartClass::AlreadyTraveling
+        );
     }
 
     #[test]
@@ -600,8 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_restores_claim_state_on_rebuild() {
-        // 重试轮重建：新 depart 结果 claimed=false，不能丢当日已领取状态。
+    fn merge_does_not_cover_new_trip_with_old_claim() {
         let prior = json!({
             "claimed": true, "rewardCredit": 8, "claimedAt": 100, "state": "idle",
         });
@@ -610,11 +1003,44 @@ mod tests {
             "claimedAt": 0, "state": "traveling", "message": "已在旅行中",
         });
         let merged = merge_claim_state(&prior, &new);
-        assert_eq!(merged["claimed"], true);
-        assert_eq!(merged["rewardCredit"], 8);
-        assert_eq!(merged["state"], "idle");
-        // depart 侧信息保留
+        assert_eq!(merged["claimed"], false);
+        assert_eq!(merged["state"], "traveling");
         assert_eq!(merged["already"], true);
+        assert_eq!(merged["rewardCredit"], Value::Null);
+    }
+
+    #[test]
+    fn merge_keeps_claimed_without_credit() {
+        let prior = json!({
+            "claimed": true, "rewardCredit": null, "claimedAt": 100, "state": "idle",
+        });
+        let new = json!({
+            "ok": false, "claimed": false, "rewardCredit": null, "state": "idle",
+        });
+        let merged = merge_claim_state(&prior, &new);
+        assert_eq!(merged["claimed"], true);
+        assert_eq!(merged["rewardCredit"], Value::Null);
+        assert_eq!(merged["state"], "idle");
+    }
+
+    #[test]
+    fn official_status_decides_whether_to_depart() {
+        assert_eq!(
+            decide_travel_action("idle", false),
+            TravelAction::Depart
+        );
+        assert_eq!(
+            decide_travel_action("idle", true),
+            TravelAction::SkipDailyLimit
+        );
+        assert_eq!(
+            decide_travel_action("traveling", true),
+            TravelAction::WaitTraveling
+        );
+        assert_eq!(
+            decide_travel_action("arrived", true),
+            TravelAction::Claim
+        );
     }
 
     #[test]
@@ -636,5 +1062,24 @@ mod tests {
         let new = json!({ "claimed": false, "rewardCredit": null });
         let merged = merge_claim_state(&prior, &new);
         assert_eq!(merged["claimed"], false);
+    }
+
+    #[test]
+    fn roll_cache_keeps_in_flight_and_drops_claimed() {
+        let mut cache = json!({
+            "date": "2026-09-08",
+            "completed": true,
+            "results": {
+                "a": { "ok": true, "claimed": false, "state": "traveling" },
+                "b": { "ok": true, "claimed": true, "rewardCredit": 4, "state": "idle" },
+                "c": { "ok": false, "skip": "no-buddy" },
+            }
+        });
+        roll_cache_to_today(&mut cache, "2026-09-09");
+        assert_eq!(cache["date"], "2026-09-09");
+        assert_eq!(cache["completed"], false);
+        assert_eq!(cache["results"]["a"]["state"], "traveling");
+        assert!(cache["results"].get("b").is_none());
+        assert!(cache["results"].get("c").is_none());
     }
 }

@@ -404,10 +404,12 @@ export async function getTravelStatus(accountId: string): Promise<TravelStatus> 
   if (isWebui()) {
     // webui 端为批量接口，按 accountId 过滤
     const all = await httpCall<{
-      accounts: { accountId: string; email: string; label: TravelStatus["label"]; rewardCredit: number | null }[];
+      accounts: { accountId: string; email: string; label: TravelStatus["label"]; rewardCredit: number | null; locationName?: string | null; arriveAt?: number | null }[];
     }>("get_travel_status");
     const one = all.accounts.find((a) => a.accountId === accountId);
-    return one ? { label: one.label, rewardCredit: one.rewardCredit } : { label: "untraveled", rewardCredit: null };
+    return one
+      ? { label: one.label, rewardCredit: one.rewardCredit, locationName: one.locationName ?? null, arriveAt: one.arriveAt ?? null }
+      : { label: "untraveled", rewardCredit: null, locationName: null, arriveAt: null };
   }
   return call("get_travel_status", { accountId });
 }

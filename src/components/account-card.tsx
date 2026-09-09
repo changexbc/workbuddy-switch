@@ -1,4 +1,4 @@
-import { ArrowRight, Check, CircleCheck, Clock3, Coins, Ellipsis, Loader2, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { ArrowRight, Check, CircleCheck, Clock3, Coins, Ellipsis, Loader2, PlaneTakeoff, RefreshCw, Sparkles, Star, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -88,6 +88,59 @@ function accountIdentity(account: AccountMeta): string {
 
 const chipClass = "rounded-md px-1.5 py-0 text-[11px] font-medium";
 
+function travelIconChip({
+  label,
+  tooltip,
+  variant,
+}: {
+  label: string;
+  tooltip: string;
+  variant: "secondary" | "success";
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant={variant} className={cn(chipClass, "px-1")} aria-label={label}>
+          <PlaneTakeoff className="size-3.5" />
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent side="top">{tooltip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function formatTravelRemaining(arriveAt: number | null | undefined): string | null {
+  if (!arriveAt || arriveAt <= 0) return null;
+  const arriveMs = arriveAt > 1e12 ? arriveAt : arriveAt * 1000;
+  const remainingMs = arriveMs - Date.now();
+  if (remainingMs <= 0) return "即将到达";
+  const totalMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `剩余 ${hours} 小时 ${minutes} 分钟`;
+  if (hours > 0) return `剩余 ${hours} 小时`;
+  return `剩余 ${minutes} 分钟`;
+}
+
+function travelTooltip(status: TravelStatus): string {
+  const place = status.locationName?.trim();
+  const credit = status.rewardCredit;
+  const points = credit != null ? `+${credit}` : null;
+  const remaining = formatTravelRemaining(status.arriveAt);
+  if (status.label === "traveling") {
+    const parts = [place, points ? `预计 ${points}` : "旅行中", remaining].filter(Boolean);
+    return parts.length > 0 ? parts.join(" · ") : "旅行中";
+  }
+  if (status.label === "finished") {
+    if (place && points) return `${place} · ${points}`;
+    if (place) return `${place} · 已结束`;
+    if (points) return `已结束 · ${points}`;
+    return "已结束";
+  }
+  if (status.label === "no-buddy") return "无 Buddy";
+  return "未旅行";
+}
+
 /** 按旅行状态渲染标签：无 Buddy / 未旅行 / 旅行中 / 已结束。 */
 function travelChip(status: TravelStatus | undefined) {
   if (!status) return null;
@@ -95,9 +148,9 @@ function travelChip(status: TravelStatus | undefined) {
     case "no-buddy":
       return <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>无 Buddy</Badge>;
     case "traveling":
-      return <Badge variant="secondary" className={chipClass}>旅行中</Badge>;
+      return travelIconChip({ label: travelTooltip(status), tooltip: travelTooltip(status), variant: "secondary" });
     case "finished":
-      return <Badge variant="success" className={chipClass}>已结束</Badge>;
+      return travelIconChip({ label: travelTooltip(status), tooltip: travelTooltip(status), variant: "success" });
     case "untraveled":
     default:
       return <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>未旅行</Badge>;
@@ -194,7 +247,16 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
       )}
       {travelChip(travelStatus)}
       {(account.needsRelogin || expired) && <Badge variant="warning" className={chipClass}>{account.needsRelogin ? "需重新登录" : "Token 已过期"}</Badge>}
-      {creditPriority && <Badge variant="warning" className={chipClass}>建议优先</Badge>}
+      {creditPriority && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="warning" className={cn(chipClass, "px-1")} aria-label="建议优先">
+              <Star className="size-3.5" />
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top">建议优先使用</TooltipContent>
+        </Tooltip>
+      )}
       {!compact && activeProductCount >= 2 && <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>{activeProductCount} 个工具正在使用</Badge>}
     </>
   );
@@ -252,13 +314,6 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                     <CircleCheck />手动签到
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem
-                  disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy || codebuddyCnIdeActive}
-                  onSelect={() => onSwitchCodebuddyCnIde?.(account)}
-                >
-                  <CodeBuddyCnIdeMark size={14} />
-                  {codebuddyCnIdeLoading ? "正在切换 IDE…" : codebuddyCnIdeActive ? "已是 IDE 当前账号" : "切换到 CodeBuddy IDE"}
-                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem className="text-destructive focus:bg-destructive/5 focus:text-destructive" onSelect={() => onDelete(account)}>
                   <Trash2 />删除账号

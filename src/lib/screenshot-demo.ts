@@ -334,9 +334,9 @@ function travelConfig(): TravelConfig {
 function travelStatus(accountId: string): TravelStatus {
   const index = Math.max(0, accounts.findIndex((account) => account.id === accountId));
   // 演示三种状态：旅行中 / 已结束 / 无 Buddy
-  if (index % 3 === 0) return { label: "traveling", rewardCredit: null };
-  if (index % 3 === 1) return { label: "finished", rewardCredit: 20 };
-  return { label: "no-buddy", rewardCredit: null };
+  if (index % 3 === 0) return { label: "traveling", rewardCredit: 7, locationName: "咖啡馆", arriveAt: Math.floor(Date.now() / 1000) + 2 * 3600 + 40 * 60 };
+  if (index % 3 === 1) return { label: "finished", rewardCredit: 20, locationName: "健身房" };
+  return { label: "no-buddy", rewardCredit: null, locationName: null };
 }
 
 function rotateConfig(): AutoRotateConfig {

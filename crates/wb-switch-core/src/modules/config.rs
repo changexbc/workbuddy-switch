@@ -26,6 +26,13 @@ pub const CHECKIN_LOG_MAX_RECORDS: usize = 500;
 pub const TRAVEL_API_PREFIX: &str = "/activity/growth/buddy/travel";
 
 static CHECKIN_LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static TRAVEL_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialize travel-cache read-modify-write across depart and claim cycles.
+pub fn with_travel_cache_lock<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = TRAVEL_CACHE_WRITE_LOCK.lock().unwrap();
+    f()
+}
 
 pub const ROTATE_LOG_MAX_RECORDS: usize = 200;
 

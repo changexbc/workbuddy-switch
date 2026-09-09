@@ -39,8 +39,9 @@ fn spawn_background_loops() {
         }
     });
 
-    // 旅行到点后周期性检查并领取奖励（已结束+获得积分）。
+    // 旅行领取：启动立刻查一轮（避免重启后空等 15 分钟漏领），之后按周期检查。
     tauri::async_runtime::spawn(async move {
+        let _ = modules::travel::run_travel_claim_cycle().await;
         loop {
             tokio::time::sleep(modules::travel::TRAVEL_CLAIM_INTERVAL).await;
             let _ = modules::travel::run_travel_claim_cycle().await;
