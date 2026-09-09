@@ -53,7 +53,7 @@ const TOKEN_SOURCE_STORAGE_KEY = "wb-switch:token-stats:source";
 const RANKING_LIMIT = 10;
 
 function isSourceKey(value: unknown): value is SourceKey {
-  return value === "workbuddy" || value === "codebuddy-cli";
+  return value === "workbuddy" || value === "codebuddy-cli" || value === "codebuddy-ide";
 }
 
 function readPreferredTokenSource(): SourceKey {
@@ -1309,6 +1309,13 @@ export default function TokenStatsPage() {
                   disabled={Boolean(stats && !stats.sources.some((item) => item.source === "codebuddy-cli"))}
                 >
                   CodeBuddy CLI
+                </TabsTrigger>
+                <TabsTrigger
+                  className="max-w-full whitespace-normal"
+                  value="codebuddy-ide"
+                  disabled={Boolean(stats && !stats.sources.some((item) => item.source === "codebuddy-ide"))}
+                >
+                  CodeBuddy IDE
                 </TabsTrigger>
               </TabsList>
             </Tabs>

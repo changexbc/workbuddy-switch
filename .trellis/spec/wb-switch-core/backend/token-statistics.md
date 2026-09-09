@@ -1,11 +1,11 @@
 # Local Token Statistics Contract
 
-## Scenario: WorkBuddy and CodeBuddy CLI token dashboard
+## Scenario: WorkBuddy, CodeBuddy CLI, and CodeBuddy IDE token dashboard
 
 ### 1. Scope / Trigger
 
-- Trigger: the token dashboard adds a cross-layer local JSONL aggregation API.
-- Scope: decode usage records from the two local sources, aggregate safe numeric
+- Trigger: the token dashboard adds a cross-layer local aggregation API.
+- Scope: decode usage records from the three local sources, aggregate safe numeric
   projections, and expose the same payload through Tauri and HTTP.
 - The decoder in `crates/wb-switch-core/src/modules/token_stats.rs` is the sole
   owner of event parsing, source isolation, filtering, and aggregation.
@@ -24,8 +24,19 @@
 #### Request
 
 - `days` is an optional signed integer at the HTTP/Tauri boundary.
-- Sources are fixed local roots: `~/.workbuddy/projects` and
-  `~/.codebuddy/projects`.
+- Sources are fixed local roots:
+  - WorkBuddy JSONL: `~/.workbuddy/projects`
+  - CodeBuddy CLI JSONL: `~/.codebuddy/projects`
+  - CodeBuddy IDE conversation indexes:
+    `{data_local_dir}/CodeBuddyExtension/Data/**/history/{workspace}/{conversation}/index.json`
+    (`data_local_dir` is `~/Library/Application Support` on macOS,
+    `%LOCALAPPDATA%` on Windows, and `~/.local/share` on Linux).
+- CodeBuddy IDE does not use JSONL. Usage lives on
+  `requests[].usage` (`inputTokens`, `outputTokens`, `cacheTokens`,
+  `cachedWriteTokens`) with `startedAt` as the record timestamp.
+  Workspace `index.json` supplies optional `name` / `selectedModelId`.
+  Directories named `messages`, `check-point`, `backups`, or `Public` are
+  not scanned, so chat bodies are never read.
 
 #### Response
 
@@ -73,6 +84,8 @@
 }
 ```
 
+- `source` is one of `workbuddy`, `codebuddy-cli`, or `codebuddy-ide`. The three
+  sources are returned independently and never mixed.
 - `summary.input` includes the provider-reported input total, including cached
   input. `summary.uncachedInput = input - cacheRead` (saturating at zero).
 - `cacheWrite` accepts only explicit provider write aliases:
@@ -113,7 +126,7 @@
 
 | Condition | Required behavior |
 |---|---|
-| `days=7`, `30`, or `90` | Apply one shared millisecond cutoff to both sources. |
+| `days=7`, `30`, or `90` | Apply one shared millisecond cutoff to all sources. |
 | Missing/invalid `days` | Scan complete history and return `rangeDays: null`. |
 | Missing source directory | Return an empty source, not an API error. |
 | Invalid JSONL line | Skip the line and increment `parseErrors`. |
@@ -124,6 +137,9 @@
 | Positive write alias exists only in another usage object or `rawUsage` | Use that positive explicit value without counting input/output twice. |
 | Only `prompt_cache_miss_tokens` is positive | Keep `cacheWrite: 0`; derive uncached input from `input - cacheRead`. |
 | `subagents` directory | Do not scan files below that directory. |
+| IDE `messages` / `check-point` / `backups` / `Public` | Do not scan those directories. |
+| IDE conversation index without `requests` | Skip the file; do not treat workspace indexes as usage. |
+| IDE request with `inputTokens` present | Count once using `cacheTokens` as cache read and `cachedWriteTokens` as cache write. |
 | Title event before/after usage | Associate the latest non-empty title in the same file. |
 | Title timestamp before cutoff | Keep the title when that file has in-range usage. |
 | Missing/blank title | Return `title: null`; the UI uses a redacted session fallback. |
@@ -171,6 +187,9 @@
 - Frontend/browser checks must assert source tabs, range selection, summary,
   trend, composition, heatmap, rankings, empty/error states, and no horizontal
   overflow at narrow viewport widths.
+- Fixture tests assert CodeBuddy IDE conversation indexes are aggregated, message
+  body files are ignored, titles/models come from the workspace index, and the
+  shared cutoff applies to `startedAt`.
 
 ### 7. Wrong vs Correct
 
