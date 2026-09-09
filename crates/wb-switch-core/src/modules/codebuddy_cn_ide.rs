@@ -740,19 +740,48 @@ fn close_codebuddy_cn_windows(timeout_secs: i64) -> Result<(), String> {
         return Ok(());
     }
     let pids: Vec<u32> = rows.iter().map(|r| r.pid).collect();
-    for pid in &pids {
-        let pid_s = pid.to_string();
-        let _ = run_cmd("taskkill", &["/PID", &pid_s, "/T"], 10);
-    }
-
     let started = Instant::now();
     let timeout = Duration::from_secs(timeout_secs.max(1) as u64);
-    let graceful_budget = Duration::from_secs(8).min(timeout);
-    let remaining = process::wait_windows_pids_gone(&pids, graceful_budget);
+
+    // 1) 优雅阶段：向拥有可见顶层窗口的进程（即 Electron GUI 主进程）发送
+    //    WM_CLOSE，让 CodeBuddy CN 自行走窗口关闭/保存/退出流程。只影响主进程，
+    //    渲染子进程会随主进程一并退出，无需逐个处理。
+    let notified = process::windows_send_close_to_pids(&pids);
+    if notified == 0 {
+        // 未发现任何可见顶层窗口（如仅驻留托盘/后台）：退化为对所有进程执行
+        // 不带 /F 的 taskkill——对 GUI 进程而言这等价于发送关闭请求。
+        eprintln!("[codebuddy-cn-ide] no visible window found, fallback graceful taskkill…");
+        for pid in &pids {
+            let pid_s = pid.to_string();
+            let _ = run_cmd("taskkill", &["/PID", &pid_s, "/T"], 10);
+        }
+    } else {
+        eprintln!("[codebuddy-cn-ide] sent WM_CLOSE to {notified} visible window(s)");
+    }
+
+    // 2) 优雅窗口：等待进程全部消失（预算 8s 或剩余时间）。
+    let graceful = Duration::from_secs(8).min(timeout);
+    let remaining = process::wait_windows_pids_gone(&pids, graceful);
     if remaining.is_empty() {
         return Ok(());
     }
 
+    // 3) 保护用户数据：若残留进程仍持有可见窗口（典型场景：IDE 弹了
+    //    “未保存文件”确认框并阻塞退出），此时不自动强杀，避免丢失编辑内容，
+    //    改为提示用户保存/关闭后重试。这是与原实现“8s 后无条件 /F”的关键差异。
+    let with_window = process::windows_visible_window_pids(&remaining);
+    if !with_window.is_empty() {
+        return Err(format!(
+            "CodeBuddy CN 仍有可见窗口未关闭（PID {}），可能包含未保存内容。请先在 CodeBuddy CN 中保存并关闭窗口后，再重试切换。",
+            with_window
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    // 4) 无窗口残留（后台进程）→ 可安全强制结束进程树。
     for pid in &remaining {
         let pid_s = pid.to_string();
         let _ = run_cmd("taskkill", &["/PID", &pid_s, "/T", "/F"], 10);
@@ -890,6 +919,42 @@ fn launch_codebuddy_cn_macos() -> Result<(), String> {
     validate_macos_cn_startup(&app)
 }
 
+/// Windows 启动存活校验：spawn 后轮询 CodeBuddy CN 进程出现并持续存活。
+///
+/// - 从未出现 → 超时 Err；
+/// - 出现后持续存活 ≥ `sustain` → Ok；
+/// - 出现过但随后消失（单例锁导致秒退的典型特征）→ 立即 Err。
+/// 与 macOS 分支 `validate_macos_cn_startup` 语义对齐，避免“spawn 成功即假成功”。
+#[cfg(target_os = "windows")]
+fn validate_windows_cn_startup(exe: &Path) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let sustain = Duration::from_secs(10);
+    let mut seen_at: Option<Instant> = None;
+    while Instant::now() < deadline {
+        let alive = !windows_cn_process_rows().is_empty();
+        if alive {
+            match seen_at {
+                None => seen_at = Some(Instant::now()),
+                Some(start) => {
+                    if start.elapsed() >= sustain {
+                        return Ok(());
+                    }
+                }
+            }
+        } else if seen_at.is_some() {
+            return Err(format!(
+                "CodeBuddy CN 启动后立即退出（疑似残留单例锁）。请先手动打开一次 CodeBuddy CN（路径: {}）。",
+                exe.display()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!(
+        "启动 CodeBuddy CN 超时，未能确认运行（路径: {}）。请先手动打开一次 CodeBuddy CN。",
+        exe.display()
+    ))
+}
+
 pub fn launch_codebuddy_cn() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -907,11 +972,14 @@ pub fn launch_codebuddy_cn() -> Result<(), String> {
             ));
         }
         persist_cn_app_cache(&exe);
-        process::cmd_builder(&exe)
+        let spawned = process::cmd_builder(&exe)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| format!("启动 CodeBuddy CN 失败: {e}（路径: {}）", exe.display()))?;
+        // 启动后存活校验：避免单例锁导致秒退却仍提示“切换成功”。
+        validate_windows_cn_startup(&exe)?;
+        drop(spawned);
         Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
