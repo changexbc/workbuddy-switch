@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-switch-linux-x64",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "workbuddy-switch platform binary (linux-x64)",
   "os": [
     "linux"
