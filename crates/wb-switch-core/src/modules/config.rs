@@ -36,6 +36,9 @@ pub fn with_travel_cache_lock<T>(f: impl FnOnce() -> T) -> T {
 
 pub const ROTATE_LOG_MAX_RECORDS: usize = 200;
 
+/// 官网套餐页桌面 Chrome UA（plans-usage 捕获）。
+pub const DEFAULT_HTTP_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+
 // ---------------------------------------------------------------------------
 // 路径
 // ---------------------------------------------------------------------------
@@ -599,10 +602,15 @@ pub fn norm_ts(v: Option<&Value>) -> Option<i64> {
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
+fn http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(DEFAULT_HTTP_USER_AGENT)
+}
+
 fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+        http_client_builder()
             .build()
             .expect("failed to build reqwest client")
     })
@@ -633,8 +641,7 @@ pub async fn http_request_with_proxy(
 ) -> Value {
     let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
     let client = match proxy.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(proxy) => match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+        Some(proxy) => match http_client_builder()
             .proxy(match reqwest::Proxy::all(proxy) {
                 Ok(proxy) => proxy,
                 Err(e) => return json!({"code": -1, "message": format!("代理地址无效: {e}")}),
@@ -691,12 +698,10 @@ pub async fn http_request_raw(
     let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
     let client = match proxy.map(str::trim).filter(|value| !value.is_empty()) {
         Some(proxy) => {
-            let mut builder = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .proxy(match reqwest::Proxy::all(proxy) {
-                    Ok(proxy) => proxy,
-                    Err(e) => return (0, HashMap::new(), format!("代理地址无效: {e}")),
-                });
+            let mut builder = http_client_builder().proxy(match reqwest::Proxy::all(proxy) {
+                Ok(proxy) => proxy,
+                Err(e) => return (0, HashMap::new(), format!("代理地址无效: {e}")),
+            });
             if !follow_redirects {
                 builder = builder.redirect(reqwest::redirect::Policy::none());
             }
@@ -709,8 +714,7 @@ pub async fn http_request_raw(
             if follow_redirects {
                 http_client().clone()
             } else {
-                match reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
+                match http_client_builder()
                     .redirect(reqwest::redirect::Policy::none())
                     .build()
                 {
@@ -990,5 +994,14 @@ mod tests {
         assert!(codebuddy_cn_app_cache_file()
             .file_name()
             .is_some_and(|n| n == "codebuddy_cn_app.json"));
+    }
+
+    #[test]
+    fn default_http_user_agent_matches_official_chrome_desktop() {
+        assert_eq!(
+            DEFAULT_HTTP_USER_AGENT,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+        );
+        let _ = http_client_builder();
     }
 }

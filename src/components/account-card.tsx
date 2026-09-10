@@ -414,13 +414,16 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
         )}
       </header>
 
-      <section className={cn("flex flex-1 flex-col", compact ? "px-3.5 pb-3 pt-3" : "px-5 pb-4 pt-4")}>
+      <section className={cn("flex min-w-0 flex-1 flex-col", compact ? "px-3.5 pb-3 pt-3" : "px-5 pb-4 pt-4")}>
         {creditLoading ? (
           <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />积分查询中…</div>
         ) : !credit ? (
           <div className="py-3 text-sm text-muted-foreground">等待积分数据…</div>
         ) : !credit.ok ? (
-          <div className="flex items-center gap-2 py-3 text-sm text-destructive" title={credit.error}><Coins className="size-4" />积分查询失败</div>
+          <div className="flex min-w-0 items-center gap-2 py-3 text-sm text-destructive" title={credit.error}>
+            <Coins className="size-4 shrink-0" />
+            <span className="min-w-0 truncate">{credit.error || "积分查询失败"}</span>
+          </div>
         ) : (
           <>
             <div className="flex items-baseline gap-x-3 gap-y-1">

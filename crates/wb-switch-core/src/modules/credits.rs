@@ -291,6 +291,10 @@ fn is_success(response: &Value) -> bool {
 
 fn is_unauthorized(response: &Value) -> bool {
     let code = response_code(response).unwrap_or(-1);
+    // 网关 WAF 10085 是客户端指纹拦截，不是 token 过期；刷新无效。
+    if code == 10085 {
+        return false;
+    }
     if code == 401 || code == 403 {
         return true;
     }
@@ -305,6 +309,14 @@ fn is_unauthorized(response: &Value) -> bool {
     ["unauthorized", "401", "登录", "失效", "过期", "token"]
         .iter()
         .any(|keyword| message.contains(keyword))
+}
+
+fn is_transport_error(response: &Value) -> bool {
+    response_code(response) == Some(-1)
+        && response
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| !message.trim().is_empty())
 }
 
 /// 发起需要账号身份的 JSON POST 请求。
@@ -332,15 +344,40 @@ pub async fn authenticated_post(account: &Value, url: &str, body: Value) -> Valu
 }
 
 async fn post_with_account(account: &Value, url: &str, body: Value) -> Value {
-    let headers = resource_auth_headers(account);
-    http_request(url, "POST", Some(body), Some(&headers)).await
+    let headers = resource_auth_headers(account, request_origin(url));
+    let response = http_request(url, "POST", Some(body.clone()), Some(&headers)).await;
+    if is_transport_error(&response) {
+        http_request(url, "POST", Some(body), Some(&headers)).await
+    } else {
+        response
+    }
 }
 
-fn resource_auth_headers(account: &Value) -> std::collections::HashMap<String, String> {
+fn request_origin(url: &str) -> &'static str {
+    if url.starts_with(WORKBUDDY_WEB_ENDPOINT) {
+        WORKBUDDY_WEB_ENDPOINT
+    } else {
+        WORKBUDDY_API_ENDPOINT
+    }
+}
+
+fn resource_auth_headers(
+    account: &Value,
+    origin: &str,
+) -> std::collections::HashMap<String, String> {
     let mut headers = build_auth_headers(account);
     // WorkBuddy 用户中心的 Axios 拦截器始终携带该头。桌面端使用同一组
     // billing 接口时也保持一致，避免网关把请求当成未知客户端。
     headers.insert("X-Client-Platform".to_string(), "web".to_string());
+    headers.insert(
+        "Accept".to_string(),
+        "application/json, text/plain, */*".to_string(),
+    );
+    headers.insert("Origin".to_string(), origin.to_string());
+    headers.insert(
+        "Referer".to_string(),
+        format!("{origin}/profile/plans-usage"),
+    );
     headers
 }
 
@@ -880,6 +917,8 @@ mod tests {
         assert!(free["PackageCodes"]
             .as_array()
             .is_some_and(|codes| codes.iter().any(|code| code == "TCACA_code_007_nzdH5h4Nl0")));
+        assert!(paid.get("NeedInUsage").is_none());
+        assert!(free.get("NeedInUsage").is_none());
     }
 
     #[test]
@@ -909,12 +948,92 @@ mod tests {
             "https://www.codebuddy.cn/billing/meter/get-user-resource-summary"
         );
 
-        let headers = resource_auth_headers(&codebuddy);
+        let headers = resource_auth_headers(&codebuddy, new_resource_endpoint(&codebuddy));
         assert_eq!(headers.get("X-Client-Platform").map(String::as_str), Some("web"));
+        assert_eq!(
+            headers.get("Accept").map(String::as_str),
+            Some("application/json, text/plain, */*")
+        );
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("Bearer redacted")
+        );
+        assert_eq!(headers.get("X-User-Id").map(String::as_str), Some("u1"));
         assert_eq!(
             headers.get("X-Domain").map(String::as_str),
             Some("www.codebuddy.cn")
         );
+        assert_eq!(
+            headers.get("Origin").map(String::as_str),
+            Some("https://www.codebuddy.cn")
+        );
+        assert_eq!(
+            headers.get("Referer").map(String::as_str),
+            Some("https://www.codebuddy.cn/profile/plans-usage")
+        );
+
+        let workbuddy_headers =
+            resource_auth_headers(&workbuddy, new_resource_endpoint(&workbuddy));
+        assert_eq!(
+            workbuddy_headers.get("Origin").map(String::as_str),
+            Some("https://www.workbuddy.cn")
+        );
+        assert_eq!(
+            workbuddy_headers.get("Referer").map(String::as_str),
+            Some("https://www.workbuddy.cn/profile/plans-usage")
+        );
+        assert_eq!(
+            workbuddy_headers.get("X-Domain").map(String::as_str),
+            Some("www.workbuddy.cn")
+        );
+
+        let unknown_headers = resource_auth_headers(&unknown, new_resource_endpoint(&unknown));
+        assert_eq!(
+            unknown_headers.get("Origin").map(String::as_str),
+            Some("https://www.codebuddy.cn")
+        );
+        assert_eq!(
+            unknown_headers.get("Referer").map(String::as_str),
+            Some("https://www.codebuddy.cn/profile/plans-usage")
+        );
+
+        // 官方用量 URL 固定 workbuddy.cn，Origin 必须跟请求 host，X-Domain 仍用账号域。
+        let usage_url = "https://www.workbuddy.cn/billing/meter/get-user-request-usage";
+        assert_eq!(request_origin(usage_url), WORKBUDDY_WEB_ENDPOINT);
+        let usage_headers = resource_auth_headers(&codebuddy, request_origin(usage_url));
+        assert_eq!(
+            usage_headers.get("Origin").map(String::as_str),
+            Some("https://www.workbuddy.cn")
+        );
+        assert_eq!(
+            usage_headers.get("X-Domain").map(String::as_str),
+            Some("www.codebuddy.cn")
+        );
+        assert_eq!(
+            request_origin("https://www.codebuddy.cn/v2/billing/meter/get-user-resource"),
+            WORKBUDDY_API_ENDPOINT
+        );
+    }
+
+    #[test]
+    fn transport_error_is_code_minus_one_with_message() {
+        assert!(is_transport_error(&json!({
+            "code": -1,
+            "message": "error sending request for url (https://www.workbuddy.cn/billing/meter/get-user-resource-summary)"
+        })));
+        assert!(!is_transport_error(&json!({"code": -1, "message": ""})));
+        assert!(!is_transport_error(&json!({"code": -1, "message": "   "})));
+        assert!(!is_transport_error(&json!({"code": -1})));
+        assert!(!is_transport_error(&json!({
+            "code": 10085,
+            "msg": "请求不合法，如有疑问请联系客服"
+        })));
+        assert!(!is_transport_error(&json!({"code": 401, "message": "unauthorized"})));
+        assert!(!is_transport_error(&json!({"code": 0, "data": {}})));
+        assert!(!is_unauthorized(&json!({
+            "code": 10085,
+            "msg": "请求不合法，如有疑问请联系客服"
+        })));
     }
 
     #[test]
