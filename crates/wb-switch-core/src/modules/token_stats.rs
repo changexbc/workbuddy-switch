@@ -9,7 +9,7 @@
 
 use chrono::{Datelike, Local, Timelike};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
@@ -439,7 +439,21 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>) -> Value {
     files(&root, &mut paths);
     let mut collector = SourceCollector::default();
 
-    paths.sort();
+    // Copied/forked sessions replay the parent history (including usage
+    // records with their original timestamps) into their own JSONL, so the
+    // same request would otherwise be counted once per copy. Process files
+    // oldest first and skip fingerprints already seen in an earlier file so
+    // usage stays attributed to the original session.
+    paths.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(u64::MAX)
+    });
+    let mut seen: HashSet<(i64, u64, u64, u64, u64, String)> = HashSet::new();
+
     for path in &paths {
         let session_id = path
             .file_stem()
@@ -485,6 +499,21 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>) -> Value {
             let Some(usage) = usage(&value) else {
                 continue;
             };
+            // Fingerprint = (timestamp, full usage, model). Records without a
+            // timestamp cannot be fingerprinted and are counted as before.
+            let duplicate = timestamp(&value).is_some_and(|ts| {
+                !seen.insert((
+                    ts,
+                    usage.input,
+                    usage.output,
+                    usage.read,
+                    usage.write,
+                    model(&value),
+                ))
+            });
+            if duplicate {
+                continue;
+            }
             let project = record_project(&value, &fallback_project);
             if session_project.is_none() {
                 session_project = Some(project.clone());
@@ -935,6 +964,50 @@ mod tests {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         assert_eq!(result["dailyByModel"]["fixture-model"][0]["key"], today);
         assert_eq!(result["projects"][0]["key"], "fixture-project");
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn source_deduplicates_copied_session_history() {
+        let now = crate::modules::config::now_ms();
+        let root = std::env::temp_dir().join(format!(
+            "wb-switch-token-stats-fork-{}-{now}",
+            std::process::id()
+        ));
+        let project = root.join("fixture-project");
+        fs::create_dir_all(&project).expect("create fixture dirs");
+        let record = json!({
+            "timestamp": now,
+            "cwd": "/fixture/example-project",
+            "message": { "usage": { "input_tokens": 10, "output_tokens": 3 } }
+        });
+        // The copied session replays the same usage record under a new file.
+        fs::write(
+            project.join("session-original.jsonl"),
+            format!("{}\n", record),
+        )
+        .expect("write original fixture");
+        fs::write(
+            project.join("session-forked.jsonl"),
+            format!("{}\n{}\n", record, json!({
+                "timestamp": now + 1_000,
+                "message": { "usage": { "input_tokens": 7, "output_tokens": 2 } }
+            })),
+        )
+        .expect("write forked fixture");
+
+        let result = source(root.clone(), "fixture", None);
+        // The replayed record counts once; the fork's new record still counts.
+        assert_eq!(result["summary"]["records"], 2);
+        assert_eq!(result["summary"]["input"], 17);
+        assert_eq!(result["summary"]["output"], 5);
+        let sessions = result["sessions"].as_array().expect("session groups");
+        assert_eq!(sessions.len(), 2);
+        let forked = sessions
+            .iter()
+            .find(|session| session["sessionId"] == "session-forked")
+            .expect("forked session kept its new record");
+        assert_eq!(forked["input"], 7);
         fs::remove_dir_all(root).expect("remove fixture");
     }
 
