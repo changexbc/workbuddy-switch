@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Folder, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Folder, Loader2, Trash2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 
@@ -41,6 +41,59 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const [currentUid, setCurrentUid] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
 
+  // 清理重复会话
+  const [dupScanning, setDupScanning] = useState(false);
+  const [dupCleaning, setDupCleaning] = useState(false);
+  const [dupGroups, setDupGroups] = useState<api.DuplicateGroup[] | null>(null);
+  /** 勾选的待删除会话 id（默认全选每组里的重复项） */
+  const [dupSelected, setDupSelected] = useState<Set<string>>(new Set());
+
+  async function scanDuplicates() {
+    setDupScanning(true);
+    setError("");
+    try {
+      const res = await api.scanSessionDuplicates();
+      setDupGroups(res.groups);
+      const ids = new Set<string>();
+      for (const g of res.groups) for (const d of g.duplicates) ids.add(d.id);
+      setDupSelected(ids);
+      if (res.groups.length === 0) {
+        toast.success("没有发现重复会话");
+      }
+    } catch (e) {
+      setError(api.asError(e));
+    } finally {
+      setDupScanning(false);
+    }
+  }
+
+  function toggleDup(id: string) {
+    setDupSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function cleanupDuplicates() {
+    if (dupSelected.size === 0) return;
+    setDupCleaning(true);
+    setError("");
+    try {
+      const res = await api.cleanupSessionDuplicates([...dupSelected]);
+      toast.success(`已删除 ${res.deleted.length} 个重复会话`, {
+        description: res.backup ? `删除前已备份到: ${res.backup}` : undefined,
+      });
+      setDupGroups(null);
+      setDupSelected(new Set());
+    } catch (e) {
+      setError(api.asError(e));
+    } finally {
+      setDupCleaning(false);
+    }
+  }
+
   // 监听后端切换进度：桌面端走 Tauri 事件，webui 走 HTTP 轮询
   useEffect(() => {
     if (api.isWebui()) {
@@ -69,6 +122,8 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       setSelected(new Set());
       setExpanded(new Set());
       setError("");
+      setDupGroups(null);
+      setDupSelected(new Set());
       setLoadingSessions(true);
       api
         .listSessions()
@@ -123,6 +178,9 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       const parts: string[] = [];
       if (res.sessionCopy?.copied.length) {
         parts.push(`已复制 ${res.sessionCopy.copied.length} 个会话`);
+      }
+      if (res.sessionCopy?.skipped?.length) {
+        parts.push(`跳过重复 ${res.sessionCopy.skipped.length} 个`);
       }
       if (res.backup) parts.push(`备份: ${res.backup}`);
       toast.success(`已切换至「${nickname}」`, {
@@ -350,6 +408,90 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
               </div>
             </>
           )}
+
+          <Separator />
+
+          <div className="rounded-md border px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">清理重复会话</div>
+                <div className="text-xs text-muted-foreground">
+                  扫描当前账号中「同标题同目录」的重复会话（历史重复复制产生），删除前自动备份。
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={scanDuplicates}
+                disabled={dupScanning || dupCleaning || busy || !currentUid}
+              >
+                {dupScanning ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                扫描重复
+              </Button>
+            </div>
+
+            {dupGroups && dupGroups.length > 0 && (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  发现 {dupGroups.length} 组重复，选中将删除 {dupSelected.size} 条（每组保留最新一条）。
+                </p>
+                <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border p-2">
+                  {dupGroups.map((g) => (
+                    <div key={g.keep.id}>
+                      <div className="text-xs font-medium">
+                        {g.title}
+                        {g.cwd && (
+                          <span className="ml-1 font-normal text-muted-foreground">
+                            （{sessionFolderLabel(g.cwd)}）
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 space-y-0.5 pl-3">
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Badge variant="outline" className="shrink-0 text-[10px]">
+                            保留
+                          </Badge>
+                          <span className="truncate">
+                            {new Date(g.keep.updatedAt).toLocaleString()}
+                          </span>
+                        </div>
+                        {g.duplicates.map((d) => (
+                          <label
+                            key={d.id}
+                            className="flex cursor-pointer items-center gap-1.5 text-xs"
+                          >
+                            <input
+                              type="checkbox"
+                              className="size-3.5 shrink-0 accent-primary"
+                              checked={dupSelected.has(d.id)}
+                              onChange={() => toggleDup(d.id)}
+                            />
+                            <span className="shrink-0 text-destructive">删除</span>
+                            <span className="truncate text-muted-foreground">
+                              {new Date(d.updatedAt).toLocaleString()}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={cleanupDuplicates}
+                  disabled={dupCleaning || dupSelected.size === 0}
+                >
+                  {dupCleaning ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                  删除选中的 {dupSelected.size} 条（自动备份）
+                </Button>
+              </div>
+            )}
+
+            {dupGroups && dupGroups.length === 0 && (
+              <p className="mt-2 text-xs text-muted-foreground">未发现重复会话。</p>
+            )}
+          </div>
 
           {error && (
             <Alert variant={needsPermission ? "warning" : "destructive"} className="min-w-0 break-all">

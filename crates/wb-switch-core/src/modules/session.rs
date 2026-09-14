@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use crate::modules::auth_file;
 use crate::modules::config::{backup_dir, home_dir, now_ms, now_secs, utc_iso};
+use crate::modules::copy_map;
 
 /// 打开数据库并设置 busy_timeout（对照 Python `sqlite3.connect(timeout=5)`）。
 fn open_db(path: &Path, read_only: bool) -> Option<Connection> {
@@ -201,17 +202,102 @@ fn backup_workbuddy_db(backup_root: &Path) -> Option<PathBuf> {
     Some(backup_root.join("workbuddy.db"))
 }
 
+/// 查目标账号下是否已有「同标题+同目录」的未删除会话（判重兜底）。
+/// 返回命中的会话 id。
+fn find_same_session(conn: &Connection, uid: &str, title: &str, cwd: &str) -> Option<String> {
+    if !table_exists(conn, "sessions") {
+        return None;
+    }
+    let has_custom = column_exists(conn, "sessions", "custom_title");
+    let sql = if has_custom {
+        "SELECT id, title, custom_title FROM sessions \
+         WHERE user_id = ?1 AND deleted_at IS NULL AND cwd = ?2"
+    } else {
+        "SELECT id, title, NULL FROM sessions \
+         WHERE user_id = ?1 AND deleted_at IS NULL AND cwd = ?2"
+    };
+    let mut stmt = conn.prepare(sql).ok()?;
+    let rows = stmt
+        .query_map(rusqlite::params![uid, cwd], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .ok()?;
+    for r in rows.flatten() {
+        let (id, t, ct) = r;
+        if session_display_title(t, ct) == title {
+            return id;
+        }
+    }
+    None
+}
+
+/// 读取源会话的展示标题与目录（供判重兜底使用）。
+fn source_session_meta(conn: &Connection, cid: &str, uid: &str) -> Option<(String, String)> {
+    if !table_exists(conn, "sessions") {
+        return None;
+    }
+    let has_custom = column_exists(conn, "sessions", "custom_title");
+    let sql = if has_custom {
+        "SELECT title, custom_title, cwd FROM sessions WHERE id = ?1 AND user_id = ?2"
+    } else {
+        "SELECT title, NULL, cwd FROM sessions WHERE id = ?1 AND user_id = ?2"
+    };
+    conn.query_row(sql, rusqlite::params![cid, uid], |row| {
+        Ok((
+            session_display_title(
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ),
+            row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        ))
+    })
+    .ok()
+}
+
+/// 目标会话当前是否存在且未删除。
+fn session_alive(conn: &Connection, cid: &str, uid: &str) -> bool {
+    if !table_exists(conn, "sessions") {
+        return false;
+    }
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1 AND user_id = ?2 AND deleted_at IS NULL)",
+        rusqlite::params![cid, uid],
+        |r| r.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
+        == 1
+}
+
+/// 复制前去重：命中返回已存在会话 id，未命中返回 None。
+///
+/// 顺序：复制关系表（精确）→ 同标题+同目录（兜底）。
+fn find_existing_copy(conn: &Connection, cid: &str, source_uid: &str, target_uid: &str) -> Option<String> {
+    if let Some(existing) = copy_map::find_copy(source_uid, cid, target_uid) {
+        if session_alive(conn, &existing, target_uid) {
+            return Some(existing);
+        }
+    }
+    let (title, cwd) = source_session_meta(conn, cid, source_uid)?;
+    find_same_session(conn, target_uid, &title, &cwd)
+}
+
 /// 把 source_uid 的一个会话复制为 target_uid 的新会话（路径 B：生成新 id）。
 ///
 /// 全部按「新 id」复制一份给目标账号，源账号数据完全不动。
 /// 新 id 必须用带连字符的 UUID 格式（`Uuid::new_v4().to_string()`），与官方一致；
 /// 32 位无连字符形式会导致 WorkBuddy 无法识别新会话。
+///
+/// 去重：复制前先查复制关系表、再按「同标题+同目录」兜底；
+/// 已复制过的会话直接跳过（返回 `skipped: true`），不再产生重复副本。
 pub fn copy_session_to_user(
     cid: &str,
     source_uid: &str,
     target_uid: &str,
 ) -> Result<Value, String> {
-    let new_cid = uuid::Uuid::new_v4().to_string();
     let db = workbuddy_db_path();
     if let Some(conn) = open_db(&db, true) {
         let cwd: Option<String> = conn
@@ -224,7 +310,18 @@ pub fn copy_session_to_user(
         if cwd.as_deref().is_some_and(is_claw_workspace) {
             return Err("Claw 工作区绑定当前账号渠道，不支持复制".into());
         }
+        // 去重检查：已有副本则跳过
+        if let Some(existing) = find_existing_copy(&conn, cid, source_uid, target_uid) {
+            return Ok(json!({
+                "id": cid,
+                "skipped": true,
+                "reason": "目标账号已存在该会话的副本",
+                "existingId": existing,
+            }));
+        }
     }
+
+    let new_cid = uuid::Uuid::new_v4().to_string();
 
     // 1) 复制正文 jsonl：{projects}/{ws}/{cid}.jsonl → {projects}/{ws}/{new_cid}.jsonl
     let mut jsonl_copied = false;
@@ -246,9 +343,13 @@ pub fn copy_session_to_user(
     // 3) 注册云端映射：新会话归属目标账号（msg_channel=convmsg:{target_uid}）
     let mapping_written = register_edge_sync_mapping(&new_cid, target_uid);
 
+    // 4) 记录复制关系（下次复制同一条会话时据此判重）
+    copy_map::record_copy(source_uid, cid, target_uid, &new_cid);
+
     Ok(json!({
         "id": cid,
         "newId": new_cid,
+        "skipped": false,
         "jsonlCopied": jsonl_copied,
         "mappingWritten": mapping_written,
         "backup": backup_root.to_string_lossy().to_string(),
@@ -370,11 +471,18 @@ pub fn copy_sessions_for_switch(target_acc: &Value, session_ids: &[String]) -> O
         "sourceUid": source_uid,
         "targetUid": target_uid,
         "copied": [],
+        "skipped": [],
     });
     let mut errors: Vec<Value> = Vec::new();
     for cid in session_ids {
         match copy_session_to_user(cid, &source_uid, &target_uid) {
-            Ok(r) => report["copied"].as_array_mut().unwrap().push(r),
+            Ok(r) => {
+                if r["skipped"].as_bool() == Some(true) {
+                    report["skipped"].as_array_mut().unwrap().push(r);
+                } else {
+                    report["copied"].as_array_mut().unwrap().push(r);
+                }
+            }
             Err(e) => errors.push(json!({"id": cid, "error": e})),
         }
     }
@@ -384,6 +492,180 @@ pub fn copy_sessions_for_switch(target_acc: &Value, session_ids: &[String]) -> O
     Some(report)
 }
 
+// ---------------------------------------------------------------------------
+// 重复会话清理（同账号下「同标题+同目录」视为重复，保留最新一条）
+// ---------------------------------------------------------------------------
+
+/// 扫描某账号下的重复会话分组。
+///
+/// 返回每组 { key, keep, duplicates: [...] }：keep 为保留的最新会话，
+/// duplicates 为建议删除的旧副本。无重复时返回空数组。
+pub fn scan_duplicate_sessions(uid: &str) -> Value {
+    let db = workbuddy_db_path();
+    let mut groups: Vec<Value> = Vec::new();
+    if !db.is_file() {
+        return json!({"groups": groups});
+    }
+    let Some(conn) = open_db(&db, true) else {
+        return json!({"groups": groups});
+    };
+    if !table_exists(&conn, "sessions") {
+        return json!({"groups": groups});
+    }
+    let has_custom = column_exists(&conn, "sessions", "custom_title");
+    let has_playground = column_exists(&conn, "sessions", "is_playground");
+    let sql = match (has_custom, has_playground) {
+        (true, true) => {
+            "SELECT id, title, custom_title, cwd, updated_at, is_playground FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+        (true, false) => {
+            "SELECT id, title, custom_title, cwd, updated_at, 0 FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+        (false, true) => {
+            "SELECT id, title, NULL, cwd, updated_at, is_playground FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+        (false, false) => {
+            "SELECT id, title, NULL, cwd, updated_at, 0 FROM sessions \
+             WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+        }
+    };
+    let Ok(mut stmt) = conn.prepare(sql) else {
+        return json!({"groups": groups});
+    };
+    let rows = stmt.query_map([uid], |row| {
+        Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+        ))
+    });
+
+    // 按 (展示标题, cwd, is_playground) 分组；已按 updated_at DESC 排序，首条即保留项
+    let mut seen: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
+    if let Ok(iter) = rows {
+        for r in iter.flatten() {
+            let (cid, title, custom_title, cwd, updated_at, is_playground) = r;
+            let cid = cid.unwrap_or_default();
+            let cwd = cwd.unwrap_or_default();
+            if cid.is_empty() || is_claw_workspace(&cwd) {
+                continue;
+            }
+            let display = session_display_title(title, custom_title);
+            let key = format!("{}\u{1f}{}\u{1f}{}", display, cwd, is_playground.unwrap_or(0));
+            seen.entry(key).or_default().push(json!({
+                "id": cid,
+                "title": display,
+                "cwd": cwd,
+                "updatedAt": updated_at.unwrap_or(0),
+            }));
+        }
+    }
+    for (_key, list) in seen {
+        if list.len() < 2 {
+            continue;
+        }
+        let keep = list[0].clone();
+        let dups: Vec<Value> = list[1..].to_vec();
+        groups.push(json!({
+            "title": keep["title"],
+            "cwd": keep["cwd"],
+            "keep": keep,
+            "duplicates": dups,
+        }));
+    }
+    // 重复多的组排前面
+    groups.sort_by(|a, b| {
+        b["duplicates"]
+            .as_array()
+            .map(|d| d.len())
+            .cmp(&a["duplicates"].as_array().map(|d| d.len()))
+    });
+    let dup_total: usize = groups
+        .iter()
+        .filter_map(|g| g["duplicates"].as_array().map(|d| d.len()))
+        .sum();
+    json!({"groups": groups, "duplicateCount": dup_total})
+}
+
+/// 硬删除指定会话：备份 db 与 jsonl 后，删除 sessions 行、edge_sync_mapping 行、jsonl 文件。
+///
+/// 仅允许删除属于 uid 的会话；跳过不存在的 id。返回删除报告与备份目录。
+pub fn cleanup_duplicate_sessions(uid: &str, session_ids: &[String]) -> Result<Value, String> {
+    if session_ids.is_empty() {
+        return Err("没有需要删除的会话".into());
+    }
+    let db = workbuddy_db_path();
+    if !db.is_file() {
+        return Err("workbuddy.db 不存在".into());
+    }
+
+    // 1) 备份：db + 每个待删会话的 jsonl
+    let backup_root = backup_dir().join("dedup-cleanup").join(utc_iso());
+    let jsonl_backup = backup_root.join("jsonl");
+    std::fs::create_dir_all(&jsonl_backup).map_err(|e| e.to_string())?;
+    backup_workbuddy_db(&backup_root);
+    for cid in session_ids {
+        if let Some(p) = find_project_jsonl(cid) {
+            let _ = std::fs::copy(&p, jsonl_backup.join(format!("{cid}.jsonl")));
+        }
+    }
+
+    // 2) 删 db 行 + jsonl 文件
+    let Some(conn) = open_db(&db, false) else {
+        return Err("无法打开 workbuddy.db".into());
+    };
+    let mut deleted: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    for cid in session_ids {
+        let n = conn
+            .execute(
+                "DELETE FROM sessions WHERE id = ?1 AND user_id = ?2",
+                rusqlite::params![cid, uid],
+            )
+            .unwrap_or(0);
+        if n > 0 {
+            if let Some(p) = find_project_jsonl(cid) {
+                let _ = std::fs::remove_file(p);
+            }
+            delete_edge_sync_mapping(cid);
+            deleted.push(cid.clone());
+        } else {
+            missing.push(cid.clone());
+        }
+    }
+
+    // 3) 清理复制关系表中指向已删会话的映射
+    copy_map::remove_copies_for_target(&deleted);
+
+    Ok(json!({
+        "deleted": deleted,
+        "missing": missing,
+        "backup": backup_root.to_string_lossy().to_string(),
+    }))
+}
+
+/// 删除 edge_sync_mapping 中的映射行（避免已删会话残留云端映射）。
+fn delete_edge_sync_mapping(cid: &str) {
+    let db = edge_sync_db_path();
+    if !db.is_file() {
+        return;
+    }
+    if let Some(conn) = open_db(&db, false) {
+        if table_exists(&conn, "edge_sync_mapping") {
+            let _ = conn.execute(
+                "DELETE FROM edge_sync_mapping WHERE session_id = ?1 OR conversation_id = ?1",
+                rusqlite::params![cid],
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,9 +673,12 @@ mod tests {
 
     #[test]
     fn db_paths_point_to_home() {
-        assert!(workbuddy_db_path()
-            .to_string_lossy()
-            .ends_with(".workbuddy/workbuddy.db"));
+        let db_path = workbuddy_db_path();
+        assert_eq!(db_path.file_name().and_then(|s| s.to_str()), Some("workbuddy.db"));
+        assert_eq!(
+            db_path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()),
+            Some(".workbuddy")
+        );
         assert!(edge_sync_db_path()
             .to_string_lossy()
             .ends_with("edge-sync-mapping-v2.db"));
@@ -542,5 +827,134 @@ mod tests {
         assert!(!is_claw_workspace(
             "/Users/apple/Documents/AI-PROJECT/LetterTotTown"
         ));
+    }
+
+    /// 建一个带 custom_title 的内存 sessions 表。
+    fn mem_sessions() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                title TEXT,
+                custom_title TEXT,
+                cwd TEXT,
+                updated_at INTEGER,
+                deleted_at INTEGER
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn find_same_session_matches_display_title_and_cwd() {
+        let conn = mem_sessions();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, custom_title, cwd, deleted_at)
+             VALUES ('t-1', 'uid-b', '自动标题', '我的会话', '/ws', NULL)",
+            [],
+        )
+        .unwrap();
+        // 展示标题取 custom_title
+        assert_eq!(
+            find_same_session(&conn, "uid-b", "我的会话", "/ws"),
+            Some("t-1".to_string())
+        );
+        // cwd 不同不命中
+        assert_eq!(find_same_session(&conn, "uid-b", "我的会话", "/other"), None);
+        // 标题不同不命中
+        assert_eq!(find_same_session(&conn, "uid-b", "别的", "/ws"), None);
+        // uid 不同不命中
+        assert_eq!(find_same_session(&conn, "uid-c", "我的会话", "/ws"), None);
+    }
+
+    #[test]
+    fn find_same_session_ignores_soft_deleted() {
+        let conn = mem_sessions();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, custom_title, cwd, deleted_at)
+             VALUES ('t-2', 'uid-b', '旧会话', NULL, '/ws', 12345)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(find_same_session(&conn, "uid-b", "旧会话", "/ws"), None);
+        assert!(!session_alive(&conn, "t-2", "uid-b"));
+    }
+
+    #[test]
+    fn session_alive_true_only_for_live_row_of_uid() {
+        let conn = mem_sessions();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, cwd, deleted_at)
+             VALUES ('t-3', 'uid-b', '会话', '/ws', NULL)",
+            [],
+        )
+        .unwrap();
+        assert!(session_alive(&conn, "t-3", "uid-b"));
+        assert!(!session_alive(&conn, "t-3", "uid-a")); // 别的账号
+        assert!(!session_alive(&conn, "missing", "uid-b"));
+    }
+
+    #[test]
+    fn find_existing_copy_falls_back_to_title_and_cwd() {
+        let conn = mem_sessions();
+        // 源会话（uid-a）与目标已存在的同标题同目录会话（uid-b）
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, cwd, deleted_at)
+             VALUES ('s-1', 'uid-a', '重复会话', '/ws', NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, cwd, deleted_at)
+             VALUES ('t-9', 'uid-b', '重复会话', '/ws', NULL)",
+            [],
+        )
+        .unwrap();
+        // 复制关系表中没有记录（用不会出现在真实数据里的 uid），走兜底匹配
+        assert_eq!(
+            find_existing_copy(&conn, "s-1", "uid-a", "uid-b"),
+            Some("t-9".to_string())
+        );
+        // 源会话不存在 → None
+        assert_eq!(find_existing_copy(&conn, "missing", "uid-a", "uid-b"), None);
+    }
+
+    #[test]
+    fn find_existing_copy_prefers_copy_map_record() {
+        // 文件态 copy-map 测试串行执行，且使用不会与真实数据冲突的 uid/cid
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap();
+
+        let conn = mem_sessions();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, cwd, deleted_at)
+             VALUES ('test-src-x1', 'test-uid-src-x1', '会话A', '/ws', NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, cwd, deleted_at)
+             VALUES ('test-tgt-x1', 'test-uid-tgt-x1', '不同标题也认', '/elsewhere', NULL)",
+            [],
+        )
+        .unwrap();
+        copy_map::record_copy("test-uid-src-x1", "test-src-x1", "test-uid-tgt-x1", "test-tgt-x1");
+        assert_eq!(
+            find_existing_copy(&conn, "test-src-x1", "test-uid-src-x1", "test-uid-tgt-x1"),
+            Some("test-tgt-x1".to_string())
+        );
+        // 目标会话被删后，关系表命中但已失效 → 兜底也不命中 → None
+        conn.execute(
+            "UPDATE sessions SET deleted_at = 1 WHERE id = 'test-tgt-x1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            find_existing_copy(&conn, "test-src-x1", "test-uid-src-x1", "test-uid-tgt-x1"),
+            None
+        );
+        copy_map::remove_copies_for_target(&["test-tgt-x1".to_string()]);
     }
 }

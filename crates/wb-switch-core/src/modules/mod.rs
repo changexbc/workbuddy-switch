@@ -4,6 +4,7 @@ pub mod checkin;
 pub mod codebuddy_cli;
 pub mod codebuddy_cn_ide;
 pub mod config;
+pub mod copy_map;
 pub mod credit_usage;
 pub mod credits;
 pub mod export_import;

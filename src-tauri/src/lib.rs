@@ -131,6 +131,8 @@ pub fn run() {
             commands::switch_account,
             commands::list_sessions,
             commands::copy_sessions,
+            commands::scan_session_duplicates,
+            commands::cleanup_session_duplicates,
             commands::open_permission_settings,
             commands::check_auth_permission,
             commands::reveal_app_in_finder,

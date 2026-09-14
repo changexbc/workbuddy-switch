@@ -94,6 +94,8 @@ const ROUTES: Record<string, Route> = {
   switch_account: { method: "POST", path: "/api/switch" },
   list_sessions: { method: "GET", path: "/api/sessions" },
   copy_sessions: { method: "POST", path: "/api/sessions/copy" },
+  scan_session_duplicates: { method: "GET", path: "/api/sessions/duplicates" },
+  cleanup_session_duplicates: { method: "POST", path: "/api/sessions/dedup" },
   get_checkin_status: { method: "GET", path: "/api/checkin/status" },
   get_credit_expiry: { method: "POST", path: "/api/credits" },
   get_credit_statistics: { method: "GET", path: "/api/credits/stats" },
@@ -286,6 +288,29 @@ export function copySessions(
   sessionIds: string[],
 ): Promise<{ sourceUid: string; targetUid: string; copied: CopyResult[] }> {
   return call("copy_sessions", { targetAccountId, sessionIds });
+}
+
+/** 重复会话分组（同标题+同目录，keep 保留最新一条）。 */
+export interface DuplicateGroup {
+  title: string;
+  cwd: string;
+  keep: { id: string; title: string; cwd: string; updatedAt: number };
+  duplicates: { id: string; title: string; cwd: string; updatedAt: number }[];
+}
+
+export function scanSessionDuplicates(): Promise<{
+  groups: DuplicateGroup[];
+  duplicateCount: number;
+}> {
+  return call("scan_session_duplicates");
+}
+
+export function cleanupSessionDuplicates(sessionIds: string[]): Promise<{
+  deleted: string[];
+  missing: string[];
+  backup: string;
+}> {
+  return call("cleanup_session_duplicates", { sessionIds });
 }
 
 /** 打开系统设置授权面板（桌面端专用；webui 模式由服务进程权限决定，无操作）。 */
