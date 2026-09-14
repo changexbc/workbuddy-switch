@@ -170,10 +170,17 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
     setProgress("正在切换账号…");
     setError("");
     try {
-      const res = await api.switchAccount({
-        accountId: account.id,
-        copySessionIds: copySessions ? [...selected] : undefined,
-      });
+      // 超时保险：后端调用若卡住不返回，遮罩会永远盖着窗口（看起来像黑屏）。
+      // 超过 150 秒自动解除并提示，由用户确认结果后重试。
+      const res = await Promise.race([
+        api.switchAccount({
+          accountId: account.id,
+          copySessionIds: copySessions ? [...selected] : undefined,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("SWITCH_TIMEOUT")), 150_000),
+        ),
+      ]);
       const nickname = account.nickname || account.email || account.uid || "该账号";
       const parts: string[] = [];
       if (res.sessionCopy?.copied.length) {
@@ -189,7 +196,13 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       onOpenChange(false);
       onDone?.();
     } catch (e) {
-      setError(api.asError(e));
+      if (e instanceof Error && e.message === "SWITCH_TIMEOUT") {
+        setError(
+          "切换请求超时（150 秒无响应）。请检查 WorkBuddy 是否已正常启动：若已切换成功，直接关闭本弹窗即可；若未切换，请重试。",
+        );
+      } else {
+        setError(api.asError(e));
+      }
     } finally {
       setBusy(false);
       setProgress("");
