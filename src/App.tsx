@@ -9,6 +9,7 @@ import AccountsPage from "@/pages/AccountsPage";
 import CreditStatsPage from "@/pages/CreditStatsPage";
 import TokenStatsPage from "@/pages/TokenStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -188,19 +189,21 @@ export default function App() {
   const Router = pagesDemoHostingEnabled ? HashRouter : BrowserRouter;
 
   return (
-    <TooltipProvider delayDuration={250}>
-      <Router>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<AccountsPage />} />
-            <Route path="/credit-stats" element={<CreditStatsPage />} />
-            <Route path="/token-stats" element={<TokenStatsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Route>
-        </Routes>
-        <Toaster />
-      </Router>
-    </TooltipProvider>
+    <ErrorBoundary>
+      <TooltipProvider delayDuration={250}>
+        <Router>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<AccountsPage />} />
+              <Route path="/credit-stats" element={<CreditStatsPage />} />
+              <Route path="/token-stats" element={<TokenStatsPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
+          <Toaster />
+        </Router>
+      </TooltipProvider>
+    </ErrorBoundary>
   );
 }

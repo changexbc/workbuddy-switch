@@ -99,6 +99,8 @@ export interface SwitchResult {
     sourceUid: string;
     targetUid: string;
     copied: CopyResult[];
+    /** 命中去重而跳过的会话（未产生新副本） */
+    skipped?: { id: string; reason?: string; existingId?: string }[];
     errors?: { id: string; error: string }[];
   };
 }

@@ -81,6 +81,8 @@ pub fn router() -> Router {
         .route("/api/switch/progress", get(api_switch_progress))
         .route("/api/sessions", get(api_sessions))
         .route("/api/sessions/copy", post(api_copy_sessions))
+        .route("/api/sessions/duplicates", get(api_session_duplicates))
+        .route("/api/sessions/dedup", post(api_dedup_sessions))
         .route("/api/checkin/status", get(api_checkin_status))
         .route("/api/credits", post(api_credits))
         .route("/api/credits/stats", get(api_credit_statistics))
@@ -422,6 +424,31 @@ async fn api_copy_sessions(Json(body): Json<Value>) -> Response {
         "targetUid": target.get("uid"),
         "copied": result,
     }))
+}
+
+async fn api_session_duplicates() -> Response {
+    match session::current_user_uid() {
+        Some(uid) => json_ok(session::scan_duplicate_sessions(&uid)),
+        None => json_ok(json!({ "groups": [], "duplicateCount": 0 })),
+    }
+}
+
+async fn api_dedup_sessions(Json(body): Json<Value>) -> Response {
+    let session_ids: Vec<String> = body
+        .get("sessionIds")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if session_ids.is_empty() {
+        return json_err("缺少 sessionIds".to_string(), StatusCode::BAD_REQUEST);
+    }
+    let Some(uid) = session::current_user_uid() else {
+        return json_err("未读取到当前账号".to_string(), StatusCode::BAD_REQUEST);
+    };
+    match session::cleanup_duplicate_sessions(&uid, &session_ids) {
+        Ok(r) => json_ok(r),
+        Err(e) => json_err(e, StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }
 
 // ---------------------------------------------------------------------------

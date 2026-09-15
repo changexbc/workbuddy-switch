@@ -319,6 +319,29 @@ pub async fn copy_sessions(
     .map_err(|e| e.to_string())?
 }
 
+/// GET /api/sessions/duplicates —— 扫描当前账号的重复会话分组。
+#[tauri::command]
+pub fn scan_session_duplicates() -> Value {
+    match session::current_user_uid() {
+        Some(uid) => session::scan_duplicate_sessions(&uid),
+        None => json!({"groups": [], "duplicateCount": 0}),
+    }
+}
+
+/// POST /api/sessions/dedup —— 硬删除重复会话（备份后删除 db 行 + jsonl 文件）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cleanup_session_duplicates(session_ids: Vec<String>) -> Result<Value, String> {
+    if session_ids.is_empty() {
+        return Err("缺少 sessionIds".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let uid = session::current_user_uid().ok_or("未读取到当前账号")?;
+        session::cleanup_duplicate_sessions(&uid, &session_ids)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------------------------------------------------------------------------
 // 阶段 3：签到 + token 刷新
 // ---------------------------------------------------------------------------
