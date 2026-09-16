@@ -438,6 +438,125 @@ pub(crate) fn existing_windows_drives() -> Vec<char> {
         .collect()
 }
 
+/// 生成内联 C#（user32 P/Invoke）PowerShell 脚本的公共常量模板。
+///
+/// 占位符：`__PIDS__`（PowerShell 数组字面量）、`__MODE__`（close/query）。
+/// 脚本单次 Add-Type 编译后调用，仅用于低频的优雅关闭流程。
+#[cfg(target_os = "windows")]
+const WM_CLOSE_TEMPLATE: &str = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+public static class WbSwitchWin {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+  public static List<uint> VisiblePids(HashSet<uint> targets) {
+    var res = new List<uint>();
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (targets.Contains(pid) && IsWindowVisible(h)) {
+        if (!res.Contains(pid)) res.Add(pid);
+      }
+      return true;
+    }, IntPtr.Zero);
+    return res;
+  }
+  public static int SendClose(HashSet<uint> targets) {
+    int count = 0;
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (targets.Contains(pid) && IsWindowVisible(h)) {
+        PostMessageW(h, 0x0010, IntPtr.Zero, IntPtr.Zero);
+        count++;
+      }
+      return true;
+    }, IntPtr.Zero);
+    return count;
+  }
+}
+"@
+$targets = New-Object 'System.Collections.Generic.HashSet[uint32]'
+__PIDS__ | ForEach-Object { [void]$targets.Add($_) }
+if ('__MODE__' -eq 'close') {
+  [WbSwitchWin]::SendClose($targets)
+} else {
+  ([WbSwitchWin]::VisiblePids($targets) -join ',')
+}
+"#;
+
+/// 按脚本模式组装内联 PowerShell 脚本。
+#[cfg(target_os = "windows")]
+fn windows_wm_close_script(script_mode: &str, pid_csv: &str) -> String {
+    let pids = if pid_csv.is_empty() {
+        "@()".to_string()
+    } else {
+        format!(
+            "@({})",
+            pid_csv
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| format!("[uint32]{s}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    WM_CLOSE_TEMPLATE
+        .replace("__PIDS__", &pids)
+        .replace("__MODE__", script_mode)
+}
+
+/// 向给定 PID 的所有可见顶层窗口发送 `WM_CLOSE`，返回实际送达的窗口数。
+/// 用于 GUI 优雅退出：Electron 主进程收到后可自行走保存/退出流程。
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_send_close_to_pids(pids: &[u32]) -> usize {
+    if pids.is_empty() {
+        return 0;
+    }
+    let csv = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = windows_wm_close_script("close", &csv);
+    match run_cmd_timeout("powershell", &["-NoProfile", "-NonInteractive", "-Command", &script], 30)
+    {
+        Some(out) => String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0),
+        None => 0,
+    }
+}
+
+/// 返回给定 PID 中仍拥有可见顶层窗口的 PID 子集。
+/// 供优雅关闭后判断：若目标进程仍有可见窗口（如未保存确认框），
+/// 应提示用户手动处理，而不是直接强杀。
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_visible_window_pids(pids: &[u32]) -> Vec<u32> {
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    let csv = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = windows_wm_close_script("query", &csv);
+    let stdout = match ps_output(&script, 30) {
+        Some(out) => out,
+        None => return Vec::new(),
+    };
+    stdout
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 fn windows_running_workbuddy_exe() -> Option<PathBuf> {
     let script = "Get-Process -Name WorkBuddy,CodeBuddy -ErrorAction SilentlyContinue | \

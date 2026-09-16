@@ -9,6 +9,7 @@
 //! - Linux: secret-tool / peanuts 固定密钥 → AES-128-CBC `v11`/`v10`
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[cfg(not(target_os = "windows"))]
 use aes::Aes128;
@@ -479,6 +480,76 @@ pub fn read_codebuddy_cn_secret(user_data_dir: Option<&Path>) -> Result<Option<S
     }
 }
 
+/// 等待 `state.vscdb` 不再被其他进程独占占用。
+///
+/// 场景：Windows 上刚 `taskkill` 结束 CodeBuddy CN 后，进程句柄可能尚未完全
+/// 释放，立即以 SQLite 打开会因文件被独占而失败；这里轮询到可写打开为止。
+/// 文件尚不存在（首次注入）时直接放行。
+fn wait_for_db_released(db_path: &Path, timeout: Duration) -> Result<(), String> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(db_path)
+        {
+            Ok(_) => return Ok(()),
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "等待 state.vscdb 可访问超时（可能仍被 CodeBuddy CN 占用，请先完全退出 IDE）: {e}"
+                ));
+            }
+        }
+    }
+}
+
+/// 用 SQLite `VACUUM INTO` 生成一致快照备份（比文件复制更安全，天然包含 WAL 内容）。
+/// 返回备份文件路径。
+fn snapshot_backup(conn: &Connection) -> Result<PathBuf, String> {
+    let dir = crate::modules::config::backup_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
+    let backup = dir.join(format!(
+        "state.vscdb.{}.bak",
+        crate::modules::config::now_ms()
+    ));
+    let _ = std::fs::remove_file(&backup);
+    let escaped = backup.to_string_lossy().replace('\'', "''");
+    conn.execute_batch(&format!("VACUUM INTO '{escaped}'"))
+        .map_err(|e| format!("生成 state.vscdb 备份失败: {e}"))?;
+    if !backup.exists() {
+        return Err("生成 state.vscdb 备份失败：备份文件未生成".to_string());
+    }
+    Ok(backup)
+}
+
+/// 校验：解密回读刚写入的 secret，必须与目标明文一致。
+fn verify_written_secret(
+    conn: &Connection,
+    db_key: &str,
+    data_root: &Path,
+    expected: &str,
+) -> Result<(), String> {
+    let written: String = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            [db_key],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("写后回读失败: {e}"))?;
+    let plain = decode_secret_storage_value(&written, data_root)
+        .map_err(|e| format!("写后解密回读失败: {e}"))?;
+    if plain != expected {
+        return Err("写后校验失败：解密回读内容与目标账号不一致".to_string());
+    }
+    Ok(())
+}
+
 /// 加密并写入 CodeBuddy CN secret。
 pub fn inject_codebuddy_cn_secret(
     plaintext: &str,
@@ -490,56 +561,69 @@ pub fn inject_codebuddy_cn_secret(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("创建 state.vscdb 父目录失败: {e}"))?;
     }
-    let conn = Connection::open(&db_path).map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT)",
-        [],
-    )
-    .map_err(|e| format!("初始化 ItemTable 失败: {e}"))?;
 
-    let db_key = secret_storage_item_key();
-    let existing_prefix: Option<String> = match conn.query_row(
-        "SELECT value FROM ItemTable WHERE key = ?",
-        [db_key.as_str()],
-        |row| row.get::<_, String>(0),
-    ) {
-        Ok(val) => {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&val) {
-                if let Ok(bytes) = decode_buffer_data(&parsed) {
-                    detect_prefix(&bytes).map(|s| s.to_string())
+    // 1) 句柄握手：等待 DB 不被其它进程独占（Windows 强杀后句柄释放有延迟）。
+    wait_for_db_released(&db_path, Duration::from_secs(5))?;
+
+    let conn = Connection::open(&db_path).map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| format!("设置 busy_timeout 失败: {e}"))?;
+
+    // 2) 写前生成一致快照备份；失败回滚用。
+    let backup = snapshot_backup(&conn)?;
+
+    let db_path_for_result = db_path.clone();
+    let result: Result<PathBuf, String> = (|| {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .map_err(|e| format!("初始化 ItemTable 失败: {e}"))?;
+
+        let db_key = secret_storage_item_key();
+        let existing_prefix: Option<String> = match conn.query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            [db_key.as_str()],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(val) => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&val) {
+                    if let Ok(bytes) = decode_buffer_data(&parsed) {
+                        detect_prefix(&bytes).map(|s| s.to_string())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
             }
-        }
-        Err(_) => None,
-    };
+            Err(_) => None,
+        };
 
-    let encrypted =
-        encrypt_secret_payload(plaintext.as_bytes(), existing_prefix.as_deref(), &data_root)?;
-    let buffer_str = encode_secret_buffer(encrypted)?;
-    conn.execute(
-        "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
-        rusqlite::params![db_key, buffer_str],
-    )
-    .map_err(|e| format!("写入 state.vscdb 失败: {e}"))?;
-
-    // 写后校验：行存在且为 Buffer JSON
-    let written: String = conn
-        .query_row(
-            "SELECT value FROM ItemTable WHERE key = ?",
-            [db_key.as_str()],
-            |row| row.get(0),
+        let encrypted =
+            encrypt_secret_payload(plaintext.as_bytes(), existing_prefix.as_deref(), &data_root)?;
+        let buffer_str = encode_secret_buffer(encrypted)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+            rusqlite::params![db_key, buffer_str],
         )
-        .map_err(|e| format!("写后校验失败: {e}"))?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&written).map_err(|e| format!("写后校验 JSON 失败: {e}"))?;
-    if parsed.get("type").and_then(|v| v.as_str()) != Some("Buffer") {
-        return Err("写后校验失败：value 不是 Buffer".to_string());
+        .map_err(|e| format!("写入 state.vscdb 失败: {e}"))?;
+
+        // 3) 写后解密回读，确认写入内容与目标账号一致。
+        verify_written_secret(&conn, &db_key, &data_root, plaintext)
+            .map_err(|e| {
+                let _ = std::fs::copy(&backup, &db_path_for_result);
+                e
+            })?;
+        Ok(db_path_for_result)
+    })();
+
+    if result.is_err() {
+        // 兜底：确保连接已关闭后再尝试恢复备份。
+        drop(conn);
+        let _ = std::fs::copy(&backup, &db_path);
     }
-    Ok(db_path)
+    result
 }
 
 #[cfg(test)]
