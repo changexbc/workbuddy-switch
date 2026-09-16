@@ -92,6 +92,36 @@ export function CodeBuddyCnIdeMark({ size = 32, className }: MarkProps) {
   );
 }
 
+/**
+ * VS Code 内 CodeBuddy 扩展标记：VS Code 品牌蓝圆角方块 + 命令行字形。
+ * 使用内联 SVG，不引入新的二进制图片资源。
+ */
+export function VscodeExtMark({ size = 32, className }: MarkProps) {
+  const icon = Math.max(10, Math.round(size));
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-[22%] border border-white/10 bg-[#007acc] text-white shadow-sm",
+        className,
+      )}
+      style={{ width: size, height: size, fontSize: icon }}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="size-[1em]"
+      >
+        <path d="M6 4.5 18 12 6 19.5" />
+      </svg>
+    </span>
+  );
+}
+
 export function StatusDot({ on, className }: { on: boolean; className?: string }) {
   return (
     <span

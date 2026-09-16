@@ -416,3 +416,71 @@ export interface CodeBuddyCnIdeSwitchResult {
   message?: string;
 }
 
+/** VS Code 内 CodeBuddy 扩展（tencent-cloud.coding-copilot）状态；与 CN IDE / CLI 独立。 */
+export interface VscodeExtStatus {
+  /** VS Code 用户数据目录是否存在。 */
+  installed: boolean;
+  /** CodeBuddy 扩展是否已安装（globalStorage/<extensionId> 存在）。 */
+  extensionInstalled: boolean;
+  running: boolean;
+  dataDir: string | null;
+  dbPath: string | null;
+  dbExists: boolean;
+  activeAccountId: string | null;
+  activeAccountName: string | null;
+  detectedFrom?: string;
+  statePath?: string;
+}
+
+export interface VscodeExtSwitchResult {
+  ok: boolean;
+  account: string;
+  accountId: string;
+  dbPath?: string;
+  /** 恒为 false：为避免丢失未保存内容，切换不会主动重启 VS Code。 */
+  restarted?: boolean;
+  message?: string;
+  /** 切换时复制会话的结果（未勾选复制时不返回）。 */
+  sessionCopy?: VscodeSessionCopyResult;
+}
+
+/** VS Code 扩展的一条可复制会话。 */
+export interface VscodeSession {
+  /** 会话 id（32 位小写 hex）。 */
+  id: string;
+  /** 工作区目录名 md5(工作区)（32 位小写 hex，不可反解为路径）。 */
+  workspaceHash: string;
+  /** 会话标题；无标题时为 "(无标题)"。 */
+  title: string;
+  /** 最近消息时间（epoch 毫秒，0 表示未知）。 */
+  updatedAt: number;
+  /** 会话类型（如 "craft"）。 */
+  type: string;
+  /** 是否包含正文消息。 */
+  hasHistory: boolean;
+}
+
+/** 复制某项会话的引用（工作区 hash + 会话 id）。 */
+export interface VscodeSessionRef {
+  workspaceHash: string;
+  conversationId: string;
+}
+
+/** VS Code 扩展会话复制结果。 */
+export interface VscodeSessionCopyResult {
+  sourceUid: string | null;
+  targetUid: string;
+  copied: { workspaceHash: string; oldId: string; newId: string; messages: number }[];
+  errors?: { workspaceHash: string; conversationId: string; error: string }[];
+  /** 索引备份根目录（便于用户找回）。 */
+  backup?: string;
+}
+
+/** 可复制会话列表。 */
+export interface VscodeSessionList {
+  sourceUid: string | null;
+  sessions: VscodeSession[];
+  /** 无法解析（损坏）的工作区索引数量。 */
+  skipped?: number;
+}
+

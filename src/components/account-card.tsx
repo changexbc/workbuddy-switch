@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { CodeBuddyCnIdeMark, CodeBuddyMark, WorkBuddyMark } from "@/components/product-marks";
+import { CodeBuddyCnIdeMark, CodeBuddyMark, VscodeExtMark, WorkBuddyMark } from "@/components/product-marks";
 import { cn } from "@/lib/utils";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import type { AccountMeta, CreditExpiry, CreditResource, TravelStatus } from "@/lib/types";
@@ -157,6 +157,13 @@ function travelChip(status: TravelStatus | undefined) {
   }
 }
 
+/** VS Code 目标 tooltip：区分「未装 VS Code / 未装扩展 / 可切换」三态。 */
+function vscodeExtTooltip(installed?: boolean, extensionInstalled?: boolean): string {
+  if (!installed) return "未检测到 VS Code";
+  if (!extensionInstalled) return "未检测到 CodeBuddy 扩展";
+  return "切换 VS Code 账号（可选复制会话；需先完全退出 VS Code）";
+}
+
 interface Props {
   account: AccountMeta;
   onDelete: (a: AccountMeta) => void;
@@ -185,18 +192,32 @@ interface Props {
   codebuddyCnIdeBusy?: boolean;
   codebuddyCnIdeLoading?: boolean;
   onSwitchCodebuddyCnIde?: (a: AccountMeta) => void;
+  /** VS Code 是否已安装（用户数据目录存在）。 */
+  vscodeExtInstalled?: boolean;
+  /** CodeBuddy 扩展是否已安装。 */
+  vscodeExtExtensionInstalled?: boolean;
+  /** VS Code 与扩展均已就绪，可执行切换。 */
+  vscodeExtAvailable?: boolean;
+  vscodeExtActive?: boolean;
+  /** 任一 VS Code 扩展账号切换正在进行，用于阻止并发切换。 */
+  vscodeExtBusy?: boolean;
+  /** 当前卡片是否为正在切换的目标账号。 */
+  vscodeExtLoading?: boolean;
+  onSwitchVscodeExt?: (a: AccountMeta) => void;
   featuresDisabled?: boolean;
   /** 紧凑模式：头部缩成一条、按钮图标化、无 footer */
   compact?: boolean;
 }
 
-function ProductCurrentState({ product, compact = false }: { product: "workbuddy" | "codebuddy" | "codebuddy-cn"; compact?: boolean }) {
+function ProductCurrentState({ product, compact = false }: { product: "workbuddy" | "codebuddy" | "codebuddy-cn" | "vscode-ext"; compact?: boolean }) {
   const title =
     product === "workbuddy"
       ? "WorkBuddy 当前账号"
       : product === "codebuddy-cn"
         ? "CodeBuddy IDE 当前账号"
-        : "CodeBuddy CLI 当前账号";
+        : product === "vscode-ext"
+          ? "VS Code CodeBuddy 当前账号"
+          : "CodeBuddy CLI 当前账号";
   return (
     <span
       role="status"
@@ -211,6 +232,8 @@ function ProductCurrentState({ product, compact = false }: { product: "workbuddy
         <WorkBuddyMark size={compact ? 18 : 22} />
       ) : product === "codebuddy-cn" ? (
         <CodeBuddyCnIdeMark size={compact ? 18 : 22} />
+      ) : product === "vscode-ext" ? (
+        <VscodeExtMark size={compact ? 18 : 22} />
       ) : (
         <CodeBuddyMark size={compact ? 18 : 22} />
       )}
@@ -219,7 +242,7 @@ function ProductCurrentState({ product, compact = false }: { product: "workbuddy
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch, todayCheckedIn, travelStatus, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, featuresDisabled = true, compact = false }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch, todayCheckedIn, travelStatus, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, featuresDisabled = true, compact = false }: Props) {
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const name = account.nickname || account.uid || "未命名账号";
   const expired = typeof account.expiresAt === "number" && account.expiresAt < Date.now();
@@ -238,7 +261,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
     })
     .map(({ resource }) => resource);
 
-  const activeProductCount = [workbuddyActive, codebuddyCliActive, codebuddyCnIdeActive].filter(Boolean).length;
+  const activeProductCount = [workbuddyActive, codebuddyCliActive, codebuddyCnIdeActive, vscodeExtActive].filter(Boolean).length;
 
   const statusChips = (
     <>
@@ -378,6 +401,34 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy IDE（会重启 IDE）" : "未检测到 CodeBuddy IDE"}</TooltipContent>
                 </Tooltip>
               )}
+              {vscodeExtActive ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+                      <VscodeExtMark size={15} />
+                      <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                        <Check className="size-2.5" strokeWidth={3} />
+                      </span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">VS Code CodeBuddy 当前账号</TooltipContent>
+                </Tooltip>
+              ) : demoModeEnabled ? (
+                <DemoAction>
+                  <Button variant="outline" size="icon" className="relative size-7 rounded-lg" aria-label="切换到 VS Code 扩展（可复制会话）">
+                    <VscodeExtMark size={15} />
+                  </Button>
+                </DemoAction>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="outline" size="icon" className="relative size-7 rounded-lg" disabled={featuresDisabled || !vscodeExtAvailable || !onSwitchVscodeExt || vscodeExtBusy} onClick={() => onSwitchVscodeExt?.(account)} aria-label="切换到 VS Code 扩展（可复制会话）" aria-busy={vscodeExtLoading}>
+                      {vscodeExtLoading ? <Loader2 className="size-3.5 animate-spin" /> : <VscodeExtMark size={15} />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{vscodeExtTooltip(vscodeExtInstalled, vscodeExtExtensionInstalled)}</TooltipContent>
+                </Tooltip>
+              )}
               {codebuddyCliActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -494,6 +545,22 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy IDE（会重启 IDE）" : "未检测到 CodeBuddy IDE"}</TooltipContent>
+            </Tooltip>
+          )}
+          {vscodeExtActive ? <ProductCurrentState product="vscode-ext" compact /> : demoModeEnabled ? (
+            <DemoAction>
+              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="切换到 VS Code 扩展（可复制会话）">
+                <VscodeExtMark size={18} /><span>VS Code</span>
+              </Button>
+            </DemoAction>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !vscodeExtAvailable || !onSwitchVscodeExt || vscodeExtBusy} onClick={() => onSwitchVscodeExt?.(account)} aria-label="切换到 VS Code 扩展（可复制会话）" aria-busy={vscodeExtLoading}>
+                  {vscodeExtLoading ? <Loader2 className="size-4 animate-spin" /> : <VscodeExtMark size={18} />}<span>{vscodeExtLoading ? "切换中…" : "VS Code"}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">{vscodeExtTooltip(vscodeExtInstalled, vscodeExtExtensionInstalled)}</TooltipContent>
             </Tooltip>
           )}
           {codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : (

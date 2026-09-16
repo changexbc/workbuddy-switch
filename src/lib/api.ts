@@ -28,6 +28,10 @@ import type {
   TravelConfig,
   TravelStatus,
   UpdateInfo,
+  VscodeExtStatus,
+  VscodeExtSwitchResult,
+  VscodeSessionList,
+  VscodeSessionRef,
 } from "./types";
 import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled } from "./demo-mode";
 import { screenshotDemoResponse } from "./screenshot-demo";
@@ -40,7 +44,7 @@ import { screenshotDemoResponse } from "./screenshot-demo";
 const API_BASE = "http://127.0.0.1:57890";
 
 const DEMO_READ_COMMANDS = new Set([
-  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_checkin_status",
+  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_vscode_ext_status", "list_vscode_sessions", "get_checkin_status",
   "get_credit_expiry", "get_credit_statistics", "get_auto_checkin_config",
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
@@ -83,6 +87,10 @@ const ROUTES: Record<string, Route> = {
   get_codebuddy_cn_ide_status: { method: "GET", path: "/api/codebuddy-cn-ide/status" },
   switch_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/switch" },
   detect_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/detect" },
+  get_vscode_ext_status: { method: "GET", path: "/api/vscode-ext/status" },
+  list_vscode_sessions: { method: "GET", path: "/api/vscode-ext/sessions" },
+  switch_vscode_ext_account: { method: "POST", path: "/api/vscode-ext/switch" },
+  detect_vscode_ext_account: { method: "POST", path: "/api/vscode-ext/detect" },
   delete_account: { method: "POST", path: "/api/delete" },
   oauth_start: { method: "POST", path: "/api/oauth/start" },
   oauth_status: { method: "POST", path: "/api/oauth/status" },
@@ -219,6 +227,34 @@ export function detectCodebuddyCnIdeAccount(): Promise<{
   message?: string;
 }> {
   return call("detect_codebuddy_cn_ide_account");
+}
+
+export function getVscodeExtStatus(): Promise<VscodeExtStatus> {
+  return call("get_vscode_ext_status");
+}
+
+/** 列出当前 VS Code 扩展账号可复制的会话（未安装/未登录时返回空列表）。 */
+export function listVscodeSessions(): Promise<VscodeSessionList> {
+  return call("list_vscode_sessions");
+}
+
+/** 切换 VS Code CodeBuddy 扩展账号；默认仅写入，不重启（VS Code 须先完全退出）。 */
+export function switchVscodeExtAccount(
+  accountId: string,
+  restart = false,
+  copySessions?: VscodeSessionRef[],
+): Promise<VscodeExtSwitchResult> {
+  return call("switch_vscode_ext_account", { accountId, restart, copySessions });
+}
+
+export function detectVscodeExtAccount(): Promise<{
+  ok: boolean;
+  found: boolean;
+  matched?: boolean;
+  accountId?: string;
+  message?: string;
+}> {
+  return call("detect_vscode_ext_account");
 }
 
 

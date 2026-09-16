@@ -1,8 +1,8 @@
 import type {
   AccountMeta, AppStatus, AutoRotateConfig, CheckinConfig, CheckinLog,
-  CodeBuddyCliStatus, CodeBuddyCliSwitchResult, CreditExpiry, CreditOfficialUsageModel, CreditStatistics,
+  CodeBuddyCliStatus, CodeBuddyCliSwitchResult, CodeBuddyCnIdeStatus, CreditExpiry, CreditOfficialUsageModel, CreditStatistics,
   GithubConfig, RotateLog, RotateStatus, TokenStatistics, TokenStatsGroup, TokenStatsSource, TokenStatsTotals,
-  TravelConfig, TravelStatus,
+  TravelConfig, TravelStatus, VscodeExtStatus, VscodeSessionList,
 } from "./types";
 import { demoModeEnabled } from "./demo-mode";
 
@@ -416,6 +416,40 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "get_status": return appStatus;
     case "get_accounts": return { accounts: demoAccounts };
     case "get_codebuddy_cli_status": return cliStatus;
+    case "get_codebuddy_cn_ide_status": return {
+      installed: true,
+      running: false,
+      dataDir: "/demo/CodeBuddy CN",
+      dbPath: "/demo/CodeBuddy CN/User/globalStorage/state.vscdb",
+      dbExists: true,
+      appPath: "/demo/CodeBuddy CN.app",
+      activeAccountId: demoAccounts[0].id,
+      activeAccountName: demoAccounts[0].nickname,
+      detectedFrom: "state",
+      statePath: "/demo/codebuddy_cn_ide.json",
+    } satisfies CodeBuddyCnIdeStatus;
+    case "get_vscode_ext_status": return {
+      installed: true,
+      extensionInstalled: true,
+      running: false,
+      dataDir: "/demo/Code",
+      dbPath: "/demo/Code/User/globalStorage/state.vscdb",
+      dbExists: true,
+      activeAccountId: demoAccounts[0].id,
+      activeAccountName: demoAccounts[0].nickname,
+      detectedFrom: "state",
+      statePath: "/demo/vscode_ext.json",
+    } satisfies VscodeExtStatus;
+    case "list_vscode_sessions": return {
+      sourceUid: demoAccounts[0].uid,
+      skipped: 0,
+      sessions: [
+        { id: "7f3a91c0d4e5b6a7c8d9e0f1a2b3c4d5", workspaceHash: "3c1f8a92b4d5e60718f9a0b1c2d3e4f5", title: "完善账号卡片交互", updatedAt: Date.now() - 1000 * 60 * 12, type: "craft", hasHistory: true },
+        { id: "9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e", workspaceHash: "3c1f8a92b4d5e60718f9a0b1c2d3e4f5", title: "修复切换后历史为空", updatedAt: Date.now() - 1000 * 60 * 60 * 3, type: "craft", hasHistory: true },
+        { id: "11223344556677889900112233445566", workspaceHash: "aabbccddeeff00112233445566778899", title: "设计会话复制方案", updatedAt: Date.now() - 1000 * 60 * 60 * 26, type: "craft", hasHistory: true },
+        { id: "66554433221100998877665544332211", workspaceHash: "aabbccddeeff00112233445566778899", title: "(无标题)", updatedAt: Date.now() - 1000 * 60 * 60 * 50, type: "craft", hasHistory: false },
+      ],
+    } satisfies VscodeSessionList;
     case "switch_codebuddy_cli_account": {
       const target = demoAccounts.find((account) => account.id === args?.accountId);
       if (!target) throw new Error("账号不存在");

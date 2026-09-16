@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, credit_usage, credits, export_import, oauth,
-    process, refresh, rotate, session, switch, token_stats, travel, update,
+    process, refresh, rotate, session, switch, token_stats, travel, update, vscode_ext, vscode_session,
 };
 
 #[derive(Serialize)]
@@ -132,6 +132,68 @@ pub async fn switch_codebuddy_cn_ide_account(
 #[tauri::command]
 pub async fn detect_codebuddy_cn_ide_account() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codebuddy_cn_ide::detect_current_account)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// GET /api/vscode-ext/status —— VS Code CodeBuddy 扩展安装/运行/当前账号。
+///
+/// async + spawn_blocking：状态检测会跑 tasklist/ps 等子进程，账号页每次挂载都会
+/// 刷新，若在主线程执行会造成页面卡顿。
+#[tauri::command]
+pub async fn get_vscode_ext_status() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(vscode_ext::status)
+        .await
+        .map_err(|error| format!("查询 VS Code 扩展状态失败: {error}"))
+}
+
+/// GET /api/vscode-ext/sessions —— 列出当前 VS Code 扩展账号可复制的会话。
+///
+/// async + spawn_blocking：会扫描扩展数据目录（可能较大）并读取本地状态文件，
+/// 避免阻塞主线程。未登录/未安装时返回空列表而非报错（供前端渲染空态）。
+#[tauri::command]
+pub async fn list_vscode_sessions() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| match vscode_ext::active_ext_uid() {
+        Some(uid) => vscode_session::list_vscode_sessions(&uid),
+        None => json!({ "sourceUid": Value::Null, "sessions": [], "skipped": 0 }),
+    })
+    .await
+    .map_err(|error| format!("列出 VS Code 扩展会话失败: {error}"))
+}
+
+/// POST /api/vscode-ext/switch —— 注入凭证到 VS Code CodeBuddy 扩展（仅写入，不重启）。
+///
+/// `copySessions` 非空时，切换前先把勾选的会话复制到目标账号（新 id，加法）。
+///
+/// async + spawn_blocking：读写 state.vscdb + DPAPI 解密 + 会话目录复制可能阻塞，避免卡 UI。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn switch_vscode_ext_account(
+    account_id: String,
+    restart: Option<bool>,
+    copy_sessions: Option<Vec<vscode_session::CopyItem>>,
+) -> Result<Value, String> {
+    if account_id.trim().is_empty() {
+        return Err("缺少 accountId".to_string());
+    }
+    let restart = restart.unwrap_or(false);
+    let items = copy_sessions.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        if items.is_empty() {
+            vscode_ext::switch_account(&account_id, restart)
+        } else {
+            vscode_session::switch_vscode_ext_with_copy(&account_id, restart, &items)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// POST /api/vscode-ext/detect —— 读取本机 VS Code 扩展当前登录并尝试匹配账号库。
+///
+/// async + spawn_blocking：会通过 Safe Storage 读取子进程，避免阻塞主线程。
+#[tauri::command]
+pub async fn detect_vscode_ext_account() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(vscode_ext::detect_current_account)
         .await
         .map_err(|e| e.to_string())?
 }

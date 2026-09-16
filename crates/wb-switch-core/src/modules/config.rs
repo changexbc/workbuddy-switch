@@ -574,6 +574,8 @@ pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     }
     if let Err(e) = std::fs::rename(&tmp, path) {
         eprintln!("[atomic] rename FAILED: {e}");
+        // rename 失败时清理临时文件，避免在目标目录残留 `<name>.tmp-*`。
+        let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
     Ok(())

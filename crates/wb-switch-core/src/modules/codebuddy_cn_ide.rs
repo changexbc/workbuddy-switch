@@ -117,7 +117,10 @@ pub fn build_session_json(acc: &Value) -> String {
     .to_string()
 }
 
-fn parse_token_from_secret(secret: &str) -> Option<(Option<String>, String)> {
+/// 从 secret 明文（JSON 或 `uid+token`）解析出 (uid, access_token)。
+///
+/// 同时供 CodeBuddy CN IDE 与 VS Code CodeBuddy 扩展（`vscode_ext`）复用。
+pub(crate) fn parse_token_from_secret(secret: &str) -> Option<(Option<String>, String)> {
     let trimmed = secret.trim();
     if trimmed.is_empty() {
         return None;
@@ -182,7 +185,8 @@ fn parse_token_from_secret(secret: &str) -> Option<(Option<String>, String)> {
     Some((None, trimmed.to_string()))
 }
 
-fn match_account_for_token(uid: Option<&str>, token: &str) -> Option<Value> {
+/// 在账号库中按 uid / access_token 匹配账号；供 CN IDE 与 VS Code 扩展复用。
+pub(crate) fn match_account_for_token(uid: Option<&str>, token: &str) -> Option<Value> {
     let accounts = account::load_accounts();
     if let Some(uid) = uid.filter(|s| !s.is_empty()) {
         if let Some(acc) = accounts.iter().find(|a| get_str(a, "uid").as_deref() == Some(uid)) {
