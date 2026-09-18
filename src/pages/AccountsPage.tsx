@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
+import { CleanupSessionsDialog } from "@/components/cleanup-sessions-dialog";
 import { DemoAction } from "@/components/demo-action";
 import {
   CodeBuddyAiIdeMark,
@@ -173,6 +174,7 @@ export default function AccountsPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
+  const [cleanupAccount, setCleanupAccount] = useState<AccountMeta | null>(null);
   const [importing, setImporting] = useState(false);
   const [autoCheckinConfig, setAutoCheckinConfig] = useState<CheckinConfig | null>(null);
   const [autoCheckinSaving, setAutoCheckinSaving] = useState(false);
@@ -1056,6 +1058,7 @@ export default function AccountsPage() {
                 compact={compact}
                 onDelete={onDelete}
                 onSwitch={setSwitchAccount}
+                onCleanupSessions={setCleanupAccount}
                 onCheckin={onCheckin}
                 onRefresh={onRefresh}
                 todayCheckedIn={checkinMap[a.id]}
@@ -1106,6 +1109,16 @@ export default function AccountsPage() {
           void fetchAll();
           void refreshCodebuddyCliStatus();
           void refreshCodebuddyCnIdeStatus();
+        }}
+      />
+      <CleanupSessionsDialog
+        open={cleanupAccount !== null}
+        onOpenChange={(o) => {
+          if (!o) setCleanupAccount(null);
+        }}
+        account={cleanupAccount}
+        onCleaned={() => {
+          void fetchAll();
         }}
       />
 

@@ -623,3 +623,15 @@ export function asError(e: unknown): string {
   if (e instanceof Error) return e.message;
   return JSON.stringify(e ?? "未知错误");
 }
+
+/** 清理旧会话报告（宽松结构，按需取字段）。 */
+export type CleanupReport = Record<string, unknown>;
+
+/** 清理旧会话：每 cwd 保留最新 keep 条，已上云的同步删云端；dryRun 只出报告。 */
+export function cleanupSessions(args: {
+  accountId: string;
+  keep?: number;
+  dryRun?: boolean;
+}): Promise<CleanupReport> {
+  return call("cleanup_sessions", args as unknown as Record<string, unknown>);
+}

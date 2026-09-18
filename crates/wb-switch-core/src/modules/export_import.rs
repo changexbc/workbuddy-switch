@@ -413,16 +413,18 @@ mod tests {
 
     #[test]
     fn export_path_validation() {
+        let tmp = std::env::temp_dir();
+        let case = |name: &str| tmp.join(name).to_string_lossy().to_string();
         assert!(
             validate_export_path("relative/out.json").is_err(),
             "必须绝对路径"
         );
-        assert!(validate_export_path("/tmp/out.txt").is_err(), "必须 .json");
+        assert!(validate_export_path(&case("out.txt")).is_err(), "必须 .json");
         assert!(
-            validate_export_path("/tmp/out.JSON").is_ok(),
+            validate_export_path(&case("out.JSON")).is_ok(),
             "扩展名不区分大小写"
         );
-        assert!(validate_export_path("/tmp/out.json").is_ok());
+        assert!(validate_export_path(&case("out.json")).is_ok());
     }
 
     #[test]

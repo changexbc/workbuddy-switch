@@ -866,7 +866,7 @@ fn validate_helper_result(
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn node_path_from_shell_output(stdout: &[u8]) -> Option<PathBuf> {
     String::from_utf8_lossy(stdout)
         .lines()
@@ -2006,6 +2006,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn extracts_node_path_without_accepting_shell_noise() {
         let output = b"welcome to the shell\n/Users/test/.nvm/versions/node/v22/bin/node\n";
         assert_eq!(
