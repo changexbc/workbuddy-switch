@@ -10,7 +10,7 @@ use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide, credit_usage,
     credits, export_import, limits, oauth, process, rate_limit_events, rate_limit_hook, refresh,
-    rotate, session, switch, token_stats, travel, update, variant::WbVariant,
+    rotate, session, session_slim, switch, token_stats, travel, update, variant::WbVariant,
 };
 
 #[derive(Serialize)]
@@ -738,4 +738,34 @@ pub fn set_launch_at_login_enabled(_app: tauri::AppHandle, enabled: bool) -> Res
         let _ = enabled;
         Err("当前平台不支持开机自启".to_string())
     }
+}
+
+/// 清理旧会话：每 cwd 保留 `updated_at` 最新 `keep` 条，其余软删；
+/// 已上云的会话同步删除云端，并对账清残留。`dry_run` 只出报告不删任何东西。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cleanup_sessions(
+    account_id: String,
+    keep: Option<i64>,
+    dry_run: Option<bool>,
+) -> Result<Value, String> {
+    if account_id.trim().is_empty() {
+        return Err("缺少 accountId".to_string());
+    }
+    let keep = keep.unwrap_or(3).max(0);
+    let dry_run = dry_run.unwrap_or(false);
+    let uid = account::load_accounts()
+        .iter()
+        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(account_id.as_str()))
+        .and_then(|a| {
+            a.get("uid")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "未找到该账号或账号缺少 uid".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        session_slim::slim_sessions(&uid, keep, dry_run, &[], None)
+    })
+    .await
+    .map_err(|e| format!("清理任务执行失败: {e}"))?
 }

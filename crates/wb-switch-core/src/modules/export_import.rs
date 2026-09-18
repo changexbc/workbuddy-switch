@@ -181,7 +181,8 @@ fn validate_export_file_name(file_name: &str) -> Result<(), String> {
 /// 校验导出目标路径：必须是绝对路径且以 `.json` 结尾（保存对话框产物）。
 fn validate_export_path(path: &str) -> Result<(), String> {
     let p = Path::new(path.trim());
-    if !p.is_absolute() {
+    // Windows 上 `/tmp/x` 不算 is_absolute()（缺盘符），这里兼容 Unix 风格根路径
+    if !p.is_absolute() && !path.trim().starts_with('/') {
         return Err("导出路径必须是绝对路径".to_string());
     }
     if !p

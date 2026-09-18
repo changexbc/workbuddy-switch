@@ -251,7 +251,8 @@ impl WbVariant {
 
     /// macOS app 路径探测全失败时的回落路径。
     pub fn macos_default_app_path(self) -> PathBuf {
-        Path::new("/Applications").join(self.macos_app_names()[0])
+        // 固定的 macOS 路径：用字符串模板拼，避免在非 macOS 平台上被 Path::join 换成本机分隔符。
+        PathBuf::from(format!("/Applications/{}", self.macos_app_names()[0]))
     }
 
     /// Linux 默认可执行文件路径。
@@ -363,19 +364,21 @@ mod tests {
     #[test]
     fn auth_file_path_covers_three_platforms() {
         let home = Path::new("/home/tester");
+        // 跨平台语义路径统一按 `/` 比较（本机分隔符不参与断言）。
+        let slash = |p: &Path| p.to_string_lossy().replace('\\', "/");
         let cn = WbVariant::Cn.auth_file_path_at(home, HostOs::Macos);
         assert_eq!(
-            cn.to_string_lossy(),
+            slash(&cn),
             "/home/tester/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info"
         );
         let cn_win = WbVariant::Cn.auth_file_path_at(home, HostOs::Windows);
         assert_eq!(
-            cn_win.to_string_lossy(),
+            slash(&cn_win),
             "/home/tester/AppData/Local/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info"
         );
         let cn_linux = WbVariant::Cn.auth_file_path_at(home, HostOs::Linux);
         assert_eq!(
-            cn_linux.to_string_lossy(),
+            slash(&cn_linux),
             "/home/tester/.local/share/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info"
         );
 
