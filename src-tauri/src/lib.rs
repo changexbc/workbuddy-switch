@@ -193,6 +193,7 @@ pub fn run() {
             commands::preview_import_accounts,
             commands::import_accounts,
             commands::switch_account,
+            commands::cleanup_sessions,
             commands::list_sessions,
             commands::copy_sessions,
             commands::open_permission_settings,

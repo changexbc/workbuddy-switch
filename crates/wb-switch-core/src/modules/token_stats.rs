@@ -1196,14 +1196,23 @@ mod tests {
         // iteration, which is not sorted. The copy would then be processed
         // first, own the replayed record, and leave the original with zero
         // records. Pin the mtimes so the original always precedes its copy.
-        std::fs::File::open(project.join("session-original.jsonl"))
-            .expect("open original fixture")
-            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
-            .expect("pin original mtime");
-        std::fs::File::open(project.join("session-forked.jsonl"))
-            .expect("open forked fixture")
-            .set_modified(std::time::SystemTime::now())
-            .expect("pin forked mtime");
+        // Opened with `write(true)` on purpose: Windows implements
+        // `set_modified` via `SetFileTime`, which needs FILE_WRITE_ATTRIBUTES,
+        // so a read-only `File::open` handle fails with "access denied" there.
+        // A writable handle works on every platform.
+        let pin_mtime = |name: &str, when: std::time::SystemTime| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(project.join(name))
+                .expect("open fixture to pin mtime")
+                .set_modified(when)
+                .expect("pin fixture mtime");
+        };
+        pin_mtime(
+            "session-original.jsonl",
+            std::time::SystemTime::now() - std::time::Duration::from_secs(60),
+        );
+        pin_mtime("session-forked.jsonl", std::time::SystemTime::now());
 
         let result = source(root.clone(), "fixture", None, false);
         // The replayed record counts once; the fork's new record still counts.
@@ -1567,11 +1576,17 @@ mod tests {
         )
         .expect("write forked fixture");
         // 与聚合去重用例相同：固定 mtime，保证原始会话先于副本被处理。
-        std::fs::File::open(project.join("session-original.jsonl"))
+        // Windows 上 `set_modified` 走 SetFileTime 需要 FILE_WRITE_ATTRIBUTES,
+        // 只读句柄会 Access Denied ⇒ 用 write(true) 打开（同 pin_mtime 模式）。
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(project.join("session-original.jsonl"))
             .expect("open original fixture")
             .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
             .expect("pin original mtime");
-        std::fs::File::open(project.join("session-forked.jsonl"))
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(project.join("session-forked.jsonl"))
             .expect("open forked fixture")
             .set_modified(std::time::SystemTime::now())
             .expect("pin forked mtime");
@@ -1971,12 +1986,17 @@ mod tests {
         .expect("write second-root fixture");
         // 与 source_deduplicates_copied_session_history 同理：毫秒级 mtime 并列时
         // 顺序退化为 readdir，重放记录可能先被第二个根认领。pin 住 mtime 让
-        // 原始会话先处理，断言才稳定。
-        std::fs::File::open(projects.join("session-original.jsonl"))
+        // 原始会话先处理，断言才稳定。（Windows 只读句柄 set_modified 会
+        // Access Denied ⇒ 用 write(true) 打开，同 pin_mtime 模式。）
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(projects.join("session-original.jsonl"))
             .expect("open original fixture")
             .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
             .expect("pin original mtime");
-        std::fs::File::open(sessions.join("session-root-two.jsonl"))
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(sessions.join("session-root-two.jsonl"))
             .expect("open second-root fixture")
             .set_modified(std::time::SystemTime::now())
             .expect("pin second-root mtime");

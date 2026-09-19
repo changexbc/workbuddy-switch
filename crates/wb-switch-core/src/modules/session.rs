@@ -220,7 +220,7 @@ fn find_project_jsonl(variant: WbVariant, cid: &str) -> Option<PathBuf> {
 }
 
 /// 备份 workbuddy.db（含 -wal/-shm），返回主库备份路径。对照 `backup_workbuddy_db`。
-fn backup_workbuddy_db(variant: WbVariant, backup_root: &Path) -> Option<PathBuf> {
+pub(crate) fn backup_workbuddy_db(variant: WbVariant, backup_root: &Path) -> Option<PathBuf> {
     let db = workbuddy_db_path(variant);
     if !db.is_file() {
         return None;
@@ -457,7 +457,11 @@ mod tests {
     #[test]
     fn db_paths_follow_variant_data_root() {
         let cn = workbuddy_db_path(WbVariant::Cn);
-        assert!(cn.to_string_lossy().ends_with(".workbuddy/workbuddy.db"));
+        // 跨平台语义路径统一按 `/` 比较（本机分隔符不参与断言）。
+        assert!(cn
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with(".workbuddy/workbuddy.db"));
         assert!(edge_sync_db_path(WbVariant::Cn)
             .to_string_lossy()
             .ends_with("edge-sync-mapping-v2.db"));

@@ -690,7 +690,7 @@ mod tests {
         assert!(stop[1]["hooks"][0]["command"]
             .as_str()
             .expect("命令")
-            .contains("hook.sh"));
+            .contains(script_name(script_kind())));
         assert_eq!(
             root["hooks"]["FinalStop"]
                 .as_array()
