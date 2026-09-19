@@ -220,7 +220,7 @@ fn find_project_jsonl(variant: WbVariant, cid: &str) -> Option<PathBuf> {
 }
 
 /// 备份 workbuddy.db（含 -wal/-shm），返回主库备份路径。对照 `backup_workbuddy_db`。
-fn backup_workbuddy_db(variant: WbVariant, backup_root: &Path) -> Option<PathBuf> {
+pub(crate) fn backup_workbuddy_db(variant: WbVariant, backup_root: &Path) -> Option<PathBuf> {
     let db = workbuddy_db_path(variant);
     if !db.is_file() {
         return None;

@@ -118,6 +118,12 @@ export interface SwitchResult {
   variant?: WbVariant;
   backup: string | null;
   sessionCopy?: SessionCopyReport;
+  /** 切号时的数据对齐报告（本版本只含「带走定时任务」）。 */
+  alignData?: {
+    /** 定时任务归属对齐：updated = 改了几行，outbox = 投递队列被改的行数。 */
+    automations?: { updated: number; outbox: number };
+    error?: string;
+  };
 }
 
 export interface CheckinConfig {

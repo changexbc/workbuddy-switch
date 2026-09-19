@@ -142,6 +142,8 @@ pub fn router() -> Router {
             get(api_update_config).post(api_save_update_config),
         )
         .fallback(static_handler)
+        // 本地新增接口（定时任务归属对齐）集中在 api_local.rs
+        .merge(crate::api_local::router())
 }
 
 fn json_ok(v: Value) -> Response {
@@ -420,23 +422,8 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
     if account_id.trim().is_empty() {
         return json_err("缺少 accountId".to_string(), StatusCode::BAD_REQUEST);
     }
-    let restart = body
-        .get("restart")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let share_sessions = body
-        .get("shareSessions")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let copy_ids: Vec<String> = body
-        .get("copySessionIds")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut opts: switch::SwitchOptions = serde_json::from_value(body).unwrap_or_default();
+    opts.restart = true;
 
     {
         let mut running = SWITCH_RUNNING.lock().unwrap();
@@ -452,13 +439,7 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
     });
 
     let result = tokio::task::spawn_blocking(move || {
-        switch::switch_account(
-            Some(&progress),
-            &account_id,
-            restart,
-            share_sessions,
-            &copy_ids,
-        )
+        switch::switch_account(Some(&progress), &account_id, &opts)
     })
     .await;
 
