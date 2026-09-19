@@ -8,6 +8,7 @@
 //! ```
 
 mod api;
+mod api_local;
 
 use serde_json::json;
 

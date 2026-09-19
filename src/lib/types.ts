@@ -118,6 +118,56 @@ export interface SwitchResult {
   variant?: WbVariant;
   backup: string | null;
   sessionCopy?: SessionCopyReport;
+  dryRun?: boolean;
+  alignData?: AlignDataReport;
+}
+
+/** 切号时的数据对齐报告（含「带走定时任务」与「同步设置与文件」）。 */
+export interface AlignDataReport {
+  targetUid?: string;
+  dryRun?: boolean;
+  noop?: boolean;
+  /** 定时任务归属对齐：updated = 改了几行，outbox = 投递队列被改的行数。 */
+  automations?: { updated: number; outbox: number };
+  /** 设置同步：应用设置深合并 / 用户数据补齐 / 账号资料 / 我的文件 / 界面主题。 */
+  settings?: {
+    sourceUid?: string | null;
+    claw?: { changed: number; skipped?: boolean };
+    storage?: { copied: number; skipped: number; deferred: number };
+    memory?: { changed: boolean };
+    myFiles?: { files: number; changed: number };
+    theme?: Record<string, unknown>;
+  };
+  /** 「清理旧对话」的瘦身报告（随 #62 落地；本版本后端恒不产出，类型先行）。 */
+  slim?: {
+    uid?: string;
+    keep?: number;
+    planned?: number;
+    deleted?: number;
+    error?: string;
+    groups?: { cwd: string; count: number }[];
+    copyPlanned?: { total: number; hitCount: number; hitProjects: number };
+    cloud?: {
+      enabled: boolean;
+      tokenReady: boolean;
+      planned?: number;
+      deleted?: number;
+      removed?: number;
+      alreadyGone?: number;
+      noToken?: number;
+      failed?: number;
+      foreign?: number;
+      inventory?: {
+        enabled: boolean;
+        cloud?: number;
+        aligned?: number;
+        foreign?: number;
+        stale?: number;
+        localOnlyAlive?: number;
+      };
+    };
+  };
+  error?: string;
 }
 
 export interface CheckinConfig {
