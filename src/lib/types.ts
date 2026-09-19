@@ -118,6 +118,22 @@ export interface SwitchResult {
   variant?: WbVariant;
   backup: string | null;
   sessionCopy?: SessionCopyReport;
+  /** 「增量硬链接共享」报告：源账号会话零拷贝共享给目标账号（inode 判重）。 */
+  autoLink?: {
+    sourceUid: string;
+    targetUid: string;
+    dryRun?: boolean;
+    copied: { id: string; newId: string; planned?: boolean }[];
+    alreadyCopied: number;
+    /** 名单外（源侧不动，只计数）。 */
+    beyondKeep: number;
+    /** 统一保留名单（目标侧 sid）。 */
+    keepTargetSids?: string[];
+    clawSkipped: number;
+    noBody: number;
+    errors?: { id: string; error: string }[];
+    backupDb?: string | null;
+  };
 }
 
 export interface CheckinConfig {

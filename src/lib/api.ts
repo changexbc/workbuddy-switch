@@ -326,6 +326,8 @@ export function switchAccount(args: {
   restart?: boolean;
   shareSessions?: boolean;
   copySessionIds?: string[];
+  /** 增量硬链接共享（默认开后端 true；显式传 false 才关）。 */
+  autoLink?: boolean;
 }): Promise<SwitchResult> {
   return call("switch_account", args as unknown as Record<string, unknown>);
 }
