@@ -24,10 +24,8 @@ use serde_json::{json, Value};
 
 use crate::modules::config::{self, atomic_write, home_dir};
 
-/// hook 脚本名（macOS / Linux）。
+/// hook 脚本名（全平台统一 sh，见 `script_name`）。
 const SCRIPT_NAME_SH: &str = "hook.sh";
-/// hook 脚本名（Windows）。
-const SCRIPT_NAME_CMD: &str = "hook.cmd";
 /// hook 事件信号文件：脚本 append、后端消费。
 pub const EVENTS_FILE_NAME: &str = "hook-events.jsonl";
 /// 客户端设置文件名（三处配置同名）。
@@ -52,49 +50,59 @@ const STORE_DIR_NAME: &str = ".wb-switch";
 // 平台脚本
 // ---------------------------------------------------------------------------
 
-/// hook 脚本方言：平台原生。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ScriptKind {
-    /// macOS / Linux：`sh`。
-    Sh,
-    /// Windows：`cmd` 包一层 PowerShell 读 stdin。
-    Cmd,
-}
+/// 旧版 Windows 脚本名（`cmd /c` 形态，2026-09-18 弃用；安装/卸载时顺带清理其注册条目）。
+const LEGACY_CMD_NAME: &str = "hook.cmd";
 
-fn script_kind() -> ScriptKind {
-    if cfg!(windows) {
-        ScriptKind::Cmd
-    } else {
-        ScriptKind::Sh
-    }
-}
-
-fn script_name(kind: ScriptKind) -> &'static str {
-    match kind {
-        ScriptKind::Sh => SCRIPT_NAME_SH,
-        ScriptKind::Cmd => SCRIPT_NAME_CMD,
-    }
+/// hook 脚本名：**全平台统一 sh**。Windows 的执行器是客户端自带的 PortableGit bash
+/// （与插件 hook 同款调用），实测 `cmd /c "..."` 在该环境里静默失败 —— spawn 成功但
+/// 批处理零副作用（2026-09-18 探针实证：连 `%TEMP%` 的 mkdir 都没发生），而
+/// `bash "<路径>"` 形式的插件 hook 一直正常。
+fn script_name() -> &'static str {
+    SCRIPT_NAME_SH
 }
 
 /// hook 脚本正文。
 ///
-/// - `Sh`：一次 `cat` 读入 payload、一次 `printf` 追加（尽量单次 write，减少并发追加的
-///   行内交错），最后必须回 `{}`——空 stdout 会被客户端当作 hook 失败。
-/// - `Cmd`：Windows 没有 `cat`，`findstr` 又有行长上限（429 的 payload 带完整助手消息，
-///   可能超限），改用系统自带 PowerShell 读 stdin（UTF-8 保真）。每次事件多一次进程启动，
-///   但事件只发生在每轮对话结束时，可接受；PowerShell 不可用时仍回 `{}`，不影响客户端。
-fn script_body(kind: ScriptKind) -> &'static str {
-    match kind {
-        ScriptKind::Sh => {
-            "#!/bin/sh\npayload=$(cat)\nprintf '%s\\n' \"$payload\" >> \"$HOME/.wb-switch/hook-events.jsonl\"\nprintf '{}'\n"
-        }
-        ScriptKind::Cmd => concat!(
-            "@echo off\r\n",
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$d=[Console]::In.ReadToEnd(); ",
-            "if ($d.Trim().Length -gt 0) { Add-Content -LiteralPath (Join-Path $env:USERPROFILE '.wb-switch\\hook-events.jsonl') ",
-            "-Value $d.TrimEnd() -Encoding UTF8 }\"\r\n",
-            "echo {}\r\n",
-        ),
+/// ⚠️ 事件文件路径在安装时**写死为绝对路径**，不依赖 `HOME` / `USERPROFILE`：
+/// hook 由各客户端自己的执行器拉起，运行环境不可控，环境变量并不可靠；
+/// 安装时一次解析，之后逐字节幂等。
+///
+/// 一次 `cat` 读入 payload、追加固化的 `_hookTs`（写入时刻，毫秒）后单次 `printf` 追加
+/// （尽量单次 write，减少并发追加的行内交错），最后必须回 `{}`——空 stdout 会被客户端
+/// 当作 hook 失败。`_hookTs` 是消费端 `transcript_model` 的时间锚：事件行可能被延迟
+/// 消费（App 重启 / watcher 未跑），届时 transcript 已包含 429 之后的新轮次，没有写入
+/// 时刻就无法把「切模型后的模型行」排除在归因之外（2026-09-19 glm 假 chip 实证）。
+/// `date +%s%3N` 在 BSD date（macOS）下不是毫秒 ⇒ 非纯正整数一律回 0（消费端视为无锚）。
+/// Windows 下统一正斜杠（MSYS bash 对 `C:/...` 原生支持；反斜杠在引号里是转义雷区）。
+fn script_body(events: &Path) -> String {
+    let sh_events = events.to_string_lossy().replace('\\', "/");
+    let case_branch = |format: &str| {
+        format!(
+            "case \"$payload\" in '{{'*) {format} >> '{events}' ;;\n  *) printf '%s\\n' \"$payload\" >> '{events}' ;;\nesac",
+            format = format,
+            events = sh_events,
+        )
+    };
+    [
+        "#!/bin/sh".to_string(),
+        "payload=$(cat)".to_string(),
+        "ts=$(date +%s%3N 2>/dev/null)".to_string(),
+        r#"case "$ts" in ''|*[!0-9]*) ts=0 ;; esac"#.to_string(),
+        case_branch(r#"printf '{"_hookTs":%s,%s\n' "$ts" "${payload#'{'}""#),
+        "printf '{}'".to_string(),
+        "".to_string(),
+    ]
+    .join("\n")
+}
+
+/// MSYS 风格路径：`C:\a\b` → `/c/a/b`（PortableGit bash 的原生形态，与插件 hook 一致）。
+fn msys_path(script: &Path) -> String {
+    let s = script.to_string_lossy().replace('\\', "/");
+    let mut chars = s.chars();
+    let drive = chars.next().unwrap_or('c').to_ascii_lowercase();
+    match chars.next() {
+        Some(':') => format!("/{}{}", drive, chars.as_str()),
+        _ => s,
     }
 }
 
@@ -104,12 +112,11 @@ fn shell_quote(value: &str) -> String {
 }
 
 /// hook 脚本的启动命令（写进三处 `settings.json` 的 `command`）。
-fn hook_command(script: &Path, kind: ScriptKind) -> String {
-    let path = script.to_string_lossy();
-    match kind {
-        ScriptKind::Sh => format!("sh {}", shell_quote(&path)),
-        // bash / cmd 两种解释器下 `cmd /c "…"` 都是合法调用（含空格路径也安全）。
-        ScriptKind::Cmd => format!("cmd /c \"{path}\""),
+fn hook_command(script: &Path) -> String {
+    if cfg!(windows) {
+        format!("bash '{}'", msys_path(script))
+    } else {
+        format!("sh {}", shell_quote(&script.to_string_lossy()))
     }
 }
 
@@ -150,7 +157,7 @@ impl HookLayout {
     fn under(base: &Path) -> Self {
         let store = base.join(STORE_DIR_NAME);
         Self {
-            script: store.join(script_name(script_kind())),
+            script: store.join(script_name()),
             events: store.join(EVENTS_FILE_NAME),
             backups: store.join(BACKUP_DIR_NAME),
             targets: TARGETS
@@ -171,9 +178,14 @@ impl HookLayout {
         Self::under(&home_dir())
     }
 
-    /// 配置里的 marker：hook 脚本的绝对路径。
+    /// 配置里的 marker：注册命令中实际出现的脚本路径形态
+    /// （Windows 下注册命令是 `bash '/c/...'`，marker 必须用同款 MSYS 形态才能 contains 命中）。
     fn marker(&self) -> String {
-        self.script.to_string_lossy().to_string()
+        if cfg!(windows) {
+            msys_path(&self.script)
+        } else {
+            self.script.to_string_lossy().to_string()
+        }
     }
 
     /// 是否至少存在一处可接入的客户端（存在的数据根）。
@@ -193,8 +205,14 @@ impl HookLayout {
     /// hook 是否已「装全」：脚本在，且每一处存在的客户端都注册了本工具条目。
     ///
     /// 有客户端存在但一处都没装 / 只装了一半 / 脚本被删 → 都不算装全（启动时据此重装）。
+    /// 脚本内容与当前生成一致（内容漂移 ⇒ 视为未装全，启动时重写；`write_script` 幂等）。
+    fn script_is_current(&self) -> bool {
+        std::fs::read_to_string(&self.script).ok().as_deref()
+            == Some(script_body(&self.events).as_str())
+    }
+
     fn fully_installed(&self) -> bool {
-        self.script.is_file()
+        self.script_is_current()
             && self.any_target_exists()
             && self
                 .targets
@@ -241,8 +259,10 @@ fn read_settings(path: &Path) -> Option<Value> {
     serde_json::from_str(&text).ok()
 }
 
-/// 条目是否属于本工具：嵌套格式里任一 command hook 的命令包含脚本路径。
-fn entry_is_ours(entry: &Value, marker: &str) -> bool {
+/// 条目是否属于本工具：嵌套格式里任一 command hook 的命令包含当前脚本路径。
+/// `include_legacy` = 同时认领旧版 `cmd /c …hook.cmd` 形态（仅用于**清理**：
+/// 存在性判定绝不能认旧形态，否则旧条目会挡住新脚本的自动迁移 —— 2026-09-18 实证）。
+fn entry_is_ours(entry: &Value, marker: &str, include_legacy: bool) -> bool {
     entry
         .get("hooks")
         .and_then(Value::as_array)
@@ -252,7 +272,12 @@ fn entry_is_ours(entry: &Value, marker: &str) -> bool {
                     && hook
                         .get("command")
                         .and_then(Value::as_str)
-                        .is_some_and(|command| command.contains(marker))
+                        .is_some_and(|command| {
+                            command.contains(marker)
+                                || (include_legacy
+                                    && command.contains(LEGACY_CMD_NAME)
+                                    && command.contains(STORE_DIR_NAME))
+                        })
             })
         })
 }
@@ -266,7 +291,7 @@ fn config_has_marker(root: &Value, marker: &str) -> bool {
                 hooks
                     .get(*event)
                     .and_then(Value::as_array)
-                    .is_some_and(|entries| entries.iter().any(|e| entry_is_ours(e, marker)))
+                    .is_some_and(|entries| entries.iter().any(|e| entry_is_ours(e, marker, false)))
             })
         })
 }
@@ -298,7 +323,7 @@ fn event_entries<'a>(root: &'a mut Value, event: &str) -> Result<&'a mut Vec<Val
 /// 插入（已存在则更新）本工具在某个事件下的条目：先摘掉旧的同源条目，再追加一条。
 fn upsert_event(root: &mut Value, event: &str, command: &str, marker: &str) -> Result<(), String> {
     let entries = event_entries(root, event)?;
-    entries.retain(|entry| !entry_is_ours(entry, marker));
+    entries.retain(|entry| !entry_is_ours(entry, marker, true));
     entries.push(json!({
         "matcher": "",
         "hooks": [{ "type": "command", "command": command }],
@@ -318,7 +343,7 @@ fn remove_event_entries(root: &mut Value, marker: &str) {
         let Some(list) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
             continue;
         };
-        list.retain(|entry| !entry_is_ours(entry, marker));
+        list.retain(|entry| !entry_is_ours(entry, marker, true));
         if list.is_empty() {
             hooks.remove(event);
         }
@@ -422,7 +447,7 @@ fn install_at(layout: &HookLayout) -> Result<Value, String> {
         return Ok(status_at(layout));
     }
     write_script(layout)?;
-    let command = hook_command(&layout.script, script_kind());
+    let command = hook_command(&layout.script);
     let marker = layout.marker();
     let mut errors = Vec::new();
     for target in &layout.targets {
@@ -446,9 +471,9 @@ fn write_script(layout: &HookLayout) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("创建 {} 失败：{error}", parent.display()))?;
     }
-    let body = script_body(script_kind());
+    let body = script_body(&layout.events);
     // 内容一致就不写：避免重复安装改动 mtime，也避免与手动编辑过的脚本互相覆盖。
-    if std::fs::read_to_string(&layout.script).ok().as_deref() == Some(body) {
+    if std::fs::read_to_string(&layout.script).ok().as_deref() == Some(body.as_str()) {
         return Ok(());
     }
     std::fs::write(&layout.script, body)
@@ -562,8 +587,15 @@ fn uninstall_at(layout: &HookLayout) -> Result<Value, String> {
         }
     }
     // 脚本只在内容仍是本工具生成的那一份时删除；用户改过就保留，不做猜测。
-    if std::fs::read_to_string(&layout.script).ok().as_deref() == Some(script_body(script_kind())) {
+    if std::fs::read_to_string(&layout.script).ok().as_deref()
+        == Some(script_body(&layout.events).as_str())
+    {
         let _ = std::fs::remove_file(&layout.script);
+    }
+    // 旧版 cmd 脚本（2026-09-18 弃用）一并清理：内容是本工具生成的旧形态才删。
+    let legacy_script = layout.script.with_file_name(LEGACY_CMD_NAME);
+    if legacy_script.is_file() {
+        let _ = std::fs::remove_file(&legacy_script);
     }
     if errors.is_empty() {
         Ok(status_at(layout))
@@ -641,25 +673,39 @@ mod tests {
 
     #[test]
     fn script_body_appends_payload_and_always_returns_empty_object() {
-        let sh = script_body(ScriptKind::Sh);
-        assert!(sh.contains("hook-events.jsonl"), "{sh}");
-        assert!(sh.trim_end().ends_with("printf '{}'"), "{sh}");
-
-        let cmd = script_body(ScriptKind::Cmd);
-        assert!(cmd.contains("hook-events.jsonl"), "{cmd}");
-        assert!(cmd.trim_end().ends_with("echo {}"), "{cmd}");
+        // 事件路径必须写死为绝对路径：执行器环境不可控，env 不可靠（2026-09-18 实证）。
+        let events = Path::new("/tmp/base").join(".wb-switch").join("hook-events.jsonl");
+        let body = script_body(&events);
+        assert!(body.contains("hook-events.jsonl"), "{body}");
+        assert!(!body.contains("USERPROFILE"), "不得依赖环境变量：{body}");
+        assert!(body.contains(events.to_string_lossy().replace('\\', "/").as_str()), "{body}");
+        assert!(body.trim_end().ends_with("printf '{}'"), "{body}");
+        // 写入时刻 `_hookTs`：消费端 transcript 归因的时间锚（2026-09-19 glm 假 chip 实证）。
+        assert!(body.contains("_hookTs"), "{body}");
+        // date 输出非毫秒（BSD date 等）必须回 0，坏值不能进 JSON 数字位。
+        assert!(body.contains("*[!0-9]*"), "{body}");
     }
 
     #[test]
     fn hook_command_quotes_the_script_path() {
         let path = Path::new("/Users/a b/.wb-switch/hook.sh");
+        if cfg!(windows) {
+            // MSYS 路径形态入参原样保留（非 C: 盘式路径不做转换）。
+            assert_eq!(hook_command(path), "bash '/Users/a b/.wb-switch/hook.sh'");
+        } else {
+            assert_eq!(hook_command(path), "sh '/Users/a b/.wb-switch/hook.sh'");
+        }
+    }
+
+    /// Windows 的注册命令用 bash + MSYS 路径（与插件 hook 同款）；
+    /// `cmd /c` 在 HookExecutor 的 bash 环境里静默失败（2026-09-18 探针实证）。
+    #[test]
+    #[cfg(windows)]
+    fn hook_command_uses_bash_on_windows() {
+        let path = Path::new(r"C:\Users\a b\.wb-switch\hook.sh");
         assert_eq!(
-            hook_command(path, ScriptKind::Sh),
-            "sh '/Users/a b/.wb-switch/hook.sh'"
-        );
-        assert_eq!(
-            hook_command(path, ScriptKind::Cmd),
-            "cmd /c \"/Users/a b/.wb-switch/hook.sh\""
+            hook_command(path),
+            "bash '/c/Users/a b/.wb-switch/hook.sh'"
         );
     }
 
@@ -687,10 +733,11 @@ mod tests {
         let stop = root["hooks"]["Stop"].as_array().expect("Stop 数组");
         assert_eq!(stop.len(), 2, "只应追加一条我们的条目：{stop:?}");
         assert_eq!(stop[0]["hooks"][0]["command"], "echo user", "用户条目保留");
+        // 全平台统一 sh 脚本名（Windows 执行器是 bash，不再用 cmd）。
         assert!(stop[1]["hooks"][0]["command"]
             .as_str()
             .expect("命令")
-            .contains("hook.sh"));
+            .contains(SCRIPT_NAME_SH));
         assert_eq!(
             root["hooks"]["FinalStop"]
                 .as_array()
@@ -731,7 +778,7 @@ mod tests {
         let installed = read_settings(&target(&layout, "codebuddy").settings).expect("已安装");
         assert!(config_has_marker(
             &installed,
-            &layout.script.to_string_lossy()
+            &layout.marker()
         ));
 
         uninstall_at(&layout).expect("卸载");
@@ -762,7 +809,7 @@ mod tests {
         let root = read_settings(&codebuddy.settings).expect("配置");
         assert_eq!(root["statusLine"]["type"], "command", "用户的改动必须保留");
         assert!(
-            !config_has_marker(&root, &layout.script.to_string_lossy()),
+            !config_has_marker(&root, &layout.marker()),
             "本工具条目必须移除"
         );
         assert!(root.get("hooks").is_none(), "空 hooks 键一并摘掉");
@@ -998,7 +1045,7 @@ mod tests {
         // 其它目标照常安装（单个失败不阻断）。
         assert!(config_has_marker(
             &read_settings(&codebuddy.settings).expect("配置"),
-            &layout.script.to_string_lossy()
+            &layout.marker()
         ));
     }
 

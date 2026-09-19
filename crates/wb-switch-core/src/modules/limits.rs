@@ -132,12 +132,25 @@ const CLASSIFIER_MARKER: &str = "refusal classified";
 
 /// 分类行的配额判据（比 `httpStatus=429` 更贴近「限额」语义）。
 const CLASSIFIER_CATEGORY: &str = "category=quota";
+/// 分类器兜底的时间窗：合法场景是分类器行后毫秒级紧随的裸文案行（上游实测 1ms）；
+/// 回显行与分类器行相隔分钟级，窗口一卡就出局。
+const CLASSIFIER_FALLBACK_MS: i64 = 2_000;
 
 /// 会话当前模型标记：`[ModelConfig] sessionId=…, resolved model=…`。
 const RESOLVED_MODEL_MARKER: &str = "resolved model=";
 
+/// SDK 会话日志里的「发起请求」标记：`method:sendPrompt {…"modelId":"<模型>"}`。
+///
+/// 这类行**不带会话 id**（只有 `instanceId`），会话身份只能来自文件名 —— 而它正是模型归因的盲区：
+/// 上游只认业务日志的 `requestId → model` 与 `resolved model=`，SDK 侧两样都没有 ⇒ 事件被标「未知模型」。
+/// 本机实测（2026-09-18 15:40:22）：那条「未知模型」实为 `hy4-preview-f`。
+const SDK_SEND_PROMPT_MARKER: &str = "method:sendPrompt";
+
 /// 业务日志行首时间格式（本地时间）：`9/17/2026, 12:20:31 AM.232`。
 const BUSINESS_TS_FORMAT: &str = "%m/%d/%Y, %I:%M:%S %p%.3f";
+/// 业务日志的另一种行首时间格式（24 小时制，本机实测）：`2026/9/18 15:46:30.242`。
+/// 只认上面那一种时，这类行会被 `line_timestamp` 判为「无时间戳」而整行跳过 —— 表现为台账为空。
+const BUSINESS_TS_ALT_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f";
 
 // ---------------------------------------------------------------------------
 // 扫描
@@ -302,14 +315,31 @@ fn log_files(root: &Path, output: &mut Vec<PathBuf>) {
 /// 在被限**之前**最近一次选用的模型」，`current_uid` 同理是「事件前最近一次鉴权账号」，
 /// 因此不会归因成被限之后才切换到的模型或账号。
 fn scan_text(text: &str, format: LogFormat, auth: AuthMarker) -> Vec<Hit> {
+    scan_text_scoped(text, format, auth, None)
+}
+
+/// 带「文件级会话 id」的解析入口。
+///
+/// SDK 会话日志（`logs/<日期>/sdk/conversations/<会话UUID>.log`）的 `method:sendPrompt`
+/// 行不带会话 id，只能靠**文件名**确定会话；顺序扫描保证该模型是「本事件之前最近一次」。
+fn scan_text_scoped(
+    text: &str,
+    format: LogFormat,
+    auth: AuthMarker,
+    file_session: Option<&str>,
+) -> Vec<Hit> {
     let mut hits = Vec::new();
     let mut session_models: HashMap<String, String> = HashMap::new();
     let mut request_models: HashMap<String, String> = HashMap::new();
-    let mut classifier_session: Option<String> = None;
+    let mut classifier_session: Option<(String, Option<i64>)> = None;
     let mut conversation_models: HashMap<String, String> = HashMap::new();
     let mut auth_error_model: Option<String> = None;
     let mut current_uid: Option<String> = None;
     for line in text.lines() {
+        // 传输行（工具输出 / 命令回显的载体）对上下文采集与限额检测都一律跳过。
+        if is_transport_line(line) {
+            continue;
+        }
         if let Some(uid) = auth_uid(line, auth) {
             current_uid = Some(uid.to_string());
         }
@@ -325,9 +355,20 @@ fn scan_text(text: &str, format: LogFormat, auth: AuthMarker) -> Vec<Hit> {
                         request_models.insert(request.to_string(), model.to_string());
                     }
                 }
+                // SDK 会话日志的模型线索（行内无会话 id ⇒ 用文件名）；顺序扫描 ⇒ 取到事件前的最近一次。
+                if let Some(session) = file_session {
+                    if line.contains(SDK_SEND_PROMPT_MARKER) {
+                        if let Some(model) = json_field(line, "modelId") {
+                            session_models.insert(session.to_string(), model.to_string());
+                        }
+                    }
+                }
+                // 分类器行自带 `sessionId=`；裸文案行的兜底只在紧随其后（时间窗内）有效，
+                // 相隔分钟级的回显行不得借道（2026-09-18 glm 假 chip 实证）。
                 if line.contains(CLASSIFIER_MARKER) && line.contains(CLASSIFIER_CATEGORY) {
                     if let Some(session) = field_after(line, "sessionId=") {
-                        classifier_session = Some(session.to_string());
+                        classifier_session =
+                            Some((session.to_string(), line_timestamp(line, format)));
                     }
                 }
             }
@@ -366,16 +407,26 @@ fn scan_text(text: &str, format: LogFormat, auth: AuthMarker) -> Vec<Hit> {
             continue;
         };
         let (session_id, model) = match format {
-            LogFormat::WorkBuddy => workbuddy_attribution(
-                line,
-                &request_models,
-                &session_models,
-                classifier_session.as_deref(),
-            ),
+            LogFormat::WorkBuddy => {
+                // 分类器兜底只认「紧随其后」的裸文案行：quota 行发生在分类器行之后
+                // 且在时间窗内才允许借道（上游实测 1ms；回显行相隔分钟级 ⇒ 出局）。
+                let classifier = classifier_session.as_ref().and_then(|(session, ts)| {
+                    let ts = (*ts)?;
+                    (occurred_at >= ts && occurred_at - ts <= CLASSIFIER_FALLBACK_MS)
+                        .then_some(session.as_str())
+                });
+                workbuddy_attribution(line, &request_models, &session_models, classifier)
+            }
             LogFormat::Ide => {
                 ide_attribution(line, &conversation_models, auth_error_model.as_deref())
             }
         };
+        // WorkBuddy 限额行必须有事件身份（行尾 `(requestId/sessionId)` 或 `sessionId=`）：
+        // 会话日志会把任意文本原样回显进文件（诊断命令、工具输出），无身份的行只能落到
+        // 分类器兜底上 —— 账号/模型都会错归（2026-09-18 glm 假 chip 实证）。宁可少显示。
+        if format == LogFormat::WorkBuddy && session_id.is_none() {
+            continue;
+        }
         hits.push(Hit {
             session_id,
             model,
@@ -387,11 +438,29 @@ fn scan_text(text: &str, format: LogFormat, auth: AuthMarker) -> Vec<Hit> {
     hits
 }
 
+/// 会话日志里的「传输行」：WorkBuddy 会把工具输出 / 命令回显整段塞进
+/// `[SandboxShell] ProcessOutput … content=`（及 Sandbox 系列的 stdout/stderr 摘要），
+/// 其中可能带着**别处日志的原文**——包括 429 行与其 requestId。按原样解析会把回显
+/// 当成真事件（截断行还会错落归因到回显会话的模型上，2026-09-18 实证 glm 假 chip、
+/// hitCount 虚高）。真实限额行（`[Interruption]` / `[Error: 429` 等）不含这些载体标记。
+fn is_transport_line(line: &str) -> bool {
+    line.contains("ProcessOutput")
+        || line.contains(" | content=")
+        || line.contains("stdout(")
+        || line.contains("stderr(")
+        || line.contains("sandbox attempt output")
+}
+
 /// WorkBuddy 格式（含 CLI）的事件 id 与模型归因。
 ///
-/// 事件 id 取行尾 `(requestId/sessionId)`，回退 `sessionId=`、分类行；模型走
+/// 事件 id 取行尾 `(requestId/sessionId)`，回退行内 `sessionId=`，再回退
+/// **紧随其后**（`CLASSIFIER_FALLBACK_MS` 内）的分类器行；模型走
 /// `requestId → model`（`[ModelProvider] Sending request`）→ 该会话最近一次
 /// `resolved model=` → 未知（不猜）。
+///
+/// ⚠️ 分类器兜底必须带时间窗：会话日志会把任意文本原样回显进文件（诊断命令、
+/// 工具输出），无时间窗时无身份的回显行会错归到「最近一次分类器会话」上
+/// （2026-09-18 glm 假 chip 实证）。
 fn workbuddy_attribution(
     line: &str,
     request_models: &HashMap<String, String>,
@@ -438,6 +507,16 @@ fn ide_attribution(
     (session_id, model)
 }
 
+/// `sdk/conversations/<会话UUID>.log` 的文件名就是会话 id；业务日志是
+/// `<工作区>__<hash>.log`，**不得**当会话 id 用（否则会把工作区名写进会话模型映射）。
+fn session_from_file_name(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    let looks_like_uuid = stem.len() == 36
+        && stem.matches('-').count() == 4
+        && stem.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    looks_like_uuid.then(|| stem.to_string())
+}
+
 fn scan_file(path: &Path, format: LogFormat, auth: AuthMarker, hits: &mut Vec<Hit>) {
     let Ok(bytes) = std::fs::read(path) else {
         return;
@@ -448,7 +527,11 @@ fn scan_file(path: &Path, format: LogFormat, auth: AuthMarker, hits: &mut Vec<Hi
     {
         return;
     }
-    hits.extend(scan_text(&String::from_utf8_lossy(&bytes), format, auth));
+    let text = String::from_utf8_lossy(&bytes);
+    match session_from_file_name(path) {
+        Some(session) => hits.extend(scan_text_scoped(&text, format, auth, Some(&session))),
+        None => hits.extend(scan_text(&text, format, auth)),
+    }
 }
 
 /// 枚举 → 粗筛 → 解析 → 去重，返回某个来源的限额事件。
@@ -578,7 +661,10 @@ fn line_timestamp(line: &str, format: LogFormat) -> Option<i64> {
             }
             let rest = trimmed.strip_prefix('[')?;
             let end = rest.find(']')?;
-            NaiveDateTime::parse_from_str(rest[..end].trim(), BUSINESS_TS_FORMAT).ok()?
+            let stamp = rest[..end].trim();
+            NaiveDateTime::parse_from_str(stamp, BUSINESS_TS_FORMAT)
+                .or_else(|_| NaiveDateTime::parse_from_str(stamp, BUSINESS_TS_ALT_FORMAT))
+                .ok()?
         }
         LogFormat::Ide => {
             let head = std::str::from_utf8(trimmed.as_bytes().get(..IDE_TS_LEN)?).ok()?;
@@ -1255,6 +1341,15 @@ static SCAN_CACHE: Mutex<Option<ScanCache>> = Mutex::new(None);
 /// 置位后下一次扫描按**全量**走一遍（只由装 / 卸 hook 置位）。
 static FORCE_FULL_SCAN: AtomicBool = AtomicBool::new(false);
 
+/// 补扫基线（进程级常驻）：对「hook 通路来源」补扫一次日志，结果保留整个进程生命周期。
+///
+/// 背景：装 hook **之前**发生的限额只存在于日志里（2026-09-18 实测：15:46 的 429 在 17:00 装 hook 后消失），
+/// 而 `scan_scope` 会把「已注册 hook」的来源排除，交给事件通路 —— 事件通路无法回溯历史。
+///
+/// ⚠️ 必须**常驻**：`cached_scan` 的缓存只有 5 分钟（`SCAN_MIN_INTERVAL_MS`），过期后会按当时范围重扫；
+/// 若把补扫结果只留在缓存里，5 分钟后就会被「不含 hook 来源」的空扫描结果覆盖 ⇒ 卡片上的限额又消失。
+static BACKFILL_BASE: std::sync::Mutex<Option<Vec<Resolved>>> = std::sync::Mutex::new(None);
+
 /// 只清缓存，不置「强制全量」：**开关类**范围变更（`scanIdeLogs`）用。
 ///
 /// 下一次 `get_rate_limits()` 按当前 scope 重扫——关掉 IDE 扫描后，缓存里的 IDE 旧条目随之消失，
@@ -1394,6 +1489,16 @@ pub fn get_rate_limits() -> Value {
         scan_scope(&ScanRoots::real(), scan_ide_logs)
     };
     let (scanned_at, mut resolved) = cached_scan(scope, now, enabled);
+    // 「hook 通路来源」补扫一次并常驻（历史限额只在日志里）；之后的增量交给事件通路。
+    if enabled {
+        let mut slot = BACKFILL_BASE.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(scan_sources(ScanScope(ScanScope::HOOK_SOURCES.0)));
+        }
+        if let Some(base) = slot.as_ref() {
+            resolved.extend(base.iter().cloned());
+        }
+    }
     resolved.extend(crate::modules::rate_limit_events::hook_entries(now));
     build_payload(resolved, if scanned_at > 0 { scanned_at } else { now })
 }
@@ -1436,6 +1541,97 @@ mod tests {
 
     fn business_line(timestamp: &str, body: &str) -> String {
         format!("[{timestamp}] [Error] [pid=1] {body}")
+    }
+
+    /// 业务日志有两种行首时间戳：12 小时制（`9/17/2026, 12:20:31 AM.232`）与
+    /// 24 小时制（`2026/9/18 15:46:30.242`，2026-09-18 本机实测）。只认前者时，
+    /// 后者会被整行跳过 —— 现象是台账始终为空。
+    /// SDK 会话日志：模型线索来自 `method:sendPrompt`，会话 id 来自文件名。
+    ///
+    /// 回归：修复前这类事件被标成「未知模型」（归因只认业务日志的 requestId / resolved model）。
+    #[test]
+    fn sdk_send_prompt_supplies_the_model_via_file_session() {
+        let session = "b3df1149-8a3f-4d73-b7a4-c71c46e15762";
+        let quota = cn_quota_with(session, CN_REQUEST, "2026-09-19 13:49:50");
+        let text = [
+            "2026-09-18T07:37:17.657Z method:sendPrompt {\"instanceId\":\"ci-3\",\"modelId\":\"hy4-preview-f\"}"
+                .to_string(),
+            format!("2026-09-18T07:40:22.997Z runtime.applyStopReason {{\"preview\":\"{quota}\"}}"),
+        ]
+        .join("\n");
+        let events = dedupe(scan_text_scoped(
+            &text,
+            LogFormat::WorkBuddy,
+            AuthMarker::None,
+            Some(session),
+        ));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].model.as_deref(), Some("hy4-preview-f"));
+        // 不给文件级会话 id 时保持上游行为（未知），避免把别的会话的模型误归因过来。
+        let without = dedupe(scan_text(&text, LogFormat::WorkBuddy, AuthMarker::None));
+        assert_eq!(without[0].model, None);
+    }
+
+    #[test]
+    fn accepts_both_business_timestamp_styles() {
+        for ts in ["9/17/2026, 12:20:31 AM.232", "2026/9/18 15:46:30.242"] {
+            let events = dedupe(workbuddy_hits(&business_line(ts, &cn_quota())));
+            assert_eq!(events.len(), 1, "时间戳 {ts} 未被解析");
+        }
+    }
+
+    /// WorkBuddy 限额行没有事件身份（无 `(requestId/sessionId)`、无 `sessionId=`）时
+    /// 必须丢弃 —— 哪怕前面有分类器行把「当前会话」指向了别处，也不能让回显文案
+    /// 借道分类器兜底入账（2026-09-18 glm 假 chip 实证）。
+    #[test]
+    fn workbuddy_quota_lines_without_event_identity_are_dropped() {
+        let text = [
+            // 分类器行把「当前会话」指向 glm 会话（修复前回显行借道它入账）。
+            "[2026/9/18 20:09:00.000] [Info] [pid=9999] [AgentClassifier] refusal classified category=quota sessionId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            &config_line("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "glm-5.3-flash"),
+            // 无身份的限额文案行（BashTool 命令回显的截断形态）。
+            "[2026/9/18 20:10:00.000] [Info] [pid=9999] [BashTool] execute start | command=\"grep 429 您的使用量已超出频率限制，将在 2026-09-19 13:49:50 UTC+8 重置 logs/\"",
+        ]
+        .join("\n");
+        let events = dedupe(workbuddy_hits(&text));
+        assert!(events.is_empty(), "无身份的限额文案行不得入账");
+    }
+
+    /// 传输行（Sandbox 回显 / 工具输出载体）里即使嵌着 429 原文，也不得当成真事件，
+    /// 更不得污染 requestId → model 的归因映射（2026-09-18 glm 假 chip 实证）。
+    #[test]
+    fn transport_lines_are_neither_events_nor_model_context() {
+        let other_session = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        let text = [
+            // 真事件：requestId → hy4-preview-f。
+            provider_line(CN_REQUEST, "hy4-preview-f"),
+            business_line("2026/9/18 15:46:30.242", &cn_quota()),
+            // 回显 A：截断的 429 行（requestId 不完整 → 会错落归因到回显会话的模型）。
+            // 回显会话此前「刚用过」glm —— 修复前会多出一条 glm 事件。
+            config_line(other_session, "glm-5.3-flash"),
+            format!(
+                "[2026/9/18 20:10:00.000] [Info] [pid=9999] [SandboxShell] ProcessOutput | processId=pipe-1 | stream=stdout | dataLen=1980 | content= 2026-09-19 13:49:50 UTC+8 重置，您也可以切换其他模型继续使用。 ({}/{}",
+                &CN_REQUEST[..12], other_session
+            ),
+            // 回显 B：完整 429 原文整行嵌在 content= 里（会被二次计数）。
+            format!(
+                "[2026/9/18 20:10:01.000] [Info] [pid=9999] [SandboxShell] ProcessOutput | processId=pipe-2 | stream=stdout | dataLen=900 | content=\"{}\"",
+                business_line("2026/9/18 15:46:30.242", &cn_quota())
+            ),
+            // 回显 C：模型上下文行也被回显 —— 不得写进 requestId → model 映射。
+            format!(
+                "[2026/9/18 20:10:02.000] [Info] [pid=9999] [SandboxShell] ProcessOutput | processId=pipe-3 | stream=stdout | dataLen=220 | content=[ModelProvider] Sending request: agent=cli, model=glm-5.3-flash, requestId=zzz{}, stream=true",
+                &CN_REQUEST[3..]
+            ),
+        ]
+        .join("\n");
+        let events = dedupe(workbuddy_hits(&text));
+        assert_eq!(events.len(), 1, "回显行不得产生事件");
+        assert_eq!(
+            events[0].model.as_deref(),
+            Some("hy4-preview-f"),
+            "归因必须来自真实 Sending request 行，而不是回显"
+        );
     }
 
     /// 中文限额文案（`session` / `request` / `reset` 可替换，便于构造多条事件）。
