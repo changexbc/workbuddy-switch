@@ -317,24 +317,26 @@ pub async fn switch_account(
     restart: Option<bool>,
     share_sessions: Option<bool>,
     copy_session_ids: Option<Vec<String>>,
+    align_automations: Option<bool>,
+    align_files: Option<bool>,
+    dry_run: Option<bool>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
         return Err("缺少 accountId".to_string());
     }
-    let restart = restart.unwrap_or(true);
-    let share_sessions = share_sessions.unwrap_or(false);
-    let copy_ids = copy_session_ids.unwrap_or_default();
+    let opts = switch::SwitchOptions {
+        restart: restart.unwrap_or(true),
+        share_sessions: share_sessions.unwrap_or(false),
+        copy_session_ids: copy_session_ids.unwrap_or_default(),
+        align_automations: align_automations.unwrap_or(true),
+        align_files: align_files.unwrap_or(false),
+        dry_run: dry_run.unwrap_or(false),
+    };
     let progress: switch::ProgressFn = Box::new(move |message| {
         let _ = app.emit("switch-progress", json!({ "message": message }));
     });
     tauri::async_runtime::spawn_blocking(move || {
-        switch::switch_account(
-            Some(&progress),
-            &account_id,
-            restart,
-            share_sessions,
-            &copy_ids,
-        )
+        switch::switch_account(Some(&progress), &account_id, &opts)
     })
     .await
     .map_err(|e| e.to_string())?

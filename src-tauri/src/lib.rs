@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod commands;
+mod commands_local;
 #[cfg(target_os = "macos")]
 mod instance_lock;
 #[cfg(desktop)]
@@ -192,6 +193,7 @@ pub fn run() {
             commands::export_accounts_to_path,
             commands::preview_import_accounts,
             commands::import_accounts,
+            commands_local::align_automations,
             commands::switch_account,
             commands::list_sessions,
             commands::copy_sessions,
