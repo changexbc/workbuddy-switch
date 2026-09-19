@@ -1,6 +1,7 @@
 pub mod account;
 pub mod auth_file;
 pub mod checkin;
+pub mod cloud_conv;
 pub mod codebuddy_cli;
 pub mod codebuddy_cn_ide;
 pub mod codebuddy_ide;
@@ -17,6 +18,7 @@ pub mod rate_limit_hook;
 pub mod refresh;
 pub mod rotate;
 pub mod session;
+pub mod session_share;
 pub mod switch;
 pub mod token_stats;
 pub mod travel;

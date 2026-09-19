@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { AlignOptionsPanel } from "@/components/align-options";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
 import { accountVariant, variantAppName } from "@/lib/variant";
@@ -34,6 +35,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [copySessions, setCopySessions] = useState(false);
+  const [autoLink, setAutoLink] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 展开的节点：任务 / 空间 / 文件夹。默认全部收起。 */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -67,6 +69,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   useEffect(() => {
     if (open && account) {
       setCopySessions(false);
+      setAutoLink(true);
       setSelected(new Set());
       setExpanded(new Set());
       setError("");
@@ -120,9 +123,21 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       const res = await api.switchAccount({
         accountId: account.id,
         copySessionIds: requestedCopy ? [...selected] : undefined,
+        autoLink: autoLink,
       });
       const nickname = account.nickname || account.email || account.uid || "该账号";
       const parts: string[] = [];
+      if (res.autoLink?.copied.length) {
+        const n = res.autoLink.copied.length;
+        const extras: string[] = [];
+        if (res.autoLink.alreadyCopied) extras.push(`${res.autoLink.alreadyCopied} 条本来就有`);
+        if (res.autoLink.beyondKeep) extras.push(`${res.autoLink.beyondKeep} 条超出范围，留在原账号`);
+        parts.push(
+          `已共享 ${n} 条会话` + (extras.length ? `（${extras.join("，")}）` : ""),
+        );
+      } else if (res.autoLink && !res.autoLink.copied.length && res.autoLink.alreadyCopied) {
+        parts.push("目标账号已有全部会话，本轮没有需要共享的");
+      }
       const copyError = res.sessionCopy?.error;
       const copiedCount = res.sessionCopy?.copied?.length ?? 0;
       if (copiedCount > 0) {
@@ -403,6 +418,11 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
             </Alert>
           )}
         </div>
+
+        <AlignOptionsPanel
+          value={{ autoLink }}
+          onChange={(v) => setAutoLink(v.autoLink)}
+        />
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>

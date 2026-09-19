@@ -110,14 +110,14 @@ fn nonempty_text(value: Option<String>) -> Option<String> {
 }
 
 /// WorkBuddy 侧栏展示名：优先 custom_title（用户改名 / 定时任务名），否则 title。
-fn session_display_title(title: Option<String>, custom_title: Option<String>) -> String {
+pub(crate) fn session_display_title(title: Option<String>, custom_title: Option<String>) -> String {
     nonempty_text(custom_title)
         .or_else(|| nonempty_text(title))
         .unwrap_or_else(|| "(无标题)".to_string())
 }
 
 /// Claw 是账号绑定的 IM 渠道工作区，复制会话行不够，目标账号也用不了。
-fn is_claw_workspace(cwd: &str) -> bool {
+pub(crate) fn is_claw_workspace(cwd: &str) -> bool {
     cwd.trim()
         .trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
@@ -198,7 +198,7 @@ pub fn list_sessions_for_user(variant: WbVariant, uid: &str) -> Value {
 }
 
 /// 在 `{档位数据根}/projects/{workspace}/{cid}.jsonl` 定位会话正文。
-fn find_project_jsonl(variant: WbVariant, cid: &str) -> Option<PathBuf> {
+pub(crate) fn find_project_jsonl(variant: WbVariant, cid: &str) -> Option<PathBuf> {
     let projects = variant.data_root().join("projects");
     if !projects.is_dir() {
         return None;
@@ -220,7 +220,7 @@ fn find_project_jsonl(variant: WbVariant, cid: &str) -> Option<PathBuf> {
 }
 
 /// 备份 workbuddy.db（含 -wal/-shm），返回主库备份路径。对照 `backup_workbuddy_db`。
-fn backup_workbuddy_db(variant: WbVariant, backup_root: &Path) -> Option<PathBuf> {
+pub(crate) fn backup_workbuddy_db(variant: WbVariant, backup_root: &Path) -> Option<PathBuf> {
     let db = workbuddy_db_path(variant);
     if !db.is_file() {
         return None;
@@ -297,7 +297,7 @@ pub fn copy_session_to_user(
 /// 在 workbuddy.db 中把源会话行复制为新 id（动态列，覆盖 id/user_id/时间戳）。
 ///
 /// db 不存在或 sessions 表不存在时静默成功（对应 Python 版跳过）。源行不存在则无操作。
-fn insert_session_copy(
+pub(crate) fn insert_session_copy(
     db_path: &Path,
     new_cid: &str,
     cid: &str,
@@ -359,7 +359,7 @@ fn insert_session_copy(
 }
 
 /// 把新会话注册进 edge_sync_mapping（云端归属关键）。失败不致命，返回 False。
-fn register_edge_sync_mapping(variant: WbVariant, new_cid: &str, target_uid: &str) -> bool {
+pub(crate) fn register_edge_sync_mapping(variant: WbVariant, new_cid: &str, target_uid: &str) -> bool {
     insert_edge_sync_mapping(&edge_sync_db_path(variant), new_cid, target_uid)
 }
 
