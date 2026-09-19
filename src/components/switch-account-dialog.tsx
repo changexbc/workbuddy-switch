@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { AlignOptionsPanel } from "@/components/align-options";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
 import { accountVariant, variantAppName } from "@/lib/variant";
@@ -34,6 +35,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [copySessions, setCopySessions] = useState(false);
+  const [alignAutomations, setAlignAutomations] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 展开的节点：任务 / 空间 / 文件夹。默认全部收起。 */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -67,6 +69,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   useEffect(() => {
     if (open && account) {
       setCopySessions(false);
+      setAlignAutomations(true);
       setSelected(new Set());
       setExpanded(new Set());
       setError("");
@@ -120,9 +123,13 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       const res = await api.switchAccount({
         accountId: account.id,
         copySessionIds: requestedCopy ? [...selected] : undefined,
+        alignAutomations: alignAutomations,
       });
       const nickname = account.nickname || account.email || account.uid || "该账号";
       const parts: string[] = [];
+      if (res.alignData?.automations) {
+        parts.push(`已带走 ${res.alignData.automations.updated} 个定时任务`);
+      }
       const copyError = res.sessionCopy?.error;
       const copiedCount = res.sessionCopy?.copied?.length ?? 0;
       if (copiedCount > 0) {
@@ -403,6 +410,11 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
             </Alert>
           )}
         </div>
+
+        <AlignOptionsPanel
+          value={{ alignAutomations }}
+          onChange={(v) => setAlignAutomations(v.alignAutomations)}
+        />
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>

@@ -1,4 +1,5 @@
 pub mod account;
+pub mod automations;
 pub mod auth_file;
 pub mod checkin;
 pub mod codebuddy_cli;
@@ -11,6 +12,7 @@ pub mod export_import;
 pub mod limits;
 pub mod oauth;
 pub mod official_usage;
+pub mod oplog;
 pub mod process;
 pub mod rate_limit_events;
 pub mod rate_limit_hook;
