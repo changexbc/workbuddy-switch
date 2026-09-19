@@ -31,11 +31,24 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = build_tray_menu(app)?;
 
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(menu_bar_icon())
-        .icon_as_template(true)
+        .icon(tray_icon())
+        // 模板图标（系统按明暗自适应着色）是 macOS 独有的语义；
+        // Windows/Linux 会忽略该标记并直接贴原始像素，用单色剪影会显示成纯白方块。
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip(DEFAULT_TOOLTIP)
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        // 菜单仅在右键单击时弹出；左键单击唤起主界面（见 on_tray_icon_event）。
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open-main-window" => show_main_window(app),
             "open-github" => open_github(app),
@@ -489,12 +502,31 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         .build()
 }
 
-fn menu_bar_icon() -> tauri::image::Image<'static> {
+/// macOS 托盘图标：单色模板素材（系统按明暗主题自动着色）。
+///
+/// 注意：函数名 `tray_icon` 为跨平台统称；macOS 侧历史名为 `menu_bar_icon`。
+#[cfg(target_os = "macos")]
+fn tray_icon() -> tauri::image::Image<'static> {
     const ICON: &[u8; 36 * 36 * 4] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/icons/tray-icon-template.rgba"
     ));
     tauri::image::Image::new(ICON, 36, 36)
+}
+
+/// Windows / Linux 托盘图标：彩色应用图标。
+///
+/// 为什么不能用模板素材：Windows 没有「模板图标」概念，`icon_as_template` 会被忽略，
+/// 单色（白）剪影在浅色任务栏上会显示为纯白方块（深色任务栏则几乎不可见）。
+/// 这里直接用 32×32 彩色素材（贴近 Windows 托盘实际尺寸，减少系统二次缩放导致的模糊）（由 `scripts/gen-tray-icon.py` 预解码入库为 raw RGBA，
+/// 避免为此启用 `image-png` feature 引入 PNG 解码依赖）。
+#[cfg(not(target_os = "macos"))]
+fn tray_icon() -> tauri::image::Image<'static> {
+    const ICON: &[u8; 32 * 32 * 4] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/icons/tray-icon-color.rgba"
+    ));
+    tauri::image::Image::new(ICON, 32, 32)
 }
 
 fn format_checkin_tooltip(value: &Value) -> String {
@@ -534,7 +566,7 @@ fn format_checkin_tooltip(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_checkin_tooltip, is_silent_startup, menu_bar_icon, should_activate_on_second_launch,
+        format_checkin_tooltip, is_silent_startup, tray_icon, should_activate_on_second_launch,
         should_keep_tray_alive,
     };
     use serde_json::json;
@@ -545,15 +577,38 @@ mod tests {
         assert!(!should_keep_tray_alive(Some(0)));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn menu_bar_icon_has_transparency_and_antialiasing() {
-        let icon = menu_bar_icon();
+    fn tray_icon_has_transparency_and_antialiasing() {
+        let icon = tray_icon();
         assert_eq!((icon.width(), icon.height()), (36, 36));
         assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] == 0));
         assert!(icon
             .rgba()
             .chunks_exact(4)
             .any(|pixel| (1..=254).contains(&pixel[3])));
+    }
+
+
+    /// 非 macOS 平台：托盘图标必须是**彩色**的，避免再次退化成白块。
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn tray_icon_is_colored_and_opaque() {
+        let icon = tray_icon();
+        assert_eq!((icon.width(), icon.height()), (32, 32));
+        let px: Vec<&[u8]> = icon.rgba().chunks_exact(4).collect();
+        assert!(px.iter().any(|p| p[3] == 255), "应存在不透明像素");
+        assert!(
+            px.iter().any(|p| p[3] == 0),
+            "背景必须透明：满幅不透明方图会在深色任务栏上显示为白底方块"
+        );
+        let colored = px
+            .iter()
+            .filter(|p| p[3] > 200)
+            .any(|p| (p[0] as i32 - p[1] as i32).abs() > 12
+                || (p[1] as i32 - p[2] as i32).abs() > 12
+                || (p[0] as i32 - p[2] as i32).abs() > 12);
+        assert!(colored, "托盘图标必须是彩色的（Windows 不支持模板图标语义）");
     }
 
     #[test]
