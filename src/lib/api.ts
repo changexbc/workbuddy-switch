@@ -82,6 +82,7 @@ type Route = { method: "GET" | "POST"; path: string };
 const ROUTES: Record<string, Route> = {
   get_status: { method: "GET", path: "/api/status" },
   get_accounts: { method: "GET", path: "/api/accounts" },
+  align_automations: { method: "POST", path: "/api/automations/align" },
   get_codebuddy_cli_status: { method: "GET", path: "/api/codebuddy-cli/status" },
   install_codebuddy_cli_helper: { method: "POST", path: "/api/codebuddy-cli/install-helper" },
   switch_codebuddy_cli_account: { method: "POST", path: "/api/codebuddy-cli/switch" },
@@ -326,11 +327,20 @@ export function switchAccount(args: {
   restart?: boolean;
   shareSessions?: boolean;
   copySessionIds?: string[];
+  /** 带走定时任务：把定时任务归属对齐到目标账号（后端默认开）。 */
+  alignAutomations?: boolean;
+  /** 同步设置与文件：设置/主题/用户数据按目标账号补齐（后端默认关）。 */
+  alignFiles?: boolean;
 }): Promise<SwitchResult> {
   return call("switch_account", args as unknown as Record<string, unknown>);
 }
 
 /** 切换进度（webui 轮询用；桌面端走事件，此函数无副作用）。 */
+/** 不切号，把定时任务归属立即对齐到指定账号（需先完全退出 WorkBuddy）。 */
+export function alignAutomations(accountId: string): Promise<SwitchResult["alignData"]> {
+  return call("align_automations", { accountId });
+}
+
 export function switchProgress(): Promise<{ running: boolean; progress: string | null }> {
   return call("switch_progress");
 }

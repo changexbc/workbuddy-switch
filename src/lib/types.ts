@@ -118,6 +118,21 @@ export interface SwitchResult {
   variant?: WbVariant;
   backup: string | null;
   sessionCopy?: SessionCopyReport;
+  /** 切号时的数据对齐报告（本版本含「带走定时任务」与「同步设置与文件」）。 */
+  alignData?: {
+    /** 定时任务归属对齐：updated = 改了几行，outbox = 投递队列被改的行数。 */
+    automations?: { updated: number; outbox: number };
+    /** 设置同步：应用设置深合并 / 用户数据补齐 / 账号资料 / 我的文件 / 界面主题。 */
+    settings?: {
+      sourceUid?: string | null;
+      claw?: { changed: number; skipped?: boolean };
+      storage?: { copied: number; skipped: number; deferred: number };
+      memory?: { changed: boolean };
+      myFiles?: { files: number; changed: number };
+      theme?: Record<string, unknown>;
+    };
+    error?: string;
+  };
 }
 
 export interface CheckinConfig {
