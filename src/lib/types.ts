@@ -22,6 +22,22 @@ export interface AccountMeta {
   variant?: WbVariant;
 }
 
+/** 本机曾登录/留有数据的账号（discover 结果，只读视图）。 */
+export interface DiscoveredAccount {
+  uid: string;
+  nickname: string | null;
+  email: string | null;
+  /** auth-history = 官方登录历史备份（含凭据，可补录）；residual = 仅数据残留 */
+  source: "auth-history" | "residual";
+  backupFiles: number;
+  backedUpAt: number | null;
+  inAccountList: boolean;
+  accessTokenExpiresAt: number | null;
+  refreshTokenExpiresAt: number | null;
+  /** 有 auth 历史备份且 refresh token 未过期，可一键补录 */
+  restorable: boolean;
+}
+
 export interface AppStatus {
   running: boolean;
   authFile: string;

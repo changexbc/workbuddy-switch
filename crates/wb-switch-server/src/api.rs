@@ -142,6 +142,8 @@ pub fn router() -> Router {
             get(api_update_config).post(api_save_update_config),
         )
         .fallback(static_handler)
+        // 本地新增接口（账号发现 / 补录）集中在 api_local.rs
+        .merge(crate::api_local::router())
 }
 
 fn json_ok(v: Value) -> Response {
