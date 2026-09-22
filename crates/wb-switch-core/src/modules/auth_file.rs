@@ -261,7 +261,8 @@ pub fn import_from_auth_file(variant: WbVariant) -> Option<Value> {
     imported_account_from_root(read_auth_file(variant)?, variant)
 }
 
-fn imported_account_from_root(root: Value, variant: WbVariant) -> Option<Value> {
+/// 从认证文件 root JSON 构造账号库记录。同文件 discover 模块复用（补录用）。
+pub(crate) fn imported_account_from_root(root: Value, variant: WbVariant) -> Option<Value> {
     let account_obj = root
         .get("account")
         .filter(|v| v.is_object())

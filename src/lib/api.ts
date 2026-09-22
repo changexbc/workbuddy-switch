@@ -15,6 +15,7 @@ import type {
   CheckinResult,
   CreditExpiry,
   CreditStatistics,
+  DiscoveredAccount,
   TokenStatistics,
   GithubConfig,
   ImportPreviewAccount,
@@ -56,7 +57,7 @@ const DEMO_READ_COMMANDS = new Set([
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
   "get_github_config", "check_update", "get_launch_at_login_enabled", "switch_progress",
-  "get_travel_status", "get_auto_travel_config", "get_rate_limits",
+  "discover_known_accounts", "get_travel_status", "get_auto_travel_config", "get_rate_limits",
   "get_rate_limit_hook_status", "get_rate_limit_config",
 ]);
 
@@ -89,6 +90,8 @@ type Route = { method: "GET" | "POST"; path: string };
 const ROUTES: Record<string, Route> = {
   get_status: { method: "GET", path: "/api/status" },
   get_accounts: { method: "GET", path: "/api/accounts" },
+  discover_known_accounts: { method: "GET", path: "/api/accounts/discover" },
+  adopt_account: { method: "POST", path: "/api/accounts/adopt" },
   get_codebuddy_cli_status: { method: "GET", path: "/api/codebuddy-cli/status" },
   install_codebuddy_cli_helper: { method: "POST", path: "/api/codebuddy-cli/install-helper" },
   switch_codebuddy_cli_account: { method: "POST", path: "/api/codebuddy-cli/switch" },
@@ -215,6 +218,16 @@ export function getStatus(variant?: WbVariant): Promise<AppStatus> {
 /** 返回全部档位的账号，由调用方按 `variant` 过滤。 */
 export function getAccounts(): Promise<{ accounts: AccountMeta[] }> {
   return call("get_accounts");
+}
+
+/** 识别本机曾登录/留有数据的账号（对照在册，只读）。 */
+export function discoverKnownAccounts(): Promise<{ accounts: DiscoveredAccount[] }> {
+  return call("discover_known_accounts");
+}
+
+/** 用最新 auth 历史备份补录指定 uid 进账号库。 */
+export function adoptAccount(uid: string): Promise<{ ok: boolean; account: AccountMeta }> {
+  return call("adopt_account", { uid });
 }
 
 export function getCodebuddyCliStatus(): Promise<CodeBuddyCliStatus> {
