@@ -468,44 +468,15 @@ export function revealAppInFinder(): Promise<void> {
 
 export async function getCheckinStatus(accountId: string): Promise<{
   ok: boolean;
-  todayCheckedIn: boolean;
+  todayCheckedIn?: boolean;
+  result?: string;
+  reason?: string;
   error?: string;
   raw?: unknown;
   /** 该行所属档位（档位取账号自身）；缺省按国内版处理。 */
   variant?: WbVariant;
 }> {
-  if (demoModeEnabled) {
-    return screenshotDemoResponse("get_checkin_status", { accountId }) as {
-      ok: boolean;
-      todayCheckedIn: boolean;
-      error?: string;
-      raw?: unknown;
-    };
-  }
-  if (isWebui()) {
-    // webui 端为批量接口，按 accountId 过滤
-    const all = await httpCall<{
-      accounts: {
-        accountId: string;
-        email: string;
-        ok: boolean;
-        todayCheckedIn: boolean;
-        error?: string;
-        raw?: unknown;
-        variant?: WbVariant;
-      }[];
-    }>("get_checkin_status");
-    const one = all.accounts.find((a) => a.accountId === accountId);
-    return one
-      ? {
-          ok: one.ok,
-          todayCheckedIn: one.todayCheckedIn,
-          error: one.error,
-          raw: one.raw,
-          variant: one.variant,
-        }
-      : { ok: false, todayCheckedIn: false, error: "未找到账号" };
-  }
+  // 两个宿主都只查询目标账号；Web 端不再为每个账号重复请求整份列表。
   return call("get_checkin_status", { accountId });
 }
 
@@ -561,17 +532,18 @@ export function checkin(accountId: string): Promise<CheckinResult> {
 
 /**
  * 批量签到：不传档位时覆盖全部档位；显式传入时只处理该档位。
+ * 刷新积分时传 respectAutoCheckin=true，跳过已关闭账号并返回逐账号原因；主动全部签到缺省不跳过。
  *
  * 这里**不能**用 `variantArgs`：`checkin_all` 的缺省语义是「全部档位」，国内版若
  * 缺省不传参，账号页在国内版 Tab 触发的批量签到会打到国际版账号。显式下发 `cn`
  * 与改造前等价（改造前账号库里只有国内版账号）。
  */
-export function checkinAll(variant?: WbVariant): Promise<{
-  accounts: { accountId: string; email: string; result: string; error?: string; inactive?: boolean }[];
+export function checkinAll(variant?: WbVariant, respectAutoCheckin = false): Promise<{
+  accounts: { accountId: string; email: string; result: string; error?: string; inactive?: boolean; reason?: string }[];
   status?: string;
   reason?: string;
 }> {
-  return call("checkin_all", variant ? { variant } : undefined);
+  return call("checkin_all", { ...(variant ? { variant } : {}), respectAutoCheckin });
 }
 
 export function getAutoCheckinConfig(): Promise<CheckinConfig> {

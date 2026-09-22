@@ -13,6 +13,7 @@ import { TimePicker } from "@/components/ui/time-picker";
 import * as api from "@/lib/api";
 import { getThemePreference, setThemePreference, type ThemePreference } from "@/lib/theme";
 import type {
+  AccountMeta,
   AppNotification,
   AutoRotateConfig,
   CheckinConfig,
@@ -27,7 +28,7 @@ import type {
 } from "@/lib/types";
 import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
 import { cn } from "@/lib/utils";
-import { variantSupportsTravel } from "@/lib/variant";
+import { accountVariant, variantSupportsCheckin, variantSupportsTravel } from "@/lib/variant";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { DemoAction } from "@/components/demo-action";
 import { useAccountsStore } from "@/stores/accounts";
@@ -109,6 +110,8 @@ interface CollapsibleSettingsRowProps {
   onToggle: () => void;
   /** 展开/收起之外的附加操作（如通知历史的「清空」）。 */
   actions?: ReactNode;
+  /** 位于卡片中段的行保留收起态分隔线；末行（默认）不需要。 */
+  divider?: boolean;
   children: ReactNode;
 }
 
@@ -125,12 +128,13 @@ function CollapsibleSettingsRow({
   open,
   onToggle,
   actions,
+  divider = false,
   children,
 }: CollapsibleSettingsRowProps) {
   return (
     <>
       <SettingsFieldRow
-        className={open ? undefined : "border-b-0"}
+        className={open || divider ? undefined : "border-b-0"}
         label={label}
         description={description}
       >
@@ -198,9 +202,16 @@ function checkinWindowIssue(start: string, end: string): string | null {
 function AutoCheckinCard() {
   /** 自动旅行与自动签到同卡，按档位决定是否渲染该行（国际版无成长中心）。 */
   const variant = useAccountsStore((s) => s.variant);
+  const accounts = useAccountsStore((s) => s.accounts);
+  const fetchAll = useAccountsStore((s) => s.fetchAll);
   const [cfg, setCfg] = useState<CheckinConfig | null>(null);
+  /** 最近一次落盘的配置：逐账号开关只提交它 + 新名单，不带上未保存的参数草稿。 */
+  const [savedCfg, setSavedCfg] = useState<CheckinConfig | null>(null);
   /** 参数区（时间段 / 保活阈值 / 惰性刷新）默认收起；开关行与操作行常驻。 */
   const [expanded, setExpanded] = useState(false);
+  /** 逐账号开关列表默认收起。 */
+  const [excludedOpen, setExcludedOpen] = useState(false);
+  const [excludedSaving, setExcludedSaving] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [logs, setLogs] = useState<CheckinLog[] | null>(null);
   const [logsError, setLogsError] = useState("");
@@ -211,6 +222,11 @@ function AutoCheckinCard() {
   useEffect(() => {
     void loadConfig();
   }, []);
+
+  // 账号列表来自全局 store：为空时补拉一次（只取状态与账号，不拉积分）。
+  useEffect(() => {
+    if (accounts.length === 0) void fetchAll();
+  }, [accounts.length, fetchAll]);
 
   // 日志懒加载：展开时才请求，每次展开重新拉取；收起态无可见列表，不请求。
   useEffect(() => {
@@ -224,7 +240,9 @@ function AutoCheckinCard() {
 
   async function loadConfig() {
     try {
-      setCfg(await api.getAutoCheckinConfig());
+      const loaded = await api.getAutoCheckinConfig();
+      setCfg(loaded);
+      setSavedCfg(loaded);
     } catch (e) {
       setMsg({ type: "err", text: api.asError(e) });
     }
@@ -243,12 +261,13 @@ function AutoCheckinCard() {
   }
 
   async function save() {
-    if (!cfg) return;
+    if (!cfg || saving || excludedSaving) return;
     setSaving(true);
     setMsg(null);
     try {
       const saved = await api.saveAutoCheckinConfig(cfg);
       setCfg(saved);
+      setSavedCfg(saved);
       setMsg({ type: "ok", text: "配置已保存" });
     } catch (e) {
       setMsg({ type: "err", text: api.asError(e) });
@@ -258,6 +277,7 @@ function AutoCheckinCard() {
   }
 
   async function checkinAllNow() {
+    if (busy || saving || excludedSaving) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -286,11 +306,46 @@ function AutoCheckinCard() {
     }
   }
 
+  /**
+   * 逐账号开关：切换即落盘，提交「上次落盘的配置 + 新名单」。
+   *
+   * 不带上当前草稿的时间段/阈值，避免把未保存的参数一起写盘；成功后只回填名单，
+   * 失败则回滚开关状态并提示。
+   */
+  async function onAutoCheckinChange(account: AccountMeta, allowed: boolean) {
+    if (!savedCfg || saving || excludedSaving) return;
+    const previous = savedCfg;
+    const excluded = new Set(previous.excluded_account_ids ?? []);
+    if (allowed) excluded.delete(account.id);
+    else excluded.add(account.id);
+    const next = [...excluded];
+    setCfg((current) => (current ? { ...current, excluded_account_ids: next } : current));
+    setMsg(null);
+    setExcludedSaving(true);
+    try {
+      const saved = await api.saveAutoCheckinConfig({ ...previous, excluded_account_ids: next });
+      setSavedCfg(saved);
+      setCfg((current) =>
+        current ? { ...current, excluded_account_ids: saved.excluded_account_ids ?? [] } : current,
+      );
+    } catch (e) {
+      setCfg((current) =>
+        current ? { ...current, excluded_account_ids: previous.excluded_account_ids ?? [] } : current,
+      );
+      toast.error("账号自动签到设置保存失败", { description: api.asError(e) });
+    } finally {
+      setExcludedSaving(false);
+    }
+  }
+
   function setNum(key: keyof CheckinConfig, value: string) {
     if (!cfg) return;
     setCfg({ ...cfg, [key]: Number(value) });
   }
 
+  /** 逐账号开关只列出支持签到的档位（国际版签到接口未开放）。 */
+  const checkinAccounts = accounts.filter((account) => variantSupportsCheckin(accountVariant(account)));
+  const excludedIds = new Set(cfg?.excluded_account_ids ?? []);
   const windowIssue = cfg ? checkinWindowIssue(cfg.checkin_start, cfg.checkin_end) : null;
 
   return (
@@ -303,7 +358,7 @@ function AutoCheckinCard() {
           <>
             <SettingsFieldRow
               label="启用自动签到"
-              description="启动时立即核验服务端状态，未签到账号会自动补签"
+              description="为允许自动签到的账号核验状态并补签；可在下方按账号关闭"
               htmlFor="ac-enabled"
             >
               <div className="flex items-center gap-2">
@@ -320,6 +375,43 @@ function AutoCheckinCard() {
                 </Button>
               </div>
             </SettingsFieldRow>
+
+            {/* 逐账号开关：切换即落盘，与同卡片「保存配置」的参数草稿互不影响。 */}
+            <CollapsibleSettingsRow
+              label="不参与自动签到的账号"
+              description="关闭后，后台轮次与刷新积分时跳过该账号；仍可手动签到。"
+              open={excludedOpen}
+              onToggle={() => setExcludedOpen((value) => !value)}
+              divider
+            >
+              {checkinAccounts.length === 0 ? (
+                <p className="py-2 text-xs text-muted-foreground">暂无可签到的账号</p>
+              ) : (
+                <div className="py-0.5">
+                  {checkinAccounts.map((account) => {
+                    const name = account.nickname || account.email || account.uid || account.id;
+                    return (
+                      <div
+                        key={account.id}
+                        className="flex min-w-0 items-center justify-between gap-3 border-b border-border/60 py-2 last:border-b-0"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[13px] leading-4" title={name}>
+                          {name}
+                        </span>
+                        <DemoAction>
+                          <Switch
+                            checked={!excludedIds.has(account.id)}
+                            disabled={saving || excludedSaving}
+                            onCheckedChange={(allowed) => void onAutoCheckinChange(account, allowed)}
+                            aria-label={`${name}参与自动签到`}
+                          />
+                        </DemoAction>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CollapsibleSettingsRow>
 
             {expanded && (
               <>
@@ -403,10 +495,10 @@ function AutoCheckinCard() {
             )}
 
             <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-              <DemoAction><Button size="sm" onClick={save} disabled={saving}>
+              <DemoAction><Button size="sm" onClick={save} disabled={saving || excludedSaving}>
                 {saving ? <Loader2 className="animate-spin" /> : <Save />}保存配置
               </Button></DemoAction>
-              <DemoAction><Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy}>
+              <DemoAction><Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy || saving || excludedSaving}>
                 {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}全部立即签到
               </Button></DemoAction>
             </div>

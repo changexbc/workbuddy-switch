@@ -274,6 +274,7 @@ fn legacy_default_checkin_config() -> Value {
 fn checkin_config_with_enabled(enabled: bool) -> Value {
     json!({
         "enabled": enabled,
+        "excluded_account_ids": [],
         "checkin_start": "",
         "checkin_end": "",
         "start_hour": 6,
@@ -309,6 +310,16 @@ fn apply_checkin_config(merged: &mut Value, input: &Value) {
     };
     if let Some(enabled) = map.get("enabled").and_then(Value::as_bool) {
         merged["enabled"] = json!(enabled);
+    }
+    // 仅用稳定账号 id 排除自动签到；忽略无效项并去重，旧配置默认全部参与。
+    if let Some(ids) = map.get("excluded_account_ids").and_then(Value::as_array) {
+        let mut seen = HashSet::new();
+        let ids: Vec<&str> = ids
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|id| !id.trim().is_empty() && seen.insert(*id))
+            .collect();
+        merged["excluded_account_ids"] = json!(ids);
     }
     for key in [
         "start_hour",
@@ -1105,6 +1116,7 @@ mod tests {
     fn auto_checkin_defaults_disabled_and_preserves_legacy_fields() {
         let cfg = default_checkin_config();
         assert_eq!(cfg.get("enabled").and_then(Value::as_bool), Some(false));
+        assert_eq!(cfg["excluded_account_ids"], json!([]));
         assert_eq!(cfg.get("start_hour").and_then(Value::as_i64), Some(6));
         assert_eq!(cfg.get("end_hour").and_then(Value::as_i64), Some(12));
 
@@ -1115,6 +1127,64 @@ mod tests {
             legacy.get("lazy_refresh_hours").and_then(Value::as_i64),
             Some(24)
         );
+    }
+
+    #[test]
+    fn auto_checkin_exclusions_survive_config_roundtrip_and_global_toggle() {
+        let cfg = merge_checkin_config(&json!({
+            "enabled": true,
+            "excluded_account_ids": ["account-b", "account-a", "account-b", "", "  ", null, 42],
+            "checkin_start": "9:5",
+            "checkin_end": "12:00",
+            "keepalive_days": 7
+        }));
+        assert_eq!(
+            cfg["excluded_account_ids"],
+            json!(["account-b", "account-a"])
+        );
+        let serialized = serde_json::to_string(&cfg).unwrap();
+        let mut reloaded: Value = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(merge_checkin_config(&reloaded), cfg);
+        reloaded["enabled"] = json!(false);
+        let disabled = merge_checkin_config(&reloaded);
+        assert_eq!(
+            disabled["excluded_account_ids"],
+            cfg["excluded_account_ids"]
+        );
+        assert_eq!(disabled["checkin_start"], "09:05");
+        assert_eq!(disabled["keepalive_days"], 7);
+    }
+
+    #[test]
+    fn auto_checkin_legacy_or_invalid_exclusions_default_to_empty() {
+        assert_eq!(
+            merge_checkin_config(&json!({}))["excluded_account_ids"],
+            json!([])
+        );
+        for invalid in [
+            json!(null),
+            json!(true),
+            json!("account-a"),
+            json!({"id": "account-a"}),
+        ] {
+            assert_eq!(
+                merge_checkin_config(&json!({"excluded_account_ids": invalid}))
+                    ["excluded_account_ids"],
+                json!([])
+            );
+        }
+    }
+
+    #[test]
+    fn auto_checkin_exclusions_survive_usage_trace_defaults() {
+        let input = json!({"excluded_account_ids": ["account-a", "account-a", null]});
+        for existing_install in [false, true] {
+            let resolved = resolve_checkin_config(Some(&input), existing_install);
+            assert_eq!(resolved["enabled"], json!(existing_install));
+            assert_eq!(resolved["excluded_account_ids"], json!(["account-a"]));
+            // 保存已解析配置后，新老安装均保留开关状态和账号排除列表。
+            assert_eq!(merge_checkin_config(&resolved), resolved);
+        }
     }
 
     #[test]

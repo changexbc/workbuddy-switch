@@ -17,6 +17,7 @@ use chrono::{Local, TimeZone};
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -222,6 +223,17 @@ pub async fn get_checkin_status(account: &Value) -> Value {
     })
 }
 
+/// 页面展示触发的状态查询遵守单账号开关；手动签到内部仍直接查询服务端。
+pub async fn get_checkin_status_for_display(account: &Value) -> Value {
+    with_auto_checkin_preference(
+        account,
+        &load_checkin_config(),
+        true,
+        get_checkin_status(account),
+    )
+    .await
+}
+
 /// 国际版「功能不可用」类业务提示：签到活动未开启 / 未开放 / 已过期。
 fn is_inactive_message(message: &str) -> bool {
     let raw = message.to_lowercase();
@@ -371,11 +383,37 @@ pub fn date_str(ts_ms: Option<i64>) -> String {
     }
 }
 
-/// 仅支持签到的档位（国际版没有签到接口，绝不发起请求）。
-fn checkin_capable_accounts() -> Vec<Value> {
-    load_accounts()
+/// 只匹配稳定 id，不以昵称或邮箱排除其它账号。
+fn auto_checkin_excluded(account: &Value, cfg: &Value) -> bool {
+    account.get("id").and_then(Value::as_str).is_some_and(|id| {
+        cfg.get("excluded_account_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|ids| ids.iter().any(|value| value.as_str() == Some(id)))
+    })
+}
+
+fn allows_auto_checkin(account: &Value, cfg: &Value) -> bool {
+    variant_of(account).supports_checkin() && !auto_checkin_excluded(account, cfg)
+}
+
+/// 在执行异步操作前检查偏好：被排除时不 poll future，因此不会查询、刷新 token 或提交。
+async fn with_auto_checkin_preference(
+    account: &Value,
+    cfg: &Value,
+    respect_auto_checkin: bool,
+    operation: impl Future<Output = Value>,
+) -> Value {
+    if respect_auto_checkin && auto_checkin_excluded(account, cfg) {
+        return json!({"ok": false, "result": "skipped", "reason": "auto_checkin_disabled"});
+    }
+    operation.await
+}
+
+/// 自动调度和时间段计划共用的账号集合；手动签到不受账号排除设置影响。
+fn auto_checkin_accounts(accounts: Vec<Value>, cfg: &Value) -> Vec<Value> {
+    accounts
         .into_iter()
-        .filter(|acc| variant_of(acc).supports_checkin())
+        .filter(|acc| allows_auto_checkin(acc, cfg))
         .collect()
 }
 
@@ -565,10 +603,11 @@ fn plan_next_delay(
 
 /// 宿主下一轮睡眠时长。策略全在 core，宿主只读这个时长，不解释 payload。
 pub fn next_cycle_delay() -> Duration {
-    let window = window_minutes(&load_checkin_config());
+    let cfg = load_checkin_config();
+    let window = window_minutes(&cfg);
     // 窗口未生效时不必读账号库/日志：直接走既有 30 分钟节奏。
     let accounts = if window.is_some() {
-        checkin_capable_accounts()
+        auto_checkin_accounts(load_accounts(), &cfg)
     } else {
         Vec::new()
     };
@@ -607,12 +646,12 @@ fn write_window_receipt(win: (u32, u32), account: &Value) {
 
 /// 执行一轮自动签到。启动与周期轮次均逐账号查询服务端状态。
 ///
-/// 只遍历支持签到的档位（国际版没有签到接口，绝不发起请求）。并发锁防止与
+/// 只遍历支持签到且允许自动签到的账号。并发锁防止与
 /// 手动签到/上一轮重复运行。
 ///
 /// 时间段生效时只处理「到点未办」的账号：未到点整轮不发任何请求，返回
 /// `{"status":"skipped","reason":"before_checkin_time","accounts":[]}`。
-/// 时间段未生效时逐字走既有路径（每轮处理全部账号）。
+/// 时间段未生效时，每轮处理全部允许自动签到的账号。
 pub async fn run_checkin_cycle(_mode: CheckinCycleMode) -> Value {
     let Some(_guard) = RunFlagGuard::try_acquire(&CHECKIN_RUNNING) else {
         return json!({"status": "skipped", "reason": "already_running"});
@@ -621,12 +660,12 @@ pub async fn run_checkin_cycle(_mode: CheckinCycleMode) -> Value {
     if cfg.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
         return json!({"status": "disabled"});
     }
-    let accounts = checkin_capable_accounts();
+    let accounts = auto_checkin_accounts(load_accounts(), &cfg);
     if accounts.is_empty() {
         return json!({"status": "no_accounts"});
     }
     let window = window_minutes(&cfg);
-    // 窗口未生效时不读日志、不过滤账号：与改动前「每轮处理全部账号」逐字一致。
+    // 窗口未生效时，不再按时间过滤允许自动签到的账号。
     let accounts = match window {
         Some(win) => due_accounts(accounts, now_ms(), Some(win), &load_checkin_logs()),
         None => accounts,
@@ -743,10 +782,19 @@ fn latest_today_result<'a>(logs: &'a [Value], account_id: &str, today: &str) -> 
 
 /// 对全部账号立即签到（前端一键签到）。
 ///
-/// `variant = None` 覆盖全部档位（自动周期与设置页「立即签到」语义）；
+/// `variant = None` 覆盖全部档位（设置页与托盘「立即签到」语义）；
 /// 显式传入时只处理该档位（账号页按当前档位触发，避免跨档位误签到）。
 /// 无论哪种取值，都只处理支持签到的档位：国际版没有签到接口，绝不发起请求。
 pub async fn run_checkin_all(variant: Option<WbVariant>) -> Value {
+    run_checkin_batch(variant, false).await
+}
+
+/// 刷新积分附带的签到：跳过关闭自动签到的账号，并逐账号返回 skipped 原因。
+pub async fn run_checkin_all_for_refresh(variant: Option<WbVariant>) -> Value {
+    run_checkin_batch(variant, true).await
+}
+
+async fn run_checkin_batch(variant: Option<WbVariant>, respect_auto_checkin: bool) -> Value {
     let Some(_guard) = RunFlagGuard::try_acquire(&CHECKIN_RUNNING) else {
         return json!({"accounts": [], "status": "skipped", "reason": "already_running"});
     };
@@ -759,7 +807,13 @@ pub async fn run_checkin_all(variant: Option<WbVariant>) -> Value {
         .collect();
     let mut results: Vec<Value> = Vec::new();
     for acc in accounts {
-        let r = checkin_account(&acc).await;
+        let r = with_auto_checkin_preference(
+            &acc,
+            &load_checkin_config(),
+            respect_auto_checkin,
+            checkin_account(&acc),
+        )
+        .await;
         let mut row = json!({
             "accountId": acc.get("id").cloned().unwrap_or(Value::Null),
             "email": account_display_name(&acc),
@@ -769,6 +823,9 @@ pub async fn run_checkin_all(variant: Option<WbVariant>) -> Value {
         if r.get("inactive").and_then(Value::as_bool) == Some(true) {
             row["inactive"] = json!(true);
         }
+        if let Some(reason) = r.get("reason") {
+            row["reason"] = reason.clone();
+        }
         results.push(row);
     }
     json!({"accounts": results})
@@ -777,6 +834,111 @@ pub async fn run_checkin_all(variant: Option<WbVariant>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn excluded_account_never_starts_passive_operation() {
+        let account = json!({"id": "excluded", "variant": "cn"});
+        let cfg = json!({"excluded_account_ids": ["excluded"]});
+        let result = with_auto_checkin_preference(&account, &cfg, true, async {
+            panic!("excluded account must not query status, refresh credentials or submit checkin")
+        })
+        .await;
+        assert_eq!(result["result"], "skipped");
+        assert_eq!(result["reason"], "auto_checkin_disabled");
+        assert_eq!(result["ok"], false);
+        assert!(result.get("todayCheckedIn").is_none());
+    }
+
+    #[tokio::test]
+    async fn manual_checkin_and_reenabled_account_still_run() {
+        let account = json!({"id": "excluded", "variant": "cn"});
+        let excluded_cfg = json!({"excluded_account_ids": ["excluded"]});
+        for (respect, cfg) in [
+            (false, excluded_cfg),
+            (true, json!({"excluded_account_ids": []})),
+            (true, json!({})),
+        ] {
+            let mut calls = 0;
+            let result = with_auto_checkin_preference(&account, &cfg, respect, async {
+                calls += 1;
+                json!({"result": "success"})
+            })
+            .await;
+            assert_eq!(calls, 1);
+            assert_eq!(result["result"], "success");
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_reports_skips_without_running_excluded_accounts() {
+        let cfg = json!({"excluded_account_ids": ["a", "c"]});
+        let mut requested_ids = Vec::new();
+        let mut skipped = 0;
+        for id in ["a", "b", "c"] {
+            let account = json!({"id": id});
+            let result = with_auto_checkin_preference(&account, &cfg, true, async {
+                requested_ids.push(id);
+                json!({"result": "already"})
+            })
+            .await;
+            if result["reason"] == "auto_checkin_disabled" {
+                assert_eq!(result["result"], "skipped");
+                skipped += 1;
+            }
+        }
+        assert_eq!(requested_ids, vec!["b"]);
+        assert_eq!(skipped, 2);
+    }
+
+    #[test]
+    fn auto_checkin_excludes_only_matching_ids_and_preserves_legacy_accounts() {
+        let accounts = vec![
+            json!({"id": "cn-excluded", "email": "shared@example.com"}),
+            json!({"id": "cn-allowed", "email": "shared@example.com"}),
+            json!({"id": "ai-account", "variant": "ai"}),
+            json!({"id": "legacy-account"}),
+        ];
+        let legacy = auto_checkin_accounts(accounts.clone(), &json!({}));
+        assert_eq!(
+            legacy,
+            vec![
+                accounts[0].clone(),
+                accounts[1].clone(),
+                accounts[3].clone()
+            ]
+        );
+
+        let cfg = json!({"excluded_account_ids": ["cn-excluded", "deleted-account", "shared@example.com"]});
+        let eligible = auto_checkin_accounts(accounts.clone(), &cfg);
+        assert_eq!(eligible, vec![accounts[1].clone(), accounts[3].clone()]);
+        // 排除设置不影响「是否支持签到」，手动入口仍能处理该国内版账号。
+        assert!(variant_of(&accounts[0]).supports_checkin());
+        assert!(!allows_auto_checkin(&accounts[0], &cfg));
+        assert!(allows_auto_checkin(
+            &accounts[0],
+            &json!({"excluded_account_ids": []})
+        ));
+    }
+
+    #[test]
+    fn excluded_account_is_not_due_even_after_its_target_time() {
+        let (account, target) = due_fixture();
+        let cfg = json!({"excluded_account_ids": [account["id"]]});
+        let accounts = auto_checkin_accounts(vec![account], &cfg);
+        assert!(due_accounts(accounts.clone(), target, Some(TEST_WINDOW), &[]).is_empty());
+        assert!(due_accounts(accounts.clone(), target, None, &[]).is_empty());
+        // 全部排除时不再为它们的目标时刻安排唤醒。
+        assert_eq!(
+            plan_next_delay(
+                false,
+                FAST_RETRY_MAX,
+                target - 60_000,
+                &accounts,
+                Some(TEST_WINDOW)
+            ),
+            (CHECKIN_RECOVERY_INTERVAL, FAST_RETRY_MAX)
+        );
+    }
 
     #[test]
     fn checked_in_status_returns_already_without_submission() {

@@ -56,7 +56,7 @@ import {
   variantSupportsTravel,
   variantUsesIntlCodebuddyIde,
 } from "@/lib/variant";
-import type { AccountMeta, AppStatus, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, RateLimitEntry, TravelConfig, TravelStatus, VscodeExtStatus } from "@/lib/types";
+import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, RateLimitEntry, TravelConfig, TravelStatus, VscodeExtStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -113,7 +113,7 @@ async function fetchTodayCheckinMap(
     accountIds.map(async (id) => {
       try {
         const res = await api.getCheckinStatus(id);
-        if (isStale?.() || !res.ok) return null;
+        if (isStale?.() || !res.ok || typeof res.todayCheckedIn !== "boolean") return null;
         return [id, res.todayCheckedIn] as const;
       } catch {
         return null;
@@ -173,6 +173,13 @@ export default function AccountsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
   const [importing, setImporting] = useState(false);
+  /**
+   * 自动签到配置（只读）：只用于决定账号卡片是否展示「自动签到已关闭」chip，
+   * 以及状态查询、刷新时跳过哪些账号。控制入口在设置页。
+   */
+  const [autoCheckinConfig, setAutoCheckinConfig] = useState<CheckinConfig | null>(null);
+  /** 配置是否已读取完毕（成功或失败）：区分「尚未读到」与「读取失败」。 */
+  const [autoCheckinSettled, setAutoCheckinSettled] = useState(false);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
   /** 账号 id -> 今日旅行状态（undefined=查询中/未知） */
@@ -216,7 +223,19 @@ export default function AccountsPage() {
   /** 旅行 chip 与旅行状态轮询只在自动旅行开启后生效（配置未读到 = 未开启）。 */
   const autoTravelEnabled = travelAvailable && autoTravelConfig?.enabled === true;
   /** 刷新按钮文案：国际版没有签到接口，只刷新积分。 */
-  const refreshCreditsLabel = checkinAvailable ? "签到并刷新全部账号积分" : "刷新全部账号积分";
+  const refreshCreditsLabel = checkinAvailable ? "刷新全部账号积分并签到（忽略已关闭自动签到的账号）" : "刷新全部账号积分";
+  /** 关闭自动签到的账号 id（配置未读到/读取失败 = 空名单）。 */
+  const excludedCheckinIds = useMemo(
+    () => new Set(autoCheckinConfig?.excluded_account_ids ?? []),
+    [autoCheckinConfig],
+  );
+  /** 今日签到状态只查未关闭自动签到的账号；配置就绪前不发请求。 */
+  const autoCheckinAccountIds = useMemo(() => {
+    if (!checkinAvailable || !autoCheckinSettled) return [];
+    return visibleAccounts
+      .filter((account) => !excludedCheckinIds.has(account.id))
+      .map((account) => account.id);
+  }, [visibleAccounts, checkinAvailable, autoCheckinSettled, excludedCheckinIds]);
   /** 紧凑模式：卡片更小、同屏更多列；默认开启，持久化到 localStorage */
   const [compact, setCompact] = useState<boolean>(() => {
     try {
@@ -241,6 +260,25 @@ export default function AccountsPage() {
   useEffect(() => {
     void fetchAll();
   }, [fetchAll]);
+
+  // 自动签到配置（只读）：读取失败静默回落为空名单（照常查询状态），不打扰用户。
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getAutoCheckinConfig()
+      .then((config) => {
+        if (!cancelled) setAutoCheckinConfig(config);
+      })
+      .catch(() => {
+        /* 配置读取失败：按空名单处理 */
+      })
+      .finally(() => {
+        if (!cancelled) setAutoCheckinSettled(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /**
    * 首次启动自动导入本机账号（本会话只尝试一次，无本机账号时静默）。
@@ -317,13 +355,12 @@ export default function AccountsPage() {
     };
   }, [accounts.length, variant]);
 
-  // 当前档位账号列表变化后并行查询各账号今日签到状态
-  // 国际版没有签到接口：不查询状态（后端也不发请求）。
+  // 配置就绪后查询未关闭自动签到的账号；国际版没有签到接口，不查询状态。
   useEffect(() => {
-    if (!visibleAccounts.length || !checkinAvailable) return;
+    if (!autoCheckinAccountIds.length) return;
     let cancelled = false;
     void fetchTodayCheckinMap(
-      visibleAccounts.map((account) => account.id),
+      autoCheckinAccountIds,
       () => cancelled,
     ).then((next) => {
       if (!cancelled && Object.keys(next).length > 0) {
@@ -333,7 +370,7 @@ export default function AccountsPage() {
     return () => {
       cancelled = true;
     };
-  }, [visibleAccounts, checkinAvailable]);
+  }, [autoCheckinAccountIds]);
 
   // 自动旅行配置（只读）：只用于决定账号卡片是否展示旅行 chip、是否轮询旅行状态。
   // 读取失败静默按未开启处理（不展示 chip、不发状态请求），不打扰用户。
@@ -507,12 +544,9 @@ export default function AccountsPage() {
       const description = `${a.nickname || a.email || a.id}${res.error ? `：${res.error}` : ""}`;
       if (res.result === "error") toast.error(label, { description });
       else toast.success(label, { description });
-      // 刷新该账号的今日签到状态
-      try {
-        const st = await api.getCheckinStatus(a.id);
-        if (st.ok) setCheckinMap((prev) => ({ ...prev, [a.id]: st.todayCheckedIn }));
-      } catch {
-        /* ignore */
+      // 手动签到已完成状态核验，直接使用回执，避免为已关闭账号再触发展示查询。
+      if (res.result === "success" || res.result === "already") {
+        setCheckinMap((prev) => ({ ...prev, [a.id]: true }));
       }
       void fetchAll();
       // 签到成功/已签到会带来积分变动，force 刷新该账号积分
@@ -537,59 +571,60 @@ export default function AccountsPage() {
     }
   }
 
-  /**
-   * 当前档位的批量签到：后端一次调用完成（保留并发保护），只处理支持签到的
-   * 账号；国际版没有签到接口，不参与批量签到。
-   */
-  async function runBatchCheckin() {
-    const res = await api.checkinAll(variant);
-    return res.accounts ?? [];
-  }
-
-  /**
-   * 刷新按钮：先跑一轮当前档位的批量签到并重查今日签到状态，再强制刷新全部积分。
-   * 国际版没有签到接口：跳过整块签到逻辑，只刷新积分。
-   */
+  /** 刷新附带的签到遵守账号开关；所有账号照常刷新积分，提示实际忽略数量。 */
   async function onRefreshCredits() {
     if (!visibleAccounts.length || refreshingCredits || checkinAllRunning) return;
     setCheckinAllRunning(true);
     const ids = visibleAccounts.map((account) => account.id);
+    let summary = "";
+    let notify = toast.success;
+    let title = "积分到期情况已刷新";
     try {
       if (checkinAvailable) {
         try {
-          const entries = await runBatchCheckin();
+          const res = await api.checkinAll(variant, true);
+          const entries = res.accounts ?? [];
           const success = entries.filter((e) => e.result === "success").length;
           const already = entries.filter((e) => e.result === "already").length;
           const failed = entries.filter((e) => e.result === "error").length;
           const inactive = entries.filter((e) => e.inactive === true || e.result === "inactive").length;
+          const skipped = entries.filter((e) => e.result === "skipped" && e.reason === "auto_checkin_disabled").length;
           const parts: string[] = [];
           if (success > 0) parts.push(`${success} 个签到成功`);
           if (already > 0) parts.push(`${already} 个已签到`);
           if (inactive > 0) parts.push(`${inactive} 个未开放签到`);
           if (failed > 0) parts.push(`${failed} 个失败`);
-          const summary = parts.length > 0 ? parts.join("，") : "无账号需要签到";
-          const counted = success + already + failed;
-          if (failed > 0 && counted === failed) {
-            toast.error("签到失败", { description: summary });
-          } else if (counted === 0 && inactive > 0) {
-            // 全部是 inactive（官方未开放签到活动）：既不算成功也不算失败，
-            // 不得呈现为绿色成功（design D8）。
-            toast.info("签到未开放", { description: summary });
-          } else {
-            toast.success("签到完成", { description: summary });
+          if (skipped > 0) parts.push(`已忽略 ${skipped} 个关闭自动签到的账号`);
+          summary = res.status === "skipped" && res.reason === "already_running"
+            ? "签到任务正在进行，本次仅刷新积分"
+            : parts.length > 0 ? parts.join("，") : "无账号需要签到";
+          const allFailed = entries.length > 0 && failed === entries.length;
+          const allSkippedOrInactive =
+            res.status === "skipped" ||
+            entries.length === 0 ||
+            (success === 0 && already === 0 && failed === 0);
+          if (allFailed) {
+            // 全部失败：没有成功、已签、未开放或忽略的账号。
+            notify = toast.error;
+            title = "积分已刷新，签到出现错误";
+          } else if (allSkippedOrInactive) {
+            // 全部被跳过或官方未开放签到活动：既不算成功也不算失败，不呈现为绿色成功。
+            notify = toast.info;
           }
-          // 批量签到后重查当前档位账号的今日签到状态，无需切换页面即反映最新结果
-          const next = await fetchTodayCheckinMap(ids);
+          // 只重查实际处理过的账号状态；被跳过的账号本次未发请求，状态保持未知。
+          const next = await fetchTodayCheckinMap(entries.filter((e) => e.result !== "skipped").map((e) => e.accountId));
           if (Object.keys(next).length > 0) {
             setCheckinMap((prev) => ({ ...prev, ...next }));
           }
         } catch (e) {
-          toast.error("批量签到失败", { description: api.asError(e) });
+          notify = toast.error;
+          title = "积分已刷新，签到出现错误";
+          summary = api.asError(e);
         }
       }
       await refreshCredits(ids);
       if (autoTravelEnabled) await loadTravelMap(ids);
-      toast.success("积分到期情况已刷新");
+      notify(title, { description: summary || undefined });
     } finally {
       setCheckinAllRunning(false);
     }
@@ -976,9 +1011,10 @@ export default function AccountsPage() {
                 compact={compact}
                 onDelete={onDelete}
                 onSwitch={setSwitchAccount}
-                onCheckin={onCheckin}
+                onCheckin={checkinAvailable ? onCheckin : undefined}
                 onRefresh={onRefresh}
                 todayCheckedIn={checkinMap[a.id]}
+                autoCheckinAllowed={checkinAvailable && autoCheckinSettled ? !excludedCheckinIds.has(a.id) : undefined}
                 travelStatus={autoTravelEnabled ? travelMap[a.id] : undefined}
                 rateLimits={rateLimitEnabled ? rateLimitMap[a.id] : undefined}
                 credit={creditMap[a.id]}

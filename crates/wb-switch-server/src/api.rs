@@ -3,12 +3,13 @@
 //! 路由设计对应 Python 版 server.py 与桌面端 commands.rs。仅绑定 127.0.0.1，
 //! token 不出本机。
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::RawQuery;
+use axum::extract::{Query, RawQuery};
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -683,12 +684,20 @@ async fn api_session_links_preview(Json(body): Json<Value>) -> Response {
 // 签到 / 保活
 // ---------------------------------------------------------------------------
 
-/// GET /api/checkin/status —— 全部账号的签到状态（每行带 `variant`，档位取账号自身）。
-async fn api_checkin_status() -> Response {
+/// GET /api/checkin/status —— 传 accountId 时只查询该账号；缺省保留旧批量响应。
+/// 两种形式都遵守单账号自动签到开关，避免展示状态时触发已关闭账号的请求。
+async fn api_checkin_status(Query(query): Query<HashMap<String, String>>) -> Response {
+    if let Some(id) = query.get("accountId") {
+        let Some(acc) = account::find_account(id) else {
+            return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        };
+        let status = checkin::get_checkin_status_for_display(&acc).await;
+        return json_ok(checkin_status_item(&acc, status));
+    }
     let list = account::load_accounts();
     let mut items = Vec::new();
     for acc in &list {
-        let status = checkin::get_checkin_status(acc).await;
+        let status = checkin::get_checkin_status_for_display(acc).await;
         items.push(checkin_status_item(acc, status));
     }
     json_ok(json!({ "accounts": items }))
@@ -829,7 +838,17 @@ async fn api_checkin_all(body: Option<Json<Value>>) -> Response {
         .and_then(|Json(value)| value.get("variant"))
         .and_then(|value| value.as_str())
         .map(|raw| WbVariant::parse(Some(raw)));
-    json_ok(checkin::run_checkin_all(variant).await)
+    let respect_auto_checkin = body
+        .as_ref()
+        .and_then(|Json(value)| value.get("respectAutoCheckin"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let result = if respect_auto_checkin {
+        checkin::run_checkin_all_for_refresh(variant).await
+    } else {
+        checkin::run_checkin_all(variant).await
+    };
+    json_ok(result)
 }
 
 async fn api_checkin_config() -> Response {
@@ -1040,6 +1059,18 @@ mod tests {
         assert_eq!(item["accountId"], "account-2");
         assert_eq!(item["ok"], false);
         assert_eq!(item["error"], "status failed");
+    }
+
+    #[test]
+    fn web_checkin_status_preserves_exclusion_without_inventing_today_status() {
+        let item = checkin_status_item(
+            &json!({"id": "excluded"}),
+            json!({"ok": false, "result": "skipped", "reason": "auto_checkin_disabled"}),
+        );
+        assert_eq!(item["accountId"], "excluded");
+        assert_eq!(item["reason"], "auto_checkin_disabled");
+        assert_eq!(item["result"], "skipped");
+        assert!(item.get("todayCheckedIn").is_none());
     }
 
     #[test]

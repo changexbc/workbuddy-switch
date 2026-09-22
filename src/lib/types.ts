@@ -280,6 +280,8 @@ export interface SwitchResult {
 
 export interface CheckinConfig {
   enabled: boolean;
+  /** 关闭自动签到的账号 id；状态展示和刷新附带签到也跳过，主动手动签到不受影响。 */
+  excluded_account_ids?: string[];
   /** 签到时间段（"HH:MM"，本地时区）；空串 = 不限制。两端都合法且 start < end 才生效。 */
   checkin_start: string;
   checkin_end: string;

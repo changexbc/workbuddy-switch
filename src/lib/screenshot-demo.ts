@@ -330,6 +330,7 @@ function buildStatistics(): CreditStatistics {
 function checkinConfig(): CheckinConfig {
   return {
     enabled: true,
+    excluded_account_ids: [],
     checkin_start: "",
     checkin_end: "",
     keepalive_days: 7,
