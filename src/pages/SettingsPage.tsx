@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { ArrowUpCircle, CircleCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 
@@ -150,6 +150,47 @@ function CollapsibleSettingsRow({
   );
 }
 
+interface NumberSettingRowProps {
+  id: string;
+  spec: NumberFieldSpec;
+  description: ReactNode;
+  value: string;
+  onChange: (text: string) => void;
+  onCommit: (raw: string) => void;
+}
+
+/**
+ * 数字参数行：输入期间只改本地草稿文本，失焦 / 回车才提交。
+ *
+ * 用文本草稿而不是直接写回配置数值，才能区分「清空」与「0」，让空值在失焦时回退原值。
+ */
+function NumberSettingRow({
+  id,
+  spec,
+  description,
+  value,
+  onChange,
+  onCommit,
+}: NumberSettingRowProps) {
+  return (
+    <SettingsFieldRow label={spec.label} description={description} htmlFor={id} operational>
+      <Input
+        id={id}
+        className="w-full sm:w-48"
+        type="number"
+        min={spec.min}
+        max={spec.max}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={(e) => onCommit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+      />
+    </SettingsFieldRow>
+  );
+}
+
 function formatTime(ts: number): string {
   try {
     return new Date(ts).toLocaleString("zh-CN", {
@@ -186,17 +227,70 @@ function clockMinutes(value: string): number | null {
 }
 
 /**
- * 签到时间段的非法组合说明（只提示、不阻止保存：后端按“不限制”处理）。
+ * 签到时间段的非法组合说明；返回 null 表示可以落盘（两端都合法或两端都空）。
+ *
+ * 半填 / 非法组合只改本地显示、不写盘：后端把这种窗口当「不限制」处理，写盘会让下一轮
+ * 对全部账号发起窗口外签到，所以文案要说明「未保存」。
  */
 function checkinWindowIssue(start: string, end: string): string | null {
   if (!start && !end) return null;
-  if (!start || !end) return "开始与结束时间需同时填写，否则按不限制处理";
+  if (!start || !end) return "开始与结束时间需同时选择，当前选择未保存";
   const startMinutes = clockMinutes(start);
   const endMinutes = clockMinutes(end);
-  if (startMinutes === null || endMinutes === null) return "时间格式应为 HH:MM";
-  if (startMinutes >= endMinutes) return "结束时间需晚于开始时间（不支持跨午夜），否则按不限制处理";
+  if (startMinutes === null || endMinutes === null) return "时间格式应为 HH:MM，当前选择未保存";
+  if (startMinutes >= endMinutes) return "结束时间需晚于开始时间（不支持跨午夜），当前选择未保存";
   return null;
 }
+
+/** 数字参数：展示名 + 收敛边界（与输入框 min/max 同源）。 */
+interface NumberFieldSpec {
+  label: string;
+  min: number;
+  max?: number;
+}
+
+/** 数字输入收敛：空 / 非数字返回 null（调用方回退到已落盘值），越界收敛到边界。 */
+function resolveNumberInput(raw: string, field: NumberFieldSpec): number | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) return null;
+  const rounded = Math.round(parsed);
+  const max = field.max ?? Number.POSITIVE_INFINITY;
+  return Math.min(Math.max(rounded, field.min), max);
+}
+
+/** 空值 / 非数字的回退提示。 */
+function numberInputHint(field: NumberFieldSpec): string {
+  return field.max === undefined
+    ? `${field.label}需为不小于 ${field.min} 的数字，已恢复为原值`
+    : `${field.label}需为 ${field.min}–${field.max} 之间的数字，已恢复为原值`;
+}
+
+/** 待提交的一次落盘：编辑字段 + 成功后提示（连续编辑合并时提示取最新一次）。 */
+interface SaveCommit<T> {
+  edits: Partial<T>;
+  success?: { title: string; description?: string };
+}
+
+/** 签到数字参数（后端不做范围校验，前端按这里的边界收敛后提交）。 */
+const CHECKIN_NUMBER_FIELDS = {
+  keepalive_days: { label: "保活阈值", min: 0, max: 90 },
+  lazy_refresh_hours: { label: "惰性刷新", min: 1, max: 72 },
+} as const satisfies Record<string, NumberFieldSpec>;
+
+type CheckinNumberKey = keyof typeof CHECKIN_NUMBER_FIELDS;
+
+/** 轮换数字参数。 */
+const ROTATE_NUMBER_FIELDS = {
+  check_interval_minutes: { label: "检查间隔", min: 1, max: 1440 },
+  cooldown_minutes: { label: "切换冷却", min: 1, max: 1440 },
+  min_gap_hours: { label: "到期差异阈值", min: 0, max: 720 },
+  min_urgency_hours: { label: "到期紧迫阈值", min: 0, max: 720 },
+  min_remaining_credits: { label: "最小剩余积分", min: 0 },
+} as const satisfies Record<string, NumberFieldSpec>;
+
+type RotateNumberKey = keyof typeof ROTATE_NUMBER_FIELDS;
 
 /** 自动签到配置 + 一键签到 + 日志（含自动旅行行）。 */
 function AutoCheckinCard() {
@@ -205,19 +299,25 @@ function AutoCheckinCard() {
   const accounts = useAccountsStore((s) => s.accounts);
   const fetchAll = useAccountsStore((s) => s.fetchAll);
   const [cfg, setCfg] = useState<CheckinConfig | null>(null);
-  /** 最近一次落盘的配置：逐账号开关只提交它 + 新名单，不带上未保存的参数草稿。 */
-  const [savedCfg, setSavedCfg] = useState<CheckinConfig | null>(null);
+  /** 显示草稿的同步镜像：事件回调与异步回读都要读最新值，state 只负责渲染。 */
+  const draftRef = useRef<CheckinConfig | null>(null);
+  /** 最近一次落盘的配置：即时落盘以它为提交基准，未落盘的草稿不写盘。 */
+  const savedRef = useRef<CheckinConfig | null>(null);
+  /** 待提交编辑：同一次交互里的连续触发合并为一份最新快照。 */
+  const pendingRef = useRef<SaveCommit<CheckinConfig> | null>(null);
+  /** 提交链：串行发送，避免先发的那份（不含后一次编辑）后到达覆盖新值。 */
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  /** 数字输入框草稿文本：只覆盖正在编辑的字段，失焦提交后清空。 */
+  const [numDraft, setNumDraft] = useState<Partial<Record<CheckinNumberKey, string>>>({});
   /** 参数区（时间段 / 保活阈值 / 惰性刷新）默认收起；开关行与操作行常驻。 */
   const [expanded, setExpanded] = useState(false);
   /** 逐账号开关列表默认收起。 */
   const [excludedOpen, setExcludedOpen] = useState(false);
-  const [excludedSaving, setExcludedSaving] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [logs, setLogs] = useState<CheckinLog[] | null>(null);
   const [logsError, setLogsError] = useState("");
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     void loadConfig();
@@ -241,11 +341,128 @@ function AutoCheckinCard() {
   async function loadConfig() {
     try {
       const loaded = await api.getAutoCheckinConfig();
-      setCfg(loaded);
-      setSavedCfg(loaded);
+      savedRef.current = loaded;
+      adoptSaved(loaded);
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("自动签到配置加载失败", { description: api.asError(e) });
     }
+  }
+
+  /** 更新显示草稿（state 供渲染，ref 供事件回调与异步回读读最新值）。 */
+  function updateCfg(next: CheckinConfig) {
+    draftRef.current = next;
+    setCfg(next);
+  }
+
+  /** 落盘值回填显示：保留半填 / 非法时间段草稿，那是刻意不落盘的本地状态。 */
+  function adoptSaved(next: CheckinConfig) {
+    const draft = draftRef.current;
+    if (draft && checkinWindowIssue(draft.checkin_start, draft.checkin_end) !== null) {
+      updateCfg({ ...next, checkin_start: draft.checkin_start, checkin_end: draft.checkin_end });
+      return;
+    }
+    updateCfg(next);
+  }
+
+  /**
+   * 即时落盘：编辑先合并成一份最新快照，再串行提交。
+   *
+   * 同一次交互里开关 click 与输入框 blur 会先后触发，各自都带整份配置；并发发送时
+   * 先发的那份（不含后一次编辑）可能后到达，把新值覆盖回去。
+   */
+  function enqueueCheckinSave(
+    edits: Partial<CheckinConfig>,
+    success?: SaveCommit<CheckinConfig>["success"],
+  ) {
+    if (!savedRef.current) return;
+    const pending = pendingRef.current;
+    pendingRef.current = { edits: { ...pending?.edits, ...edits }, success: success ?? pending?.success };
+    setSaving(true);
+    chainRef.current = chainRef.current.then(flushCheckinSave);
+  }
+
+  async function flushCheckinSave() {
+    const commit = pendingRef.current;
+    pendingRef.current = null;
+    const saved = savedRef.current;
+    if (!commit || !saved) return;
+    try {
+      const next = await api.saveAutoCheckinConfig({ ...saved, ...commit.edits });
+      savedRef.current = next;
+      // 回读值只在没有更新编辑排队时才整体覆盖显示，避免顶掉刚做出的改动。
+      if (!pendingRef.current) adoptSaved(next);
+      if (commit.success) {
+        toast.success(commit.success.title, { description: commit.success.description });
+      }
+    } catch (e) {
+      adoptSaved(saved);
+      toast.error("自动签到设置保存失败", { description: api.asError(e) });
+    } finally {
+      if (!pendingRef.current) setSaving(false);
+    }
+  }
+
+  /** 主开关：拨动即落盘，失败回滚到上一份已确认配置。 */
+  function onToggleEnabled(enabled: boolean) {
+    const current = draftRef.current;
+    if (!current) return;
+    updateCfg({ ...current, enabled });
+    enqueueCheckinSave({ enabled }, { title: enabled ? "自动签到已开启" : "自动签到已关闭" });
+  }
+
+  /** 数字参数：失焦 / 回车提交；空值回退原值，越界收敛，与落盘值相同则不发请求。 */
+  function onNumberCommit(key: CheckinNumberKey, raw: string) {
+    const current = draftRef.current;
+    const saved = savedRef.current;
+    if (!current || !saved) return;
+    const field = CHECKIN_NUMBER_FIELDS[key];
+    const value = resolveNumberInput(raw, field);
+    clearNumDraft(key);
+    const next = { ...current };
+    next[key] = value ?? saved[key];
+    updateCfg(next);
+    if (value === null) {
+      toast.error(numberInputHint(field));
+      return;
+    }
+    if (value === saved[key]) return;
+    const edits: Partial<CheckinConfig> = {};
+    edits[key] = value;
+    enqueueCheckinSave(edits, { title: `${field.label}已保存` });
+  }
+
+  /**
+   * 时间段：先只改本地显示；仅「两端都填且 start < end」或「两端都清空」才落盘。
+   * 半填 / 非法组合不写盘（后端把这种窗口当「不限制」，写盘会让下一轮对全部账号发起签到）。
+   */
+  function onWindowChange(key: "checkin_start" | "checkin_end", value: string) {
+    const current = draftRef.current;
+    const saved = savedRef.current;
+    if (!current || !saved) return;
+    const next = { ...current };
+    next[key] = value;
+    updateCfg(next);
+    if (checkinWindowIssue(next.checkin_start, next.checkin_end) !== null) return;
+    if (next.checkin_start === saved.checkin_start && next.checkin_end === saved.checkin_end) return;
+    enqueueCheckinSave(
+      { checkin_start: next.checkin_start, checkin_end: next.checkin_end },
+      next.checkin_start
+        ? { title: "签到时间段已保存", description: `${next.checkin_start} 至 ${next.checkin_end}` }
+        : { title: "已清除签到时间段限制" },
+    );
+  }
+
+  /** 「清除」按钮：两端清空属完整语义，立即落盘。 */
+  function clearWindow() {
+    const current = draftRef.current;
+    const saved = savedRef.current;
+    if (!current || !saved) return;
+    updateCfg({ ...current, checkin_start: "", checkin_end: "" });
+    if (!saved.checkin_start && !saved.checkin_end) return;
+    enqueueCheckinSave(
+      { checkin_start: "", checkin_end: "" },
+      { title: "已清除签到时间段限制" },
+    );
   }
 
   async function loadLogs(isCancelled?: () => boolean) {
@@ -260,30 +477,13 @@ function AutoCheckinCard() {
     }
   }
 
-  async function save() {
-    if (!cfg || saving || excludedSaving) return;
-    setSaving(true);
-    setMsg(null);
-    try {
-      const saved = await api.saveAutoCheckinConfig(cfg);
-      setCfg(saved);
-      setSavedCfg(saved);
-      setMsg({ type: "ok", text: "配置已保存" });
-    } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function checkinAllNow() {
-    if (busy || saving || excludedSaving) return;
+    if (busy || saving) return;
     setBusy(true);
-    setMsg(null);
     try {
       const res = await api.checkinAll();
       if (res.status === "skipped" && res.reason === "already_running") {
-        setMsg({ type: "err", text: "签到任务正在进行，请稍后再试" });
+        toast.error("签到任务正在进行，请稍后再试");
         return;
       }
       const ok = res.accounts.filter((a) => a.result === "success").length;
@@ -293,54 +493,46 @@ function AutoCheckinCard() {
         .filter((a) => a.result === "error")
         .map((a) => `${a.email}（${a.error}）`)
         .join("；");
-      setMsg({
-        type: err > 0 ? "err" : "ok",
-        text: `签到完成：成功 ${ok}，已签 ${already}，失败 ${err}${detail ? `。${detail}` : ""}`,
-      });
+      const text = `签到完成：成功 ${ok}，已签 ${already}，失败 ${err}${detail ? `。${detail}` : ""}`;
+      if (err > 0) toast.error(text);
+      else toast.success(text);
       void loadConfig();
       if (logsOpen) void loadLogs();
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("签到失败", { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
   }
 
   /**
-   * 逐账号开关：切换即落盘，提交「上次落盘的配置 + 新名单」。
+   * 逐账号开关：切换即落盘，提交最新一份名单。
    *
-   * 不带上当前草稿的时间段/阈值，避免把未保存的参数一起写盘；成功后只回填名单，
-   * 失败则回滚开关状态并提示。
+   * 与参数编辑共用同一条提交链，名单从当前显示草稿派生（连续切换不会互相覆盖），
+   * 失败由提交链统一回滚并提示。
    */
-  async function onAutoCheckinChange(account: AccountMeta, allowed: boolean) {
-    if (!savedCfg || saving || excludedSaving) return;
-    const previous = savedCfg;
-    const excluded = new Set(previous.excluded_account_ids ?? []);
+  function onAutoCheckinChange(account: AccountMeta, allowed: boolean) {
+    const current = draftRef.current;
+    if (!current) return;
+    const excluded = new Set(current.excluded_account_ids ?? []);
     if (allowed) excluded.delete(account.id);
     else excluded.add(account.id);
     const next = [...excluded];
-    setCfg((current) => (current ? { ...current, excluded_account_ids: next } : current));
-    setMsg(null);
-    setExcludedSaving(true);
-    try {
-      const saved = await api.saveAutoCheckinConfig({ ...previous, excluded_account_ids: next });
-      setSavedCfg(saved);
-      setCfg((current) =>
-        current ? { ...current, excluded_account_ids: saved.excluded_account_ids ?? [] } : current,
-      );
-    } catch (e) {
-      setCfg((current) =>
-        current ? { ...current, excluded_account_ids: previous.excluded_account_ids ?? [] } : current,
-      );
-      toast.error("账号自动签到设置保存失败", { description: api.asError(e) });
-    } finally {
-      setExcludedSaving(false);
-    }
+    updateCfg({ ...current, excluded_account_ids: next });
+    enqueueCheckinSave({ excluded_account_ids: next });
   }
 
-  function setNum(key: keyof CheckinConfig, value: string) {
-    if (!cfg) return;
-    setCfg({ ...cfg, [key]: Number(value) });
+  /** 数字输入框：输入期间只改本地草稿文本，失焦 / 回车才提交。 */
+  function onNumberChange(key: CheckinNumberKey, text: string) {
+    setNumDraft((prev) => ({ ...prev, [key]: text }));
+  }
+
+  function clearNumDraft(key: CheckinNumberKey) {
+    setNumDraft((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   }
 
   /** 逐账号开关只列出支持签到的档位（国际版签到接口未开放）。 */
@@ -362,12 +554,12 @@ function AutoCheckinCard() {
               htmlFor="ac-enabled"
             >
               <div className="flex items-center gap-2">
-                {/* 开关是业务操作（需保存配置生效），展开按钮是纯展示交互，故只包开关。 */}
+                {/* 开关是业务操作（拨动即落盘），展开按钮是纯展示交互，故只包开关。 */}
                 <DemoAction>
                   <Switch
                     id="ac-enabled"
                     checked={cfg.enabled}
-                    onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })}
+                    onCheckedChange={onToggleEnabled}
                   />
                 </DemoAction>
                 <Button variant="outline" size="sm" onClick={() => setExpanded((value) => !value)}>
@@ -376,7 +568,7 @@ function AutoCheckinCard() {
               </div>
             </SettingsFieldRow>
 
-            {/* 逐账号开关：切换即落盘，与同卡片「保存配置」的参数草稿互不影响。 */}
+            {/* 逐账号开关：切换即落盘，与参数编辑共用同一条提交链。 */}
             <CollapsibleSettingsRow
               label="不参与自动签到的账号"
               description="关闭后，后台轮次与刷新积分时跳过该账号；仍可手动签到。"
@@ -401,8 +593,7 @@ function AutoCheckinCard() {
                         <DemoAction>
                           <Switch
                             checked={!excludedIds.has(account.id)}
-                            disabled={saving || excludedSaving}
-                            onCheckedChange={(allowed) => void onAutoCheckinChange(account, allowed)}
+                            onCheckedChange={(allowed) => onAutoCheckinChange(account, allowed)}
                             aria-label={`${name}参与自动签到`}
                           />
                         </DemoAction>
@@ -432,7 +623,7 @@ function AutoCheckinCard() {
                           value={cfg.checkin_start}
                           hourLabel="签到开始时间（小时）"
                           minuteLabel="签到开始时间（分钟）"
-                          onChange={(v) => setCfg({ ...cfg, checkin_start: v })}
+                          onChange={(v) => onWindowChange("checkin_start", v)}
                         />
                       </DemoAction>
                       <span className="shrink-0 text-xs text-muted-foreground">至</span>
@@ -442,7 +633,7 @@ function AutoCheckinCard() {
                           value={cfg.checkin_end}
                           hourLabel="签到结束时间（小时）"
                           minuteLabel="签到结束时间（分钟）"
-                          onChange={(v) => setCfg({ ...cfg, checkin_end: v })}
+                          onChange={(v) => onWindowChange("checkin_end", v)}
                         />
                       </DemoAction>
                       {(cfg.checkin_start || cfg.checkin_end) && (
@@ -451,7 +642,7 @@ function AutoCheckinCard() {
                             size="sm"
                             variant="ghost"
                             className="shrink-0"
-                            onClick={() => setCfg({ ...cfg, checkin_start: "", checkin_end: "" })}
+                            onClick={clearWindow}
                           >
                             清除
                           </Button>
@@ -464,41 +655,27 @@ function AutoCheckinCard() {
                   </div>
                 </SettingsFieldRow>
 
-                <SettingsFieldRow
-                  label="保活阈值"
+                <NumberSettingRow
+                  id="ac-keep"
+                  spec={CHECKIN_NUMBER_FIELDS.keepalive_days}
                   description="天；0 表示每天无条件刷新"
-                  htmlFor="ac-keep"
-                  operational
-                >
-                  <Input
-                    id="ac-keep"
-                    className="w-full sm:w-48"
-                    type="number"
-                    min={0}
-                    max={90}
-                    value={cfg.keepalive_days}
-                    onChange={(e) => setNum("keepalive_days", e.target.value)}
-                  />
-                </SettingsFieldRow>
-                <SettingsFieldRow label="惰性刷新" description="小时" htmlFor="ac-lazy" operational>
-                  <Input
-                    id="ac-lazy"
-                    className="w-full sm:w-48"
-                    type="number"
-                    min={1}
-                    max={72}
-                    value={cfg.lazy_refresh_hours}
-                    onChange={(e) => setNum("lazy_refresh_hours", e.target.value)}
-                  />
-                </SettingsFieldRow>
+                  value={numDraft.keepalive_days ?? String(cfg.keepalive_days)}
+                  onChange={(text) => onNumberChange("keepalive_days", text)}
+                  onCommit={(raw) => onNumberCommit("keepalive_days", raw)}
+                />
+                <NumberSettingRow
+                  id="ac-lazy"
+                  spec={CHECKIN_NUMBER_FIELDS.lazy_refresh_hours}
+                  description="小时"
+                  value={numDraft.lazy_refresh_hours ?? String(cfg.lazy_refresh_hours)}
+                  onChange={(text) => onNumberChange("lazy_refresh_hours", text)}
+                  onCommit={(raw) => onNumberCommit("lazy_refresh_hours", raw)}
+                />
               </>
             )}
 
             <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-              <DemoAction><Button size="sm" onClick={save} disabled={saving || excludedSaving}>
-                {saving ? <Loader2 className="animate-spin" /> : <Save />}保存配置
-              </Button></DemoAction>
-              <DemoAction><Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy || saving || excludedSaving}>
+              <DemoAction><Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy || saving}>
                 {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}全部立即签到
               </Button></DemoAction>
             </div>
@@ -510,15 +687,6 @@ function AutoCheckinCard() {
         {/* 成长中心（派猫猫旅行）仅国内版开放：国际版不渲染该行，也不请求其配置。
             行本身独立于签到配置的加载状态，签到配置读取失败也不影响开关。 */}
         {variantSupportsTravel(variant) ? <AutoTravelRow /> : null}
-
-        {msg && (
-          <Alert
-            variant={msg.type === "err" ? "destructive" : "default"}
-            className="!w-auto mx-4 my-4 sm:mx-5"
-          >
-            <AlertDescription>{msg.text}</AlertDescription>
-          </Alert>
-        )}
 
         <CollapsibleSettingsRow
           label="签到日志"
@@ -637,14 +805,22 @@ function AutoTravelRow() {
 function AutoRotateCard() {
   const [cfg, setCfg] = useState<AutoRotateConfig | null>(null);
   const [status, setStatus] = useState<RotateStatus | null>(null);
+  /** 显示草稿的同步镜像：事件回调与异步回读都要读最新值，state 只负责渲染。 */
+  const draftRef = useRef<AutoRotateConfig | null>(null);
+  /** 最近一次落盘的配置：即时落盘以它为提交基准。 */
+  const savedRef = useRef<AutoRotateConfig | null>(null);
+  /** 待提交编辑：同一次交互里的连续触发合并为一份最新快照。 */
+  const pendingRef = useRef<SaveCommit<AutoRotateConfig> | null>(null);
+  /** 提交链：串行发送，避免先发的那份（不含后一次编辑）后到达覆盖新值。 */
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  /** 数字输入框草稿文本：只覆盖正在编辑的字段，失焦提交后清空。 */
+  const [numDraft, setNumDraft] = useState<Partial<Record<RotateNumberKey, string>>>({});
   /** 参数区（间隔 / 冷却 / 阈值）与说明默认收起；开关行、操作行与日志行常驻。 */
   const [expanded, setExpanded] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [logs, setLogs] = useState<RotateLog[] | null>(null);
   const [logsError, setLogsError] = useState("");
-  const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     void loadConfig();
@@ -663,10 +839,11 @@ function AutoRotateCard() {
   async function loadConfig() {
     try {
       const [c, s] = await Promise.all([api.getAutoRotateConfig(), api.getRotateStatus()]);
-      setCfg(c);
+      savedRef.current = c;
+      updateCfg(c);
       setStatus(s);
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("自动轮换配置加载失败", { description: api.asError(e) });
     }
   }
 
@@ -682,24 +859,86 @@ function AutoRotateCard() {
     }
   }
 
-  async function save() {
-    if (!cfg) return;
-    setSaving(true);
-    setMsg(null);
+  /** 更新显示草稿（state 供渲染，ref 供事件回调与异步回读读最新值）。 */
+  function updateCfg(next: AutoRotateConfig) {
+    draftRef.current = next;
+    setCfg(next);
+  }
+
+  /** 即时落盘：编辑先合并成一份最新快照，再串行提交（失败回滚到已确认配置）。 */
+  function enqueueRotateSave(
+    edits: Partial<AutoRotateConfig>,
+    success?: SaveCommit<AutoRotateConfig>["success"],
+  ) {
+    if (!savedRef.current) return;
+    const pending = pendingRef.current;
+    pendingRef.current = { edits: { ...pending?.edits, ...edits }, success: success ?? pending?.success };
+    chainRef.current = chainRef.current.then(flushRotateSave);
+  }
+
+  async function flushRotateSave() {
+    const commit = pendingRef.current;
+    pendingRef.current = null;
+    const saved = savedRef.current;
+    if (!commit || !saved) return;
     try {
-      const saved = await api.saveAutoRotateConfig(cfg);
-      setCfg(saved);
-      setMsg({ type: "ok", text: "配置已保存" });
+      const next = await api.saveAutoRotateConfig({ ...saved, ...commit.edits });
+      savedRef.current = next;
+      // 回读值只在没有更新编辑排队时才覆盖显示，避免顶掉刚做出的改动。
+      if (!pendingRef.current) updateCfg(next);
+      if (commit.success) {
+        toast.success(commit.success.title, { description: commit.success.description });
+      }
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
-    } finally {
-      setSaving(false);
+      updateCfg(saved);
+      toast.error("自动轮换设置保存失败", { description: api.asError(e) });
     }
+  }
+
+  /** 主开关：拨动即落盘，失败回滚到上一份已确认配置。 */
+  function onToggleEnabled(enabled: boolean) {
+    const current = draftRef.current;
+    if (!current) return;
+    updateCfg({ ...current, enabled });
+    enqueueRotateSave({ enabled }, { title: enabled ? "自动轮换已开启" : "自动轮换已关闭" });
+  }
+
+  /** 数字参数：失焦 / 回车提交；空值回退原值，越界收敛，与落盘值相同则不发请求。 */
+  function onNumberCommit(key: RotateNumberKey, raw: string) {
+    const current = draftRef.current;
+    const saved = savedRef.current;
+    if (!current || !saved) return;
+    const field = ROTATE_NUMBER_FIELDS[key];
+    const value = resolveNumberInput(raw, field);
+    clearNumDraft(key);
+    const next = { ...current };
+    next[key] = value ?? saved[key];
+    updateCfg(next);
+    if (value === null) {
+      toast.error(numberInputHint(field));
+      return;
+    }
+    if (value === saved[key]) return;
+    const edits: Partial<AutoRotateConfig> = {};
+    edits[key] = value;
+    enqueueRotateSave(edits, { title: `${field.label}已保存` });
+  }
+
+  /** 数字输入框：输入期间只改本地草稿文本，失焦 / 回车才提交。 */
+  function onNumberChange(key: RotateNumberKey, text: string) {
+    setNumDraft((prev) => ({ ...prev, [key]: text }));
+  }
+
+  function clearNumDraft(key: RotateNumberKey) {
+    setNumDraft((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   }
 
   async function runNow() {
     setBusy(true);
-    setMsg(null);
     try {
       const res = await api.runRotate();
       // webui 没有事件通道：手动检查的推迟提示只能从返回值里取（桌面端由
@@ -707,27 +946,21 @@ function AutoRotateCard() {
       if (api.isWebui() && res.notify?.body) {
         toast.warning("自动轮换已推迟", { description: res.notify.body, duration: 10_000 });
       }
-      setMsg({
-        type: res.status === "error" ? "err" : "ok",
-        text:
-          res.status === "switched"
-            ? `已切换到 ${res.to ?? "目标账号"}`
-            : res.status === "disabled"
-              ? "自动轮换未启用（请在下方开启后重试）"
-              : (res.reason ?? `检查完成：${res.status}`),
-      });
+      const text =
+        res.status === "switched"
+          ? `已切换到 ${res.to ?? "目标账号"}`
+          : res.status === "disabled"
+            ? "自动轮换未启用（请在下方开启后重试）"
+            : (res.reason ?? `检查完成：${res.status}`);
+      if (res.status === "error") toast.error(text);
+      else toast.success(text);
       void loadConfig();
       if (logsOpen) void loadLogs();
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("轮换检查失败", { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
-  }
-
-  function setNum(key: keyof AutoRotateConfig, value: string) {
-    if (!cfg) return;
-    setCfg({ ...cfg, [key]: Number(value) });
   }
 
   function actionLabel(action: string): { text: string; tone: "success" | "warning" | "error" } {
@@ -773,12 +1006,12 @@ function AutoRotateCard() {
               htmlFor="ar-enabled"
             >
               <div className="flex items-center gap-2">
-                {/* 开关是业务操作（需保存配置生效），展开按钮是纯展示交互，故只包开关。 */}
+                {/* 开关是业务操作（拨动即落盘），展开按钮是纯展示交互，故只包开关。 */}
                 <DemoAction>
                   <Switch
                     id="ar-enabled"
                     checked={cfg.enabled}
-                    onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })}
+                    onCheckedChange={onToggleEnabled}
                   />
                 </DemoAction>
                 <Button variant="outline" size="sm" onClick={() => setExpanded((value) => !value)}>
@@ -789,60 +1022,46 @@ function AutoRotateCard() {
 
             {expanded && (
               <>
-                <SettingsFieldRow label="检查间隔" description="分钟" htmlFor="ar-interval" operational>
-                  <Input
-                    id="ar-interval"
-                    className="w-full sm:w-48"
-                    type="number"
-                    min={1}
-                    max={1440}
-                    value={cfg.check_interval_minutes}
-                    onChange={(e) => setNum("check_interval_minutes", e.target.value)}
-                  />
-                </SettingsFieldRow>
-                <SettingsFieldRow label="切换冷却" description="分钟" htmlFor="ar-cooldown" operational>
-                  <Input
-                    id="ar-cooldown"
-                    className="w-full sm:w-48"
-                    type="number"
-                    min={1}
-                    max={1440}
-                    value={cfg.cooldown_minutes}
-                    onChange={(e) => setNum("cooldown_minutes", e.target.value)}
-                  />
-                </SettingsFieldRow>
-                <SettingsFieldRow label="到期差异阈值" description="小时" htmlFor="ar-gap" operational>
-                  <Input
-                    id="ar-gap"
-                    className="w-full sm:w-48"
-                    type="number"
-                    min={0}
-                    max={720}
-                    value={cfg.min_gap_hours}
-                    onChange={(e) => setNum("min_gap_hours", e.target.value)}
-                  />
-                </SettingsFieldRow>
-                <SettingsFieldRow label="到期紧迫阈值" description="小时" htmlFor="ar-urgency" operational>
-                  <Input
-                    id="ar-urgency"
-                    className="w-full sm:w-48"
-                    type="number"
-                    min={0}
-                    max={720}
-                    value={cfg.min_urgency_hours}
-                    onChange={(e) => setNum("min_urgency_hours", e.target.value)}
-                  />
-                </SettingsFieldRow>
-                <SettingsFieldRow label="最小剩余积分" description="低于此值时不切换" htmlFor="ar-min" operational>
-                  <Input
-                    id="ar-min"
-                    className="w-full sm:w-48"
-                    type="number"
-                    min={0}
-                    value={cfg.min_remaining_credits}
-                    onChange={(e) => setNum("min_remaining_credits", e.target.value)}
-                  />
-                </SettingsFieldRow>
+                <NumberSettingRow
+                  id="ar-interval"
+                  spec={ROTATE_NUMBER_FIELDS.check_interval_minutes}
+                  description="分钟"
+                  value={numDraft.check_interval_minutes ?? String(cfg.check_interval_minutes)}
+                  onChange={(text) => onNumberChange("check_interval_minutes", text)}
+                  onCommit={(raw) => onNumberCommit("check_interval_minutes", raw)}
+                />
+                <NumberSettingRow
+                  id="ar-cooldown"
+                  spec={ROTATE_NUMBER_FIELDS.cooldown_minutes}
+                  description="分钟"
+                  value={numDraft.cooldown_minutes ?? String(cfg.cooldown_minutes)}
+                  onChange={(text) => onNumberChange("cooldown_minutes", text)}
+                  onCommit={(raw) => onNumberCommit("cooldown_minutes", raw)}
+                />
+                <NumberSettingRow
+                  id="ar-gap"
+                  spec={ROTATE_NUMBER_FIELDS.min_gap_hours}
+                  description="小时"
+                  value={numDraft.min_gap_hours ?? String(cfg.min_gap_hours)}
+                  onChange={(text) => onNumberChange("min_gap_hours", text)}
+                  onCommit={(raw) => onNumberCommit("min_gap_hours", raw)}
+                />
+                <NumberSettingRow
+                  id="ar-urgency"
+                  spec={ROTATE_NUMBER_FIELDS.min_urgency_hours}
+                  description="小时"
+                  value={numDraft.min_urgency_hours ?? String(cfg.min_urgency_hours)}
+                  onChange={(text) => onNumberChange("min_urgency_hours", text)}
+                  onCommit={(raw) => onNumberCommit("min_urgency_hours", raw)}
+                />
+                <NumberSettingRow
+                  id="ar-min"
+                  spec={ROTATE_NUMBER_FIELDS.min_remaining_credits}
+                  description="低于此值时不切换"
+                  value={numDraft.min_remaining_credits ?? String(cfg.min_remaining_credits)}
+                  onChange={(text) => onNumberChange("min_remaining_credits", text)}
+                  onCommit={(raw) => onNumberCommit("min_remaining_credits", raw)}
+                />
                 <p className="border-b border-border/60 px-4 py-3 text-[13px] leading-5 text-muted-foreground sm:px-5">
                   切换时机：目标账号剩余到期时间少于「紧迫阈值」且比当前账号早超过「差异阈值」，且目标剩余积分不低于「最小剩余积分」。检测到有 CodeBuddy CLI 会话在运行时，本次轮换会跳过并在当日最多提示 5 次；重启 CLI 后新账号才会生效。
                 </p>
@@ -850,9 +1069,6 @@ function AutoRotateCard() {
             )}
 
             <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-              <DemoAction><Button size="sm" onClick={save} disabled={saving}>
-                {saving ? <Loader2 className="animate-spin" /> : <Save />}保存配置
-              </Button></DemoAction>
               <DemoAction><Button size="sm" variant="outline" onClick={runNow} disabled={busy}>
                 {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}立即检查一次
               </Button></DemoAction>
@@ -860,15 +1076,6 @@ function AutoRotateCard() {
           </>
         ) : (
           <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
-        )}
-
-        {msg && (
-          <Alert
-            variant={msg.type === "err" ? "destructive" : "default"}
-            className="!w-auto mx-4 my-4 sm:mx-5"
-          >
-            <AlertDescription>{msg.text}</AlertDescription>
-          </Alert>
         )}
 
         <CollapsibleSettingsRow
@@ -930,21 +1137,21 @@ function PermissionCheckCard() {
   const authFile = useAuthFile();
   const variant = useAccountsStore((s) => s.variant);
   const [checking, setChecking] = useState(false);
-  const [result, setResult] = useState<null | { ok: boolean; text: string }>(null);
+  /** 只在失败时留在卡片内：错误文案与授权四步引导不该被几秒的 toast 吞掉。 */
+  const [error, setError] = useState<string | null>(null);
 
   async function runCheck() {
     setChecking(true);
-    setResult(null);
+    setError(null);
     try {
       const res = await api.checkAuthPermission(variant);
-      setResult({
-        ok: res.ok,
-        text: res.ok
-          ? res.message ?? "认证目录可写，权限正常"
-          : `${res.error}（${res.dir ?? ""}）`,
-      });
+      if (res.ok) {
+        toast.success(res.message ?? "认证目录可写，权限正常");
+      } else {
+        setError(`${res.error}（${res.dir ?? ""}）`);
+      }
     } catch (e) {
-      setResult({ ok: false, text: api.asError(e) });
+      setError(api.asError(e));
     } finally {
       setChecking(false);
     }
@@ -982,12 +1189,12 @@ function PermissionCheckCard() {
           </Button></DemoAction>
         </div>
 
-        {result && (
-          <Alert variant={result.ok ? "default" : "destructive"} className="!w-auto mx-4 my-4 sm:mx-5">
-            <AlertDescription>{result.text}</AlertDescription>
+        {error && (
+          <Alert variant="destructive" className="!w-auto mx-4 my-4 sm:mx-5">
+            <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        {result && !result.ok && (
+        {error && (
           <div className="mx-4 mb-4 border-l-2 border-destructive/50 bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground sm:mx-5">
             <p className="mb-1 font-medium text-foreground">如何授权（拖拽方式）：</p>
             <ol className="list-decimal space-y-1 pl-4">
@@ -1016,7 +1223,6 @@ function UpdateCard() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
-  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [githubConfig, setGithubConfig] = useState<GithubConfig>({});
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
@@ -1031,7 +1237,7 @@ function UpdateCard() {
         setProxyUrl(config.proxy ?? "");
       })
       .catch((e) => {
-        if (!cancelled) setMsg({ type: "err", text: api.asError(e) });
+        if (!cancelled) toast.error("更新配置加载失败", { description: api.asError(e) });
       });
     return () => {
       cancelled = true;
@@ -1040,15 +1246,14 @@ function UpdateCard() {
 
   async function check() {
     setChecking(true);
-    setMsg(null);
     try {
       const r = await api.checkUpdate(proxyUrl, true);
       setInfo(r);
       if (!r.ok) {
-        setMsg({ type: "err", text: r.message || r.error || "检查失败" });
+        toast.error("检查更新失败", { description: r.message || r.error });
       }
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("检查更新失败", { description: api.asError(e) });
     } finally {
       setChecking(false);
     }
@@ -1063,20 +1268,19 @@ function UpdateCard() {
           throw new Error("unsupported proxy protocol");
         }
       } catch {
-        setMsg({ type: "err", text: "代理地址格式不正确，请填写 HTTP/HTTPS 地址，例如 http://127.0.0.1:7897" });
+        toast.error("代理地址格式不正确，请填写 HTTP/HTTPS 地址，例如 http://127.0.0.1:7897");
         return;
       }
     }
 
     setProxySaving(true);
-    setMsg(null);
     try {
       const saved = await api.saveGithubConfig({ ...githubConfig, proxy: value });
       setGithubConfig(saved);
       setProxyUrl(saved.proxy ?? "");
-      setMsg({ type: "ok", text: value ? "更新代理已保存" : "已关闭更新代理" });
+      toast.success(value ? "更新代理已保存" : "已关闭更新代理");
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("保存代理失败", { description: api.asError(e) });
     } finally {
       setProxySaving(false);
     }
@@ -1169,14 +1373,6 @@ function UpdateCard() {
             </AlertDescription>
           </Alert>
         )}
-        {msg && (
-          <Alert
-            variant={msg.type === "err" ? "destructive" : "default"}
-            className="!w-auto mx-4 my-4 sm:mx-5"
-          >
-            <AlertDescription>{msg.text}</AlertDescription>
-          </Alert>
-        )}
         <UpdateInstallDialog
           open={installOpen}
           onOpenChange={setInstallOpen}
@@ -1191,7 +1387,6 @@ function UpdateCard() {
 function StartupCard() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1201,7 +1396,7 @@ function StartupCard() {
         if (!cancelled) setEnabled(value);
       })
       .catch((e) => {
-        if (!cancelled) setMsg({ type: "err", text: api.asError(e) });
+        if (!cancelled) toast.error("开机自启状态读取失败", { description: api.asError(e) });
       });
     return () => {
       cancelled = true;
@@ -1212,16 +1407,15 @@ function StartupCard() {
     if (busy || enabled === null) return;
     const previous = enabled;
     setBusy(true);
-    setMsg(null);
     try {
       // 后端回读 OS 权威状态；即使与请求一致，也以回读值显示。
       const authoritative = await api.setLaunchAtLoginEnabled(value);
       setEnabled(authoritative);
-      setMsg({ type: "ok", text: authoritative ? "已开启开机自启" : "已关闭开机自启" });
+      toast.success(authoritative ? "已开启开机自启" : "已关闭开机自启");
     } catch (e) {
       // 失败时恢复到最后一次确认的状态，并显示可读错误。
       setEnabled(previous);
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("开机自启设置失败", { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -1248,15 +1442,6 @@ function StartupCard() {
             aria-label="开机时静默启动到托盘"
           />
         </SettingsFieldRow>
-
-        {msg && (
-          <Alert
-            variant={msg.type === "err" ? "destructive" : "default"}
-            className="!w-auto mx-4 my-4 sm:mx-5"
-          >
-            <AlertDescription>{msg.text}</AlertDescription>
-          </Alert>
-        )}
       </CardContent>
     </SettingsGroup>
   );
@@ -1420,7 +1605,6 @@ function RateLimitCard() {
   const [config, setConfig] = useState<RateLimitConfig | null>(null);
   const [status, setStatus] = useState<RateLimitHookStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1431,7 +1615,7 @@ function RateLimitCard() {
         setStatus(hook);
       })
       .catch((e) => {
-        if (!cancelled) setMsg({ type: "err", text: api.asError(e) });
+        if (!cancelled) toast.error("限额监听配置加载失败", { description: api.asError(e) });
       });
     return () => {
       cancelled = true;
@@ -1443,14 +1627,13 @@ function RateLimitCard() {
     const previous = config;
     setConfig({ ...config, enabled });
     setBusy(true);
-    setMsg(null);
     try {
       // 整个配置一起提交：只带 enabled 会把「卸载过」标记冲掉，重启后 hook 又被自动装回。
       setConfig(await api.saveRateLimitConfig({ ...config, enabled }));
-      setMsg({ type: "ok", text: enabled ? "限额监听已开启" : "限额监听已关闭" });
+      toast.success(enabled ? "限额监听已开启" : "限额监听已关闭");
     } catch (e) {
       setConfig(previous);
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("限额监听设置保存失败", { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -1465,19 +1648,17 @@ function RateLimitCard() {
     const previous = config;
     setConfig({ ...config, scanIdeLogs });
     setBusy(true);
-    setMsg(null);
     try {
       // 与总开关一样整份提交：只带 scanIdeLogs 会把 enabled / hookOptOut 冲成默认值。
       setConfig(await api.saveRateLimitConfig({ ...config, scanIdeLogs }));
-      setMsg({
-        type: "ok",
-        text: scanIdeLogs
+      toast.success(
+        scanIdeLogs
           ? "已开启 IDE 日志扫描"
           : "已关闭 IDE 日志扫描：两个 CodeBuddy IDE 的限额不再显示",
-      });
+      );
     } catch (e) {
       setConfig(previous);
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("限额监听设置保存失败", { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -1499,15 +1680,13 @@ function RateLimitCard() {
   async function onInstall() {
     if (busy) return;
     setBusy(true);
-    setMsg(null);
     try {
       setStatus(await api.installRateLimitHook());
-      setMsg({
-        type: "ok",
-        text: "已接入限额监听：CodeBuddy CLI / WorkBuddy 的 429 会实时上报（原配置已备份，可随时卸载还原）",
+      toast.success("已接入限额监听", {
+        description: "CodeBuddy CLI / WorkBuddy 的 429 会实时上报（原配置已备份，可随时卸载还原）",
       });
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("接入 hook 失败", { description: api.asError(e) });
     } finally {
       setBusy(false);
       void refreshHookConfig();
@@ -1517,15 +1696,13 @@ function RateLimitCard() {
   async function onUninstall() {
     if (busy) return;
     setBusy(true);
-    setMsg(null);
     try {
       setStatus(await api.uninstallRateLimitHook());
-      setMsg({
-        type: "ok",
-        text: "已卸载 hook：客户端配置恢复原状，之后不会再自动接入（限额改由日志扫描发现，可随时点「接入 hook」恢复）",
+      toast.success("已卸载 hook", {
+        description: "客户端配置恢复原状，之后不会再自动接入（限额改由日志扫描发现，可随时点「接入 hook」恢复）",
       });
     } catch (e) {
-      setMsg({ type: "err", text: api.asError(e) });
+      toast.error("卸载 hook 失败", { description: api.asError(e) });
     } finally {
       setBusy(false);
       void refreshHookConfig();
@@ -1610,15 +1787,6 @@ function RateLimitCard() {
             </Button>
           )}
         </SettingsFieldRow>
-
-        {msg && (
-          <Alert
-            variant={msg.type === "err" ? "destructive" : "default"}
-            className="!w-auto mx-4 my-4 sm:mx-5"
-          >
-            <AlertDescription>{msg.text}</AlertDescription>
-          </Alert>
-        )}
       </CardContent>
     </SettingsGroup>
   );
