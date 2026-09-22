@@ -618,15 +618,11 @@ pub async fn checkin(account_id: String) -> Result<Value, String> {
 
 /// POST /api/checkin/all —— 全部账号立即签到（每个账号按自身档位）。
 /// `variant` 缺省为 `None`（全部档位，保持原行为）；显式传入时只处理该档位。
-/// 刷新积分附带签到时 respect_auto_checkin=true，跳过关闭自动签到的账号。
+/// 关闭自动签到的账号逐账号返回 skipped 原因（设置页与托盘同样遵守）。
 #[tauri::command]
-pub async fn checkin_all(variant: Option<String>, respect_auto_checkin: Option<bool>) -> Value {
+pub async fn checkin_all(variant: Option<String>) -> Value {
     let variant = variant.as_deref().map(|raw| WbVariant::parse(Some(raw)));
-    if respect_auto_checkin == Some(true) {
-        checkin::run_checkin_all_for_refresh(variant).await
-    } else {
-        checkin::run_checkin_all(variant).await
-    }
+    checkin::run_checkin_all(variant).await
 }
 
 /// GET /api/checkin/config —— 自动签到配置。

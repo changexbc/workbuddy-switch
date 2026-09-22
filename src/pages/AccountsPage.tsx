@@ -582,7 +582,7 @@ export default function AccountsPage() {
     try {
       if (checkinAvailable) {
         try {
-          const res = await api.checkinAll(variant, true);
+          const res = await api.checkinAll(variant);
           const entries = res.accounts ?? [];
           const success = entries.filter((e) => e.result === "success").length;
           const already = entries.filter((e) => e.result === "already").length;

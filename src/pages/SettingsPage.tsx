@@ -1,8 +1,28 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
-import { ArrowUpCircle, CircleCheck, ExternalLink, Loader2, RefreshCw, Save } from "lucide-react";
+import {
+  ArrowUpCircle,
+  ChevronDown,
+  CircleCheck,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  Save,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -38,6 +58,16 @@ interface SettingsGroupProps {
   title: string;
   children: ReactNode;
 }
+
+/**
+ * 折叠面板的底部分隔线。
+ *
+ * 用伪元素而不是 border：面板自身无边距，border 会从卡片边缘拉到边缘，与其它行
+ * （左右各缩进 mx-4 / sm:mx-5）的线对不齐。线要跟着整块内容走，标题与内容之间不留线。
+ * 末行不传此项，但面板仍须保留 relative——行尾箭头是绝对定位，缺定位祖先会飘到页面上。
+ */
+const ACCORDION_DIVIDER =
+  "after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-border/50 sm:after:inset-x-5";
 
 function SettingsGroup({ id, title, children }: SettingsGroupProps) {
   return (
@@ -103,50 +133,64 @@ function SettingsFieldRow({
   );
 }
 
-interface CollapsibleSettingsRowProps {
+/** 展开内容的内嵌卡片：与外层行同一左右缩进，内部各行自带分隔线。 */
+const INSET_PANEL = "mx-4 rounded-lg bg-foreground/[0.04] px-3 py-1 sm:mx-5";
+/** 放进内嵌卡片的参数行：去掉外层缩进，改由卡片统一提供。 */
+const PANEL_ROW = "mx-0 sm:mx-0";
+
+interface AccordionSettingsRowProps {
+  value: string;
   label: ReactNode;
   description?: ReactNode;
-  open: boolean;
-  onToggle: () => void;
-  /** 展开/收起之外的附加操作（如通知历史的「清空」）。 */
+  /** 行内常驻操作（开关、按钮等）；有值时箭头改画在行尾，避开操作区。 */
   actions?: ReactNode;
-  /** 位于卡片中段的行保留收起态分隔线；末行（默认）不需要。 */
+  /** 是否带底部分隔线；末行传 false。 */
   divider?: boolean;
   children: ReactNode;
 }
 
 /**
- * 折叠行：label/description + 查看/收起（+ 可选附加操作），展开内容在下方。
+ * 手风琴设置行：标题可点展开，展开内容在其下方。
  *
- * 沿用通知历史既有的「Button + 条件渲染」而非 Collapsible 原语：折叠行内可能含
- * Switch 等交互控件，用 Trigger 包整行会产生嵌套交互元素。展开按钮是纯展示交互，
- * 不套 DemoAction（演示模式下仍可展开查看）。
+ * 行内带 Switch / Button 时触发区只能覆盖标题（button 不能嵌套 button），
+ * 此时关掉触发区自带箭头、绝对定位到行尾，避免它落在标题与控件之间。
  */
-function CollapsibleSettingsRow({
+function AccordionSettingsRow({
+  value,
   label,
   description,
-  open,
-  onToggle,
   actions,
-  divider = false,
+  divider = true,
   children,
-}: CollapsibleSettingsRowProps) {
+}: AccordionSettingsRowProps) {
   return (
-    <>
-      <SettingsFieldRow
-        className={open || divider ? undefined : "border-b-0"}
-        label={label}
-        description={description}
+    <AccordionItem value={value} className={cn("relative", divider && ACCORDION_DIVIDER)}>
+      <div
+        className={cn(
+          "relative mx-4 flex min-w-0 flex-col items-stretch justify-between gap-2 py-2.5 sm:mx-5 sm:flex-row sm:items-center",
+          actions ? "sm:pr-7" : undefined,
+        )}
       >
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onToggle}>
-            {open ? "收起" : "查看"}
-          </Button>
-          {actions}
-        </div>
-      </SettingsFieldRow>
-      {open && <div className="border-t border-border/50 px-4 py-1.5 sm:px-5">{children}</div>}
-    </>
+        <AccordionTrigger chevron={!actions} className="min-w-0 flex-1 gap-0 py-0">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium leading-4">{label}</div>
+            {description && (
+              <p className="mt-0.5 text-xs leading-4 text-muted-foreground/75">{description}</p>
+            )}
+          </div>
+          {actions && (
+            // -right-1 抵消 p-1：让图形右缘与触发区自带箭头落在同一条线上。
+            <ChevronDown className="absolute -right-1 top-1/2 hidden size-4 -translate-y-1/2 box-content p-1 text-muted-foreground transition-transform duration-200 sm:block" />
+          )}
+        </AccordionTrigger>
+        {actions && (
+          <div className="flex min-w-0 w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
+            {actions}
+          </div>
+        )}
+      </div>
+      <AccordionContent className="pt-1.5 pb-4">{children}</AccordionContent>
+    </AccordionItem>
   );
 }
 
@@ -157,6 +201,8 @@ interface NumberSettingRowProps {
   value: string;
   onChange: (text: string) => void;
   onCommit: (raw: string) => void;
+  /** 作为折叠区最后一行时传 border-b-0，避免与容器底部分隔线叠成双线。 */
+  className?: string;
 }
 
 /**
@@ -171,9 +217,16 @@ function NumberSettingRow({
   value,
   onChange,
   onCommit,
+  className,
 }: NumberSettingRowProps) {
   return (
-    <SettingsFieldRow label={spec.label} description={description} htmlFor={id} operational>
+    <SettingsFieldRow
+      className={className}
+      label={spec.label}
+      description={description}
+      htmlFor={id}
+      operational
+    >
       <Input
         id={id}
         className="w-full sm:w-48"
@@ -309,11 +362,13 @@ function AutoCheckinCard() {
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   /** 数字输入框草稿文本：只覆盖正在编辑的字段，失焦提交后清空。 */
   const [numDraft, setNumDraft] = useState<Partial<Record<CheckinNumberKey, string>>>({});
-  /** 参数区（时间段 / 保活阈值 / 惰性刷新）默认收起；开关行与操作行常驻。 */
-  const [expanded, setExpanded] = useState(false);
-  /** 逐账号开关列表默认收起。 */
-  const [excludedOpen, setExcludedOpen] = useState(false);
-  const [logsOpen, setLogsOpen] = useState(false);
+  /**
+   * 手风琴展开的面板：参数区 / 逐账号开关 / 签到日志。
+   *
+   * 用 multiple 而非 single：三块内容彼此独立，用户可能同时对照参数与账号名单。
+   */
+  const [openSections, setOpenSections] = useState<string[]>([]);
+  const logsOpen = openSections.includes("logs");
   const [logs, setLogs] = useState<CheckinLog[] | null>(null);
   const [logsError, setLogsError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -489,12 +544,19 @@ function AutoCheckinCard() {
       const ok = res.accounts.filter((a) => a.result === "success").length;
       const already = res.accounts.filter((a) => a.result === "already").length;
       const err = res.accounts.filter((a) => a.result === "error").length;
+      const skipped = res.accounts.filter(
+        (a) => a.result === "skipped" && a.reason === "auto_checkin_disabled",
+      ).length;
       const detail = res.accounts
         .filter((a) => a.result === "error")
         .map((a) => `${a.email}（${a.error}）`)
         .join("；");
-      const text = `签到完成：成功 ${ok}，已签 ${already}，失败 ${err}${detail ? `。${detail}` : ""}`;
-      if (err > 0) toast.error(text);
+      const text = `签到完成：成功 ${ok}，已签 ${already}，失败 ${err}，已忽略 ${skipped} 个关闭自动签到的账号${detail ? `。${detail}` : ""}`;
+      const allFailed = res.accounts.length > 0 && err === res.accounts.length;
+      const allSkippedOrUnavailable =
+        res.accounts.length === 0 || (ok === 0 && already === 0 && err === 0);
+      if (allFailed) toast.error(text);
+      else if (allSkippedOrUnavailable) toast.info(text);
       else toast.success(text);
       void loadConfig();
       if (logsOpen) void loadLogs();
@@ -546,193 +608,192 @@ function AutoCheckinCard() {
       title="自动签到"
     >
       <CardContent className="space-y-0 p-0">
-        {cfg ? (
-          <>
-            <SettingsFieldRow
-              label="启用自动签到"
-              description="为允许自动签到的账号核验状态并补签；可在下方按账号关闭"
-              htmlFor="ac-enabled"
-            >
-              <div className="flex items-center gap-2">
-                {/* 开关是业务操作（拨动即落盘），展开按钮是纯展示交互，故只包开关。 */}
-                <DemoAction>
-                  <Switch
-                    id="ac-enabled"
-                    checked={cfg.enabled}
-                    onCheckedChange={onToggleEnabled}
-                  />
-                </DemoAction>
-                <Button variant="outline" size="sm" onClick={() => setExpanded((value) => !value)}>
-                  {expanded ? "收起" : "展开"}
-                </Button>
-              </div>
-            </SettingsFieldRow>
-
-            {/* 逐账号开关：切换即落盘，与参数编辑共用同一条提交链。 */}
-            <CollapsibleSettingsRow
-              label="不参与自动签到的账号"
-              description="关闭后，后台轮次与刷新积分时跳过该账号；仍可手动签到。"
-              open={excludedOpen}
-              onToggle={() => setExcludedOpen((value) => !value)}
-              divider
-            >
-              {checkinAccounts.length === 0 ? (
-                <p className="py-2 text-xs text-muted-foreground">暂无可签到的账号</p>
-              ) : (
-                <div className="py-0.5">
-                  {checkinAccounts.map((account) => {
-                    const name = account.nickname || account.email || account.uid || account.id;
-                    return (
-                      <div
-                        key={account.id}
-                        className="flex min-w-0 items-center justify-between gap-3 border-b border-border/60 py-2 last:border-b-0"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-[13px] leading-4" title={name}>
-                          {name}
-                        </span>
-                        <DemoAction>
-                          <Switch
-                            checked={!excludedIds.has(account.id)}
-                            onCheckedChange={(allowed) => onAutoCheckinChange(account, allowed)}
-                            aria-label={`${name}参与自动签到`}
+        <Accordion type="multiple" value={openSections} onValueChange={setOpenSections}>
+          {cfg ? (
+            <>
+              <AccordionSettingsRow
+                value="params"
+                label="启用自动签到"
+                description="为允许自动签到的账号核验状态并补签；可在下方按账号关闭"
+                actions={
+                  <>
+                    <DemoAction>
+                      <Switch
+                        aria-label="启用自动签到"
+                        checked={cfg.enabled}
+                        onCheckedChange={onToggleEnabled}
+                      />
+                    </DemoAction>
+                    <DemoAction>
+                      <Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy || saving}>
+                        {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}全部立即签到
+                      </Button>
+                    </DemoAction>
+                  </>
+                }
+              >
+                <div className={INSET_PANEL}>
+                  <SettingsFieldRow
+                    className={PANEL_ROW}
+                    label="签到时间段"
+                    description={
+                      <>
+                        留空为不限制。设置后每天在窗口内随机时刻自动签到。
+                        <span className="mt-0.5 block">需 App 在窗口附近运行才能按时执行。</span>
+                      </>
+                    }
+                  >
+                    <div className="flex min-w-0 w-full flex-col items-end gap-1 sm:w-auto">
+                      <div className="flex min-w-0 w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+                        <DemoAction className="min-w-0 flex-1 sm:flex-none">
+                          <TimePicker
+                            className="min-w-0 flex-1 sm:flex-none"
+                            value={cfg.checkin_start}
+                            hourLabel="签到开始时间（小时）"
+                            minuteLabel="签到开始时间（分钟）"
+                            onChange={(v) => onWindowChange("checkin_start", v)}
                           />
                         </DemoAction>
+                        <span className="shrink-0 text-xs text-muted-foreground">至</span>
+                        <DemoAction className="min-w-0 flex-1 sm:flex-none">
+                          <TimePicker
+                            className="min-w-0 flex-1 sm:flex-none"
+                            value={cfg.checkin_end}
+                            hourLabel="签到结束时间（小时）"
+                            minuteLabel="签到结束时间（分钟）"
+                            onChange={(v) => onWindowChange("checkin_end", v)}
+                          />
+                        </DemoAction>
+                        {(cfg.checkin_start || cfg.checkin_end) && (
+                          <DemoAction>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="shrink-0"
+                              onClick={clearWindow}
+                            >
+                              清除
+                            </Button>
+                          </DemoAction>
+                        )}
+                      </div>
+                      {windowIssue && (
+                        <p className="text-xs leading-4 text-amber-600">{windowIssue}</p>
+                      )}
+                    </div>
+                  </SettingsFieldRow>
+
+                  <NumberSettingRow
+                    className={PANEL_ROW}
+                    id="ac-keep"
+                    spec={CHECKIN_NUMBER_FIELDS.keepalive_days}
+                    description="天；0 表示每天无条件刷新"
+                    value={numDraft.keepalive_days ?? String(cfg.keepalive_days)}
+                    onChange={(text) => onNumberChange("keepalive_days", text)}
+                    onCommit={(raw) => onNumberCommit("keepalive_days", raw)}
+                  />
+                  <NumberSettingRow
+                    className={cn(PANEL_ROW, "border-b-0")}
+                    id="ac-lazy"
+                    spec={CHECKIN_NUMBER_FIELDS.lazy_refresh_hours}
+                    description="小时"
+                    value={numDraft.lazy_refresh_hours ?? String(cfg.lazy_refresh_hours)}
+                    onChange={(text) => onNumberChange("lazy_refresh_hours", text)}
+                    onCommit={(raw) => onNumberCommit("lazy_refresh_hours", raw)}
+                  />
+                </div>
+              </AccordionSettingsRow>
+
+              {/* 逐账号开关：切换即落盘，与参数编辑共用同一条提交链。 */}
+              <AccordionSettingsRow
+                value="excluded"
+                label="不参与自动签到的账号"
+                description="关闭后，后台轮次、刷新积分与全部立即签到都会跳过该账号；仍可在账号卡片进行单账号手动签到。"
+              >
+                <div className={INSET_PANEL}>
+                  {checkinAccounts.length === 0 ? (
+                    <p className="py-2 text-xs text-muted-foreground">暂无可签到的账号</p>
+                  ) : (
+                    checkinAccounts.map((account) => {
+                      const name = account.nickname || account.email || account.uid || account.id;
+                      return (
+                        <div
+                          key={account.id}
+                          className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 py-2.5 last:border-b-0"
+                        >
+                          <span className="min-w-0 flex-1 truncate text-xs leading-4" title={name}>
+                            {name}
+                          </span>
+                          <DemoAction>
+                            <Switch
+                              checked={!excludedIds.has(account.id)}
+                              onCheckedChange={(allowed) => onAutoCheckinChange(account, allowed)}
+                              aria-label={`${name}参与自动签到`}
+                            />
+                          </DemoAction>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </AccordionSettingsRow>
+            </>
+          ) : (
+            <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
+          )}
+
+          {/* 成长中心（派猫猫旅行）仅国内版开放：国际版不渲染该行，也不请求其配置。
+              行本身独立于签到配置的加载状态，签到配置读取失败也不影响开关。 */}
+          {variantSupportsTravel(variant) ? <AutoTravelRow /> : null}
+
+          <AccordionSettingsRow
+            value="logs"
+            label="签到日志"
+            description="保留最近 30 天；本机明文保存，可能含账号昵称。"
+            divider={false}
+          >
+            <div className={INSET_PANEL}>
+              {logsError ? (
+                <p className="py-2 text-xs text-destructive">{logsError}</p>
+              ) : !logs ? (
+                <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
+              ) : logs.length === 0 ? (
+                <p className="py-2 text-xs text-muted-foreground">暂无签到记录</p>
+              ) : (
+                <div className="max-h-64 overflow-y-auto pr-1">
+                  {[...logs].reverse().map((l, i) => {
+                    const tone = logLabel(l.result);
+                    return (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between border-b border-border/50 py-2 text-xs last:border-b-0"
+                      >
+                        <div className="min-w-0 flex-1 truncate">
+                          <span className="font-medium">{l.email}</span>
+                          {l.error && <span className="text-destructive">（{l.error}）</span>}
+                        </div>
+                        <div className="ml-2 flex shrink-0 items-center gap-2">
+                          <span
+                            className={
+                              tone.tone === "error"
+                                ? "text-destructive"
+                                : tone.tone === "warning"
+                                  ? "text-amber-600"
+                                  : "text-emerald-600"
+                            }
+                          >
+                            {tone.text}
+                          </span>
+                          <span className="text-muted-foreground">{formatTime(l.ts)}</span>
+                        </div>
                       </div>
                     );
                   })}
                 </div>
               )}
-            </CollapsibleSettingsRow>
-
-            {expanded && (
-              <>
-                <SettingsFieldRow
-                  label="签到时间段"
-                  description={
-                    <>
-                      留空为不限制。设置后每天在窗口内随机时刻自动签到。
-                      <span className="mt-0.5 block">需 App 在窗口附近运行才能按时执行。</span>
-                    </>
-                  }
-                >
-                  <div className="flex min-w-0 w-full flex-col items-end gap-1 sm:w-auto">
-                    <div className="flex min-w-0 w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
-                      <DemoAction className="min-w-0 flex-1 sm:flex-none">
-                        <TimePicker
-                          className="min-w-0 flex-1 sm:flex-none"
-                          value={cfg.checkin_start}
-                          hourLabel="签到开始时间（小时）"
-                          minuteLabel="签到开始时间（分钟）"
-                          onChange={(v) => onWindowChange("checkin_start", v)}
-                        />
-                      </DemoAction>
-                      <span className="shrink-0 text-xs text-muted-foreground">至</span>
-                      <DemoAction className="min-w-0 flex-1 sm:flex-none">
-                        <TimePicker
-                          className="min-w-0 flex-1 sm:flex-none"
-                          value={cfg.checkin_end}
-                          hourLabel="签到结束时间（小时）"
-                          minuteLabel="签到结束时间（分钟）"
-                          onChange={(v) => onWindowChange("checkin_end", v)}
-                        />
-                      </DemoAction>
-                      {(cfg.checkin_start || cfg.checkin_end) && (
-                        <DemoAction>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="shrink-0"
-                            onClick={clearWindow}
-                          >
-                            清除
-                          </Button>
-                        </DemoAction>
-                      )}
-                    </div>
-                    {windowIssue && (
-                      <p className="text-xs leading-4 text-amber-600">{windowIssue}</p>
-                    )}
-                  </div>
-                </SettingsFieldRow>
-
-                <NumberSettingRow
-                  id="ac-keep"
-                  spec={CHECKIN_NUMBER_FIELDS.keepalive_days}
-                  description="天；0 表示每天无条件刷新"
-                  value={numDraft.keepalive_days ?? String(cfg.keepalive_days)}
-                  onChange={(text) => onNumberChange("keepalive_days", text)}
-                  onCommit={(raw) => onNumberCommit("keepalive_days", raw)}
-                />
-                <NumberSettingRow
-                  id="ac-lazy"
-                  spec={CHECKIN_NUMBER_FIELDS.lazy_refresh_hours}
-                  description="小时"
-                  value={numDraft.lazy_refresh_hours ?? String(cfg.lazy_refresh_hours)}
-                  onChange={(text) => onNumberChange("lazy_refresh_hours", text)}
-                  onCommit={(raw) => onNumberCommit("lazy_refresh_hours", raw)}
-                />
-              </>
-            )}
-
-            <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-              <DemoAction><Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy || saving}>
-                {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}全部立即签到
-              </Button></DemoAction>
             </div>
-          </>
-        ) : (
-          <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
-        )}
-
-        {/* 成长中心（派猫猫旅行）仅国内版开放：国际版不渲染该行，也不请求其配置。
-            行本身独立于签到配置的加载状态，签到配置读取失败也不影响开关。 */}
-        {variantSupportsTravel(variant) ? <AutoTravelRow /> : null}
-
-        <CollapsibleSettingsRow
-          label="签到日志"
-          description="保留最近 30 天；本机明文保存，可能含账号昵称。"
-          open={logsOpen}
-          onToggle={() => setLogsOpen((value) => !value)}
-        >
-          {logsError ? (
-            <p className="py-2 text-xs text-destructive">{logsError}</p>
-          ) : !logs ? (
-            <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
-          ) : logs.length === 0 ? (
-            <p className="py-2 text-xs text-muted-foreground">暂无签到记录</p>
-          ) : (
-            <div className="max-h-64 overflow-y-auto pr-1">
-              {[...logs].reverse().map((l, i) => {
-                const tone = logLabel(l.result);
-                return (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between border-b border-border/60 py-2 text-xs last:border-b-0"
-                  >
-                    <div className="min-w-0 flex-1 truncate">
-                      <span className="font-medium">{l.email}</span>
-                      {l.error && <span className="text-destructive">（{l.error}）</span>}
-                    </div>
-                    <div className="ml-2 flex shrink-0 items-center gap-2">
-                      <span
-                        className={
-                          tone.tone === "error"
-                            ? "text-destructive"
-                            : tone.tone === "warning"
-                              ? "text-amber-600"
-                              : "text-emerald-600"
-                        }
-                      >
-                        {tone.text}
-                      </span>
-                      <span className="text-muted-foreground">{formatTime(l.ts)}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CollapsibleSettingsRow>
+          </AccordionSettingsRow>
+        </Accordion>
       </CardContent>
     </SettingsGroup>
   );
@@ -815,9 +876,9 @@ function AutoRotateCard() {
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   /** 数字输入框草稿文本：只覆盖正在编辑的字段，失焦提交后清空。 */
   const [numDraft, setNumDraft] = useState<Partial<Record<RotateNumberKey, string>>>({});
-  /** 参数区（间隔 / 冷却 / 阈值）与说明默认收起；开关行、操作行与日志行常驻。 */
-  const [expanded, setExpanded] = useState(false);
-  const [logsOpen, setLogsOpen] = useState(false);
+  /** 手风琴展开的面板：参数区 / 轮换日志，默认全部收起；开关行与操作行常驻。 */
+  const [openSections, setOpenSections] = useState<string[]>([]);
+  const logsOpen = openSections.includes("logs");
   const [logs, setLogs] = useState<RotateLog[] | null>(null);
   const [logsError, setLogsError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -998,31 +1059,33 @@ function AutoRotateCard() {
           </div>
         )}
 
+        <Accordion type="multiple" value={openSections} onValueChange={setOpenSections}>
         {cfg ? (
           <>
-            <SettingsFieldRow
+            <AccordionSettingsRow
+              value="params"
               label="启用自动轮换"
               description="开启后按设定的间隔自动检查并切换 CodeBuddy CLI 账号"
-              htmlFor="ar-enabled"
+              actions={
+                <>
+                  <DemoAction>
+                    <Switch
+                      aria-label="启用自动轮换"
+                      checked={cfg.enabled}
+                      onCheckedChange={onToggleEnabled}
+                    />
+                  </DemoAction>
+                  <DemoAction>
+                    <Button size="sm" variant="outline" onClick={runNow} disabled={busy}>
+                      {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}立即检查一次
+                    </Button>
+                  </DemoAction>
+                </>
+              }
             >
-              <div className="flex items-center gap-2">
-                {/* 开关是业务操作（拨动即落盘），展开按钮是纯展示交互，故只包开关。 */}
-                <DemoAction>
-                  <Switch
-                    id="ar-enabled"
-                    checked={cfg.enabled}
-                    onCheckedChange={onToggleEnabled}
-                  />
-                </DemoAction>
-                <Button variant="outline" size="sm" onClick={() => setExpanded((value) => !value)}>
-                  {expanded ? "收起" : "展开"}
-                </Button>
-              </div>
-            </SettingsFieldRow>
-
-            {expanded && (
-              <>
+              <div className={INSET_PANEL}>
                 <NumberSettingRow
+                  className={PANEL_ROW}
                   id="ar-interval"
                   spec={ROTATE_NUMBER_FIELDS.check_interval_minutes}
                   description="分钟"
@@ -1031,6 +1094,7 @@ function AutoRotateCard() {
                   onCommit={(raw) => onNumberCommit("check_interval_minutes", raw)}
                 />
                 <NumberSettingRow
+                  className={PANEL_ROW}
                   id="ar-cooldown"
                   spec={ROTATE_NUMBER_FIELDS.cooldown_minutes}
                   description="分钟"
@@ -1039,6 +1103,7 @@ function AutoRotateCard() {
                   onCommit={(raw) => onNumberCommit("cooldown_minutes", raw)}
                 />
                 <NumberSettingRow
+                  className={PANEL_ROW}
                   id="ar-gap"
                   spec={ROTATE_NUMBER_FIELDS.min_gap_hours}
                   description="小时"
@@ -1047,6 +1112,7 @@ function AutoRotateCard() {
                   onCommit={(raw) => onNumberCommit("min_gap_hours", raw)}
                 />
                 <NumberSettingRow
+                  className={PANEL_ROW}
                   id="ar-urgency"
                   spec={ROTATE_NUMBER_FIELDS.min_urgency_hours}
                   description="小时"
@@ -1055,6 +1121,7 @@ function AutoRotateCard() {
                   onCommit={(raw) => onNumberCommit("min_urgency_hours", raw)}
                 />
                 <NumberSettingRow
+                  className={cn(PANEL_ROW, "border-b-0")}
                   id="ar-min"
                   spec={ROTATE_NUMBER_FIELDS.min_remaining_credits}
                   description="低于此值时不切换"
@@ -1062,71 +1129,68 @@ function AutoRotateCard() {
                   onChange={(text) => onNumberChange("min_remaining_credits", text)}
                   onCommit={(raw) => onNumberCommit("min_remaining_credits", raw)}
                 />
-                <p className="border-b border-border/60 px-4 py-3 text-[13px] leading-5 text-muted-foreground sm:px-5">
+                <p className="pt-1 text-[13px] leading-5 text-muted-foreground">
                   切换时机：目标账号剩余到期时间少于「紧迫阈值」且比当前账号早超过「差异阈值」，且目标剩余积分不低于「最小剩余积分」。检测到有 CodeBuddy CLI 会话在运行时，本次轮换会跳过并在当日最多提示 5 次；重启 CLI 后新账号才会生效。
                 </p>
-              </>
-            )}
-
-            <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-              <DemoAction><Button size="sm" variant="outline" onClick={runNow} disabled={busy}>
-                {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}立即检查一次
-              </Button></DemoAction>
-            </div>
+              </div>
+            </AccordionSettingsRow>
           </>
         ) : (
           <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
         )}
 
-        <CollapsibleSettingsRow
+        <AccordionSettingsRow
+          value="logs"
           label="轮换日志"
           description="保留最近 200 条；本机明文保存，可能含账号昵称。"
-          open={logsOpen}
-          onToggle={() => setLogsOpen((value) => !value)}
+          divider={false}
         >
-          {logsError ? (
-            <p className="py-2 text-xs text-destructive">{logsError}</p>
-          ) : !logs ? (
-            <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
-          ) : logs.length === 0 ? (
-            <p className="py-2 text-xs text-muted-foreground">暂无轮换记录</p>
-          ) : (
-            <div className="max-h-64 overflow-y-auto pr-1">
-              {logs.map((l, i) => {
-                const tone = actionLabel(l.action);
-                return (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between border-b border-border/60 py-2 text-xs last:border-b-0"
-                  >
-                    <div className="min-w-0 flex-1 truncate">
-                      {l.action === "switched" && l.from && l.to && (
-                        <span className="font-medium">
-                          {l.from.name ?? l.from.id} → {l.to.name ?? l.to.id}
+          <div className={INSET_PANEL}>
+            {logsError ? (
+              <p className="py-2 text-xs text-destructive">{logsError}</p>
+            ) : !logs ? (
+              <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
+            ) : logs.length === 0 ? (
+              <p className="py-2 text-xs text-muted-foreground">暂无轮换记录</p>
+            ) : (
+              <div className="max-h-64 overflow-y-auto pr-1">
+                {logs.map((l, i) => {
+                  const tone = actionLabel(l.action);
+                  return (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between border-b border-border/50 py-2 text-xs last:border-b-0"
+                    >
+                      <div className="min-w-0 flex-1 truncate">
+                        {l.action === "switched" && l.from && l.to && (
+                          <span className="font-medium">
+                            {l.from.name ?? l.from.id} → {l.to.name ?? l.to.id}
+                          </span>
+                        )}
+                        {l.reason && <span className="text-muted-foreground">（{l.reason}）</span>}
+                      </div>
+                      <div className="ml-2 flex shrink-0 items-center gap-2">
+                        <span
+                          className={
+                            tone.tone === "error"
+                              ? "text-destructive"
+                              : tone.tone === "success"
+                                ? "text-emerald-600"
+                                : "text-amber-600"
+                          }
+                        >
+                          {tone.text}
                         </span>
-                      )}
-                      {l.reason && <span className="text-muted-foreground">（{l.reason}）</span>}
+                        <span className="text-muted-foreground">{formatTime(l.ts)}</span>
+                      </div>
                     </div>
-                    <div className="ml-2 flex shrink-0 items-center gap-2">
-                      <span
-                        className={
-                          tone.tone === "error"
-                            ? "text-destructive"
-                            : tone.tone === "success"
-                              ? "text-emerald-600"
-                              : "text-amber-600"
-                        }
-                      >
-                        {tone.text}
-                      </span>
-                      <span className="text-muted-foreground">{formatTime(l.ts)}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CollapsibleSettingsRow>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </AccordionSettingsRow>
+        </Accordion>
       </CardContent>
     </SettingsGroup>
   );
@@ -1473,7 +1537,9 @@ function formatNotificationTime(at: number): string {
 
 /** 通知历史：最近 100 条应用内提示，供事后核对。 */
 function NotificationHistoryCard() {
-  const [open, setOpen] = useState(false);
+  /** 手风琴展开的面板：应用内提示存档，默认收起。 */
+  const [openSections, setOpenSections] = useState<string[]>([]);
+  const open = openSections.includes("history");
   const [items, setItems] = useState<AppNotification[] | null>(null);
   const [error, setError] = useState("");
 
@@ -1509,55 +1575,70 @@ function NotificationHistoryCard() {
   return (
     <SettingsGroup id="settings-notifications" title="通知历史">
       <CardContent className="space-y-0 p-0">
-        <CollapsibleSettingsRow
-          label="应用内提示存档"
-          description="保留最近 100 条，便于事后核对；本机明文保存，可能含账号昵称与本地路径。"
-          open={open}
-          onToggle={() => setOpen((value) => !value)}
-          actions={
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!items || items.length === 0}
-              onClick={clearHistory}
-            >
-              清空
-            </Button>
-          }
-        >
-          {error ? (
-            <p className="py-2 text-xs text-destructive">{error}</p>
-          ) : !items ? (
-            <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
-          ) : items.length === 0 ? (
-            <p className="py-2 text-xs text-muted-foreground">还没有记录到任何提示。</p>
-          ) : (
-            <ul className="max-h-72 divide-y divide-border/40 overflow-auto">
-              {items.map((item, index) => (
-                <li key={`${item.at}-${index}`} className="py-1.5">
-                  <div className="flex items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
-                    <span
-                      className={cn(
-                        "size-1.5 shrink-0 rounded-full",
-                        NOTIFICATION_LEVEL_DOT[item.level],
+        <Accordion type="multiple" value={openSections} onValueChange={setOpenSections}>
+          <AccordionSettingsRow
+            value="history"
+            label="应用内提示存档"
+            description="保留最近 100 条，便于事后核对；本机明文保存，可能含账号昵称与本地路径。"
+            divider={false}
+            actions={
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="ghost" size="sm" disabled={!items || items.length === 0}>
+                    清空
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>清空通知历史？</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      将删除本机保存的全部提示存档，无法恢复。
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>取消</AlertDialogCancel>
+                    <AlertDialogAction onClick={clearHistory}>清空</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            }
+          >
+            <div className={INSET_PANEL}>
+              {error ? (
+                <p className="py-2 text-xs text-destructive">{error}</p>
+              ) : !items ? (
+                <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
+              ) : items.length === 0 ? (
+                <p className="py-2 text-xs text-muted-foreground">还没有记录到任何提示。</p>
+              ) : (
+                <ul className="max-h-72 divide-y divide-border/40 overflow-auto">
+                  {items.map((item, index) => (
+                    <li key={`${item.at}-${index}`} className="py-1.5">
+                      <div className="flex items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
+                        <span
+                          className={cn(
+                            "size-1.5 shrink-0 rounded-full",
+                            NOTIFICATION_LEVEL_DOT[item.level],
+                          )}
+                          aria-hidden
+                        />
+                        <span>{NOTIFICATION_LEVEL_LABEL[item.level]}</span>
+                        <span aria-hidden>·</span>
+                        <span>{formatNotificationTime(item.at)}</span>
+                      </div>
+                      <div className="mt-0.5 text-xs leading-5">{item.title}</div>
+                      {item.description && (
+                        <div className="mt-0.5 break-all text-xs leading-5 text-muted-foreground">
+                          {item.description}
+                        </div>
                       )}
-                      aria-hidden
-                    />
-                    <span>{NOTIFICATION_LEVEL_LABEL[item.level]}</span>
-                    <span aria-hidden>·</span>
-                    <span>{formatNotificationTime(item.at)}</span>
-                  </div>
-                  <div className="mt-0.5 text-[13px] leading-5">{item.title}</div>
-                  {item.description && (
-                    <div className="mt-0.5 break-all text-xs leading-5 text-muted-foreground">
-                      {item.description}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </CollapsibleSettingsRow>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </AccordionSettingsRow>
+        </Accordion>
       </CardContent>
     </SettingsGroup>
   );
@@ -1763,7 +1844,6 @@ function RateLimitCard() {
           className="border-b-0"
           label="接入客户端 hook"
           description={hookDescription}
-          htmlFor="rl-hook"
           operational
         >
           {status?.installed ? (

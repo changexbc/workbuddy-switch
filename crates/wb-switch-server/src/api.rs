@@ -838,17 +838,7 @@ async fn api_checkin_all(body: Option<Json<Value>>) -> Response {
         .and_then(|Json(value)| value.get("variant"))
         .and_then(|value| value.as_str())
         .map(|raw| WbVariant::parse(Some(raw)));
-    let respect_auto_checkin = body
-        .as_ref()
-        .and_then(|Json(value)| value.get("respectAutoCheckin"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let result = if respect_auto_checkin {
-        checkin::run_checkin_all_for_refresh(variant).await
-    } else {
-        checkin::run_checkin_all(variant).await
-    };
-    json_ok(result)
+    json_ok(checkin::run_checkin_all(variant).await)
 }
 
 async fn api_checkin_config() -> Response {

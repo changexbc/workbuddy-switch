@@ -532,18 +532,18 @@ export function checkin(accountId: string): Promise<CheckinResult> {
 
 /**
  * 批量签到：不传档位时覆盖全部档位；显式传入时只处理该档位。
- * 刷新积分时传 respectAutoCheckin=true，跳过已关闭账号并返回逐账号原因；主动全部签到缺省不跳过。
+ * 关闭自动签到的账号会被跳过，并逐账号返回 skipped 原因（设置页与托盘同样遵守）。
  *
  * 这里**不能**用 `variantArgs`：`checkin_all` 的缺省语义是「全部档位」，国内版若
  * 缺省不传参，账号页在国内版 Tab 触发的批量签到会打到国际版账号。显式下发 `cn`
  * 与改造前等价（改造前账号库里只有国内版账号）。
  */
-export function checkinAll(variant?: WbVariant, respectAutoCheckin = false): Promise<{
+export function checkinAll(variant?: WbVariant): Promise<{
   accounts: { accountId: string; email: string; result: string; error?: string; inactive?: boolean; reason?: string }[];
   status?: string;
   reason?: string;
 }> {
-  return call("checkin_all", { ...(variant ? { variant } : {}), respectAutoCheckin });
+  return call("checkin_all", variant ? { variant } : {});
 }
 
 export function getAutoCheckinConfig(): Promise<CheckinConfig> {
