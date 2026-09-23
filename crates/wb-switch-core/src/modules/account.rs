@@ -274,7 +274,28 @@ fn upsert_account_in(accounts: &mut Vec<Value>, updated: &Value) {
     accounts.push(updated.clone());
 }
 
+/// WorkBuddy 5.6 加密信封凭据的可读错误：`access_token` 为信封形态时返回提示文案。
+///
+/// 信封 token 无法解出明文，不能用于签到 / 积分 / 旅行等 API 请求；此前会经
+/// [`build_auth_headers`] 的 `unwrap_or_default()` 兜底成空 `Bearer`，被网关
+/// 401 后再把 HTML 错误页原样回显到界面（issue #94）。需要账号身份的请求
+/// 发出前应先用本函数短路。
+pub fn envelope_token_error(account: &Value) -> Option<String> {
+    if is_envelope(account, "access_token") {
+        return Some(
+            "该账号凭据为 WorkBuddy 加密信封态，无法直接调用签到 / 积分 / Token 统计等接口；\
+             切换功能不受影响，如需上述功能请删除该账号后改用「OAuth 扫码添加」获取明文凭据。"
+                .to_string(),
+        );
+    }
+    None
+}
+
 /// 构造与官方对齐的请求头。对照 server.py `build_auth_headers`。
+///
+/// 注意：`access_token` 为加密信封对象时 `get_str` 取不到值，这里会产出空
+/// `Bearer`——调用方必须先用 [`envelope_token_error`] 拦截，不要把空凭据
+/// 真的发出去（issue #94）。
 pub fn build_auth_headers(account: &Value) -> HashMap<String, String> {
     let mut headers = HashMap::new();
     headers.insert(
@@ -305,6 +326,28 @@ pub fn build_auth_headers(account: &Value) -> HashMap<String, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 回归 issue #94：信封凭据要能被识别并给出可读错误，明文/缺字段不误报。
+    #[test]
+    fn envelope_token_error_only_fires_on_envelope_access_token() {
+        let envelope = json!({
+            "id": "a1",
+            "access_token": {"$wbEncrypted": true, "envelope": "…"},
+            "refresh_token": {"$wbEncrypted": true, "envelope": "…"},
+        });
+        let err = envelope_token_error(&envelope).expect("信封 access_token 应返回错误");
+        assert!(err.contains("信封"), "错误文案应可读：{err}");
+        assert!(err.contains("OAuth"), "应给出扫码重新添加的指引：{err}");
+
+        let plain = json!({"id": "a2", "access_token": "SECRET", "refresh_token": "R"});
+        assert!(envelope_token_error(&plain).is_none(), "明文凭据不应报错");
+
+        let legacy = json!({"id": "a3"});
+        assert!(
+            envelope_token_error(&legacy).is_none(),
+            "缺 access_token 的历史账号不在此拦截（保持既有行为）"
+        );
+    }
 
     #[test]
     fn account_meta_strips_tokens() {

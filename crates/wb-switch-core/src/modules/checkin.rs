@@ -24,7 +24,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::modules::account::{
-    account_display_name, build_auth_headers, load_accounts, variant_of,
+    account_display_name, build_auth_headers, envelope_token_error, load_accounts, variant_of,
 };
 use crate::modules::config::{
     add_checkin_log, http_request, is_route_missing, load_checkin_config, load_checkin_logs,
@@ -135,6 +135,10 @@ fn skips_refresh_before_retry(variant: WbVariant, resp: &Value) -> bool {
 
 /// 发单次签到请求；遇到未授权且存在 refresh token 时刷新一次并重试。
 async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -> Value {
+    // 加密信封凭据短路：不发空 Bearer，直接给出可读错误（issue #94）。
+    if let Some(err) = envelope_token_error(account) {
+        return json!({"code": -2, "message": err});
+    }
     let url = format!("{}{path}", variant.api_endpoint());
     let headers = build_auth_headers(account);
     let mut resp = http_request(&url, "POST", Some(json!({})), Some(&headers)).await;
@@ -829,6 +833,22 @@ async fn checkin_all_rows(accounts: Vec<Value>, cfg: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归 issue #94：信封凭据的签到请求应在入口短路并返回可读错误，
+    /// 不发出空 Bearer（此前会被网关 401 后把 HTML 原样回显）。
+    #[tokio::test]
+    async fn envelope_credentials_short_circuit_before_request() {
+        let account = json!({
+            "id": "envelope-only",
+            "variant": "cn",
+            "access_token": {"$wbEncrypted": true, "envelope": "…"},
+            "refresh_token": {"$wbEncrypted": true, "envelope": "…"},
+        });
+        let resp = checkin_request_once("/whatever", &account, WbVariant::Cn).await;
+        assert_eq!(resp["code"], -2);
+        let msg = resp["message"].as_str().expect("message 应为字符串");
+        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+    }
 
     #[tokio::test]
     async fn excluded_account_never_starts_passive_operation() {

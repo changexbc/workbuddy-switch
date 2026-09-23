@@ -8,7 +8,9 @@ use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
-use crate::modules::account::{account_display_name, build_auth_headers, variant_of};
+use crate::modules::account::{
+    account_display_name, build_auth_headers, envelope_token_error, variant_of,
+};
 use crate::modules::config::{
     http_request, is_route_missing, load_checkin_config, now_ms, CHECKIN_API_PREFIX,
     WORKBUDDY_API_ENDPOINT,
@@ -368,6 +370,10 @@ fn is_transport_error(response: &Value) -> bool {
 /// 新鲜，遇到未授权时使用 refresh token 重试一次。调用方只拿到上游 JSON，
 /// 不会把认证字段拼进返回值。
 pub async fn authenticated_post(account: &Value, url: &str, body: Value) -> Value {
+    // 加密信封凭据短路：不发空 Bearer，直接给出可读错误（issue #94）。
+    if let Some(err) = envelope_token_error(account) {
+        return json!({"code": -2, "message": err});
+    }
     let config = load_checkin_config();
     let mut working_account = ensure_fresh_token(account.clone(), &config).await;
     let mut response = post_with_account(&working_account, url, body.clone()).await;
@@ -830,6 +836,21 @@ fn legacy_credit_result(account: &Value, response: &Value, now: i64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归 issue #94：信封凭据在 authenticated_post 入口短路，不发空 Bearer，
+    /// 也不会进入刷新重试链路。
+    #[tokio::test]
+    async fn envelope_credentials_short_circuit_before_request() {
+        let account = json!({
+            "id": "envelope-only",
+            "access_token": {"$wbEncrypted": true, "envelope": "…"},
+            "refresh_token": {"$wbEncrypted": true, "envelope": "…"},
+        });
+        let resp = authenticated_post(&account, "https://example.invalid/api", json!({})).await;
+        assert_eq!(resp["code"], -2);
+        let msg = resp["message"].as_str().expect("message 应为字符串");
+        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+    }
 
     #[test]
     fn parses_cockpit_resource_shape_and_marks_expiry() {

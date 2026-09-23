@@ -104,6 +104,10 @@ fn is_unauthorized(resp: &Value) -> bool {
 
 /// 发旅行接口请求；遇到未授权且存在 refresh token 时刷新一次并重试。
 async fn travel_request(path: &str, method: &str, body: Option<Value>, account: &Value) -> Value {
+    // 加密信封凭据短路：不发空 Bearer，直接给出可读错误（issue #94）。
+    if let Some(err) = account::envelope_token_error(account) {
+        return json!({"code": -2, "message": err});
+    }
     let url = format!("{WORKBUDDY_API_ENDPOINT}{path}");
     let headers = build_travel_headers(account);
     let mut resp = http_request(&url, method, body.clone(), Some(&headers)).await;
@@ -1049,6 +1053,21 @@ pub fn travel_display(account_id: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归 issue #94：信封凭据的旅行请求应在入口短路并返回可读错误，
+    /// 不发出空 Bearer。
+    #[tokio::test]
+    async fn envelope_credentials_short_circuit_before_request() {
+        let account = json!({
+            "id": "envelope-only",
+            "access_token": {"$wbEncrypted": true, "envelope": "…"},
+            "refresh_token": {"$wbEncrypted": true, "envelope": "…"},
+        });
+        let resp = travel_request("/whatever", "POST", Some(json!({})), &account).await;
+        assert_eq!(resp["code"], -2);
+        let msg = resp["message"].as_str().expect("message 应为字符串");
+        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+    }
 
     #[test]
     fn retryable_skips_are_not_terminal() {
