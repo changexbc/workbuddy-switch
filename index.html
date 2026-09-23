@@ -5,10 +5,145 @@
     <link rel="icon" type="image/png" href="/icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>workbuddy-switch · WorkBuddy 账号切换</title>
+    <!--
+      首屏兜底样式：纯内联，不引用任何外部资源（离线 / 资源加载失败时同样可见）。
+      正常启动时 React 挂载会清空 #root，占位自然消失；主题跟随系统，避免深色下闪白。
+    -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+      body {
+        background: #ffffff;
+        color: #18181b;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      .wb-boot {
+        box-sizing: border-box;
+        display: flex;
+        min-height: 100vh;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 32px;
+        text-align: center;
+      }
+      .wb-boot-title {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .wb-boot-text {
+        max-width: 460px;
+        font-size: 12px;
+        line-height: 1.7;
+        color: #71717a;
+      }
+      .wb-boot-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        margin-top: 6px;
+      }
+      .wb-boot-button {
+        padding: 7px 14px;
+        border: 0;
+        border-radius: 8px;
+        background: #18181b;
+        color: #fafafa;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .wb-boot-link {
+        font-size: 12px;
+        color: #71717a;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #18181b;
+          color: #fafafa;
+        }
+        .wb-boot-button {
+          background: #fafafa;
+          color: #18181b;
+        }
+        .wb-boot-text,
+        .wb-boot-link {
+          color: #a1a1aa;
+        }
+      }
+    </style>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="wb-boot">
+        <div class="wb-boot-title">正在启动…</div>
+        <div class="wb-boot-text">WorkBuddy 账号切换</div>
+      </div>
+    </div>
+
+    <!--
+      入口 JS 未接管（脚本未加载 / 模块语法错误 / 首屏渲染前抛错）时的兜底：
+      10 秒后仍未置位 window.__WB_MOUNTED__ 就把占位替换为可自救的中文提示。
+      阈值 10s 宽松于正常冷启动，只有真正启动失败时才会出现。
+    -->
+    <script>
+      (function () {
+        var timeoutMs = 10000;
+        // 与 src/lib/update.ts 的 GITHUB_RELEASE_URL 一致（内联脚本不能引用打包产物）。
+        var releaseUrl = "https://github.com/changexbc/workbuddy-switch/releases/latest";
+        window.setTimeout(function () {
+          if (window.__WB_MOUNTED__) return;
+          var root = document.getElementById("root");
+          if (!root) return;
+
+          var wrap = document.createElement("div");
+          wrap.className = "wb-boot";
+
+          var title = document.createElement("div");
+          title.className = "wb-boot-title";
+          title.textContent = "应用启动失败";
+
+          var text = document.createElement("div");
+          text.className = "wb-boot-text";
+          text.textContent =
+            "界面未能正常加载。可以先点「重新加载」再试一次；如果一直失败，可从托盘菜单「检查更新」升级到最新版本。";
+
+          var actions = document.createElement("div");
+          actions.className = "wb-boot-actions";
+
+          var reload = document.createElement("button");
+          reload.type = "button";
+          reload.className = "wb-boot-button";
+          reload.textContent = "重新加载";
+          reload.addEventListener("click", function () {
+            window.location.reload();
+          });
+
+          var link = document.createElement("a");
+          link.className = "wb-boot-link";
+          link.href = releaseUrl;
+          link.target = "_blank";
+          link.rel = "noreferrer noopener";
+          link.textContent = "前往 GitHub 下载最新版本";
+
+          actions.appendChild(reload);
+          actions.appendChild(link);
+          wrap.appendChild(title);
+          wrap.appendChild(text);
+          wrap.appendChild(actions);
+
+          root.textContent = "";
+          root.appendChild(wrap);
+        }, timeoutMs);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

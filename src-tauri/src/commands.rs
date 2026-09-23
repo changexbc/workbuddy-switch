@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide, credit_usage,
-    credits, export_import, limits, notifications, oauth, process, rate_limit_events,
+    credits, error_log, export_import, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, switch, token_stats, travel, update,
     variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
@@ -868,6 +868,56 @@ pub fn set_launch_at_login_enabled(_app: tauri::AppHandle, enabled: bool) -> Res
         let _ = enabled;
         Err("当前平台不支持开机自启".to_string())
     }
+}
+
+// ---------------------------------------------------------------------------
+// 错误日志（前端崩溃 / 未捕获错误落盘）
+// ---------------------------------------------------------------------------
+
+/// 记录一条错误日志（`kind` 白名单：frontend_crash / frontend_unhandled / backend）。
+///
+/// 只落盘、不返回失败：目录只读、磁盘满等写入失败由 core 静默降级（`let _ =`），
+/// 绝不让「记日志」反过来打断前端主流程。
+#[tauri::command]
+pub async fn log_error(kind: String, message: String, detail: Option<String>) {
+    error_log::record(&kind, &message, detail.as_deref().unwrap_or_default());
+}
+
+/// 错误日志文件路径（设置页展示用）。
+#[tauri::command]
+pub fn get_error_log_path() -> String {
+    error_log::error_log_path().to_string_lossy().to_string()
+}
+
+/// 在文件管理器中定位错误日志；日志尚未生成时改为定位所在目录。
+///
+/// 走 tauri-plugin-opener 的 Rust API（不依赖前端 capability）；reveal 内部会
+/// canonicalize，路径不存在会直接报错，所以这里按「文件 → 目录」逐级回退。
+#[tauri::command]
+pub fn reveal_error_log(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let path = error_log::error_log_path();
+    // reveal 会 canonicalize，目标不存在就直接失败。日志还没生成时改为定位目录；
+    // 目录也不存在（还没写过任何错误）就先建出来，避免按钮第一次点就失败。
+    let target = if path.exists() {
+        path
+    } else {
+        match path.parent() {
+            Some(dir) => {
+                let _ = std::fs::create_dir_all(dir);
+                if dir.exists() {
+                    dir.to_path_buf()
+                } else {
+                    path
+                }
+            }
+            None => path,
+        }
+    };
+    app.opener()
+        .reveal_item_in_dir(target)
+        .map_err(|error| format!("打开日志位置失败: {error}"))
 }
 
 // ---------------------------------------------------------------------------

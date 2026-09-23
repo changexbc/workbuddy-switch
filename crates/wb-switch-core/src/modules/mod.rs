@@ -7,6 +7,7 @@ pub mod codebuddy_ide;
 pub mod config;
 pub mod credit_usage;
 pub mod credits;
+pub mod error_log;
 pub mod export_import;
 pub mod limits;
 #[cfg(target_os = "linux")]

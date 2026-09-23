@@ -266,6 +266,12 @@ export interface AppNotification {
   at: number;
 }
 
+/**
+ * 错误日志来源（`~/.wb-switch/error.log` 的 `kind` 字段）：
+ * 渲染崩溃 / 未捕获异常或 Promise 拒绝 / 后端错误。
+ */
+export type ErrorLogKind = "frontend_crash" | "frontend_unhandled" | "backend";
+
 export interface SwitchResult {
   ok: boolean;
   account: string;
