@@ -762,6 +762,17 @@ fn uses_three_endpoint_query(variant: WbVariant) -> bool {
 
 /// 查询单账号的积分资源及到期时间。
 pub async fn get_credit_expiry(account: &Value) -> Value {
+    // 加密信封凭据短路：明文解不出来，任何请求都只会发出空 Bearer 并换回网关 401。
+    // 本入口同时覆盖新三路接口与旧接口回退两条取数链路，不再空跑请求。
+    if let Some(error) = envelope_token_error(account) {
+        return json!({
+            "ok": false,
+            "accountId": account.get("id").cloned().unwrap_or(Value::Null),
+            "accountName": account_display_name(account),
+            "error": error,
+        });
+    }
+
     let now = now_ms();
 
     if !uses_three_endpoint_query(variant_of(account)) {
@@ -849,6 +860,22 @@ mod tests {
         let resp = authenticated_post(&account, "https://example.invalid/api", json!({})).await;
         assert_eq!(resp["code"], -2);
         let msg = resp["message"].as_str().expect("message 应为字符串");
+        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+    }
+
+    /// 回归 issue #94 遗留：积分查询入口（新三路接口与旧接口回退的唯一入口）
+    /// 也要对加密信封凭据短路，不能空跑请求后回显网关 401 文案。
+    #[tokio::test]
+    async fn envelope_credentials_short_circuit_in_credit_query() {
+        let account = json!({
+            "id": "envelope-only",
+            "access_token": {"$wbEncrypted": true, "envelope": "…"},
+            "refresh_token": {"$wbEncrypted": true, "envelope": "…"},
+        });
+        let resp = get_credit_expiry(&account).await;
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["accountId"], "envelope-only");
+        let msg = resp["error"].as_str().expect("error 应为字符串");
         assert!(msg.contains("信封"), "错误文案应可读：{msg}");
     }
 
