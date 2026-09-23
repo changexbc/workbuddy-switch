@@ -241,6 +241,21 @@ pub fn resolve_state_db_path_for(
     Ok(preferred)
 }
 
+/// 只挑已存在的 state.vscdb 候选路径；找不到返回 `None`，**不创建任何目录或文件**。
+///
+/// 只读探测（读 secret、查行存在性）必须走这里，不要复用
+/// [`resolve_state_db_path_for`]——它有 `create_dir_all` 副作用，会让
+/// `installed`（依赖数据目录存在性）形成自我维持的误报（issue #91）。
+fn find_existing_state_db_path(root: &Path) -> Option<PathBuf> {
+    [
+        root.join("User").join("globalStorage").join("state.vscdb"),
+        root.join("globalStorage").join("state.vscdb"),
+        root.join("state.vscdb"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
 fn data_root_from_db(db_path: &Path) -> Result<&Path, String> {
     db_path
         .parent()
@@ -631,14 +646,20 @@ pub fn read_codebuddy_ide_secret(
 }
 
 /// 读取并解密指定目标的 secret（明文 JSON 字符串）。
+///
+/// 只读探测：即使 db 不存在也只返回 `Ok(None)`，绝不创建目录或文件（issue #91）。
 pub fn read_secret_for(
     target: &VscodeSafeStorageTarget,
     user_data_dir: Option<&Path>,
 ) -> Result<Option<String>, String> {
-    let db_path = resolve_state_db_path_for(target, user_data_dir)?;
-    if !db_path.exists() {
+    let root = match user_data_dir {
+        Some(p) => p.to_path_buf(),
+        None => (target.data_dir_resolver)()
+            .ok_or_else(|| format!("无法定位 {} 数据目录", target.display_name))?,
+    };
+    let Some(db_path) = find_existing_state_db_path(&root) else {
         return Ok(None);
-    }
+    };
     let data_root = data_root_from_db(&db_path)?.to_path_buf();
     let conn = Connection::open(&db_path)
         .map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
@@ -677,12 +698,7 @@ pub fn has_secret_row_for(
             None => return Ok(false),
         },
     };
-    let candidates = [
-        root.join("User").join("globalStorage").join("state.vscdb"),
-        root.join("globalStorage").join("state.vscdb"),
-        root.join("state.vscdb"),
-    ];
-    let Some(db_path) = candidates.iter().find(|path| path.exists()) else {
+    let Some(db_path) = find_existing_state_db_path(&root) else {
         return Ok(false);
     };
     // 只读打开：避免在「文件不存在」等边缘情况下由 SQLite 兜底新建空库。
@@ -948,6 +964,75 @@ mod tests {
         assert!(has_secret_row_for(&CODEBUDDY_CN_TARGET, Some(&dir)).unwrap());
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 回归 issue #91：只读探测（`read_secret_for`）不得有任何建目录副作用，
+    /// 否则 `installed` 会把探测自建的空数据目录误判为「已接入」，且用户删掉后
+    /// 下次探测又会重建，形成自我维持的误报。国内版与国际版 target 一并断言。
+    #[test]
+    fn read_secret_probe_creates_nothing() {
+        let base =
+            std::env::temp_dir().join(format!("wb-cn-readonly-probe-{}", uuid::Uuid::new_v4()));
+
+        for (label, target, root) in [
+            (
+                "cn/数据目录整体缺失",
+                &CODEBUDDY_CN_TARGET,
+                base.join("cn-missing"),
+            ),
+            (
+                "cn/目录存在但无 globalStorage",
+                &CODEBUDDY_CN_TARGET,
+                base.join("cn-empty-root"),
+            ),
+            (
+                "intl/数据目录整体缺失",
+                &CODEBUDDY_INTL_TARGET,
+                base.join("intl-missing"),
+            ),
+        ] {
+            if label.ends_with("无 globalStorage") {
+                std::fs::create_dir_all(&root).unwrap();
+            }
+            assert_eq!(
+                read_secret_for(target, Some(&root)).unwrap(),
+                None,
+                "{label}: 无 db 时应返回 Ok(None)"
+            );
+            assert!(!root.join("User").exists(), "{label}: 不得创建 User/");
+            assert!(
+                !root.join("User").join("globalStorage").exists(),
+                "{label}: 不得创建 User/globalStorage/"
+            );
+            assert!(
+                !root.join("globalStorage").exists(),
+                "{label}: 不得创建 globalStorage/"
+            );
+            assert!(!root.join("state.vscdb").exists(), "{label}: 不得创建 state.vscdb");
+        }
+
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    /// 回归 issue #91（写入路径不受影响）：db 不存在时注入仍会自动准备目录并写库成功。
+    #[test]
+    fn inject_still_prepares_directory() {
+        let dir = std::env::temp_dir().join(format!("wb-cn-inject-mkdir-{}", uuid::Uuid::new_v4()));
+        let plaintext = r#"{"token":"tok","accessToken":"uid+tok"}"#;
+        let result = inject_secret_for(&CODEBUDDY_CN_TARGET, plaintext, Some(&dir));
+        // Windows 上加密依赖系统 Safe Storage，无该条目会失败；只断言目录已准备好。
+        let db = dir.join("User").join("globalStorage").join("state.vscdb");
+        if result.is_ok() {
+            assert!(db.exists(), "注入应创建 state.vscdb");
+            let read = read_secret_for(&CODEBUDDY_CN_TARGET, Some(&dir)).unwrap();
+            assert_eq!(read.as_deref(), Some(plaintext));
+        } else {
+            assert!(
+                db.parent().map(|p| p.exists()).unwrap_or(false),
+                "注入路径解析应准备 globalStorage 目录"
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// 回归 issue #80：密钥环里确实有密码时，读本机登录信息不能再报

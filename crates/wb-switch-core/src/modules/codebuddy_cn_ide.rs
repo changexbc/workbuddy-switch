@@ -1165,8 +1165,10 @@ pub fn launch_codebuddy_cn() -> Result<(), String> {
 pub fn status() -> Value {
     let data_dir = codebuddy_cn_data_dir();
     let db_path = codebuddy_cn_state_db_path();
-    let installed =
-        codebuddy_cn_app_path().is_some() || data_dir.as_ref().map(|p| p.exists()).unwrap_or(false);
+    // `installed` 只表示"存在可运行的客户端"。数据目录存在不能算已安装——
+    // 只读探测不再建目录（issue #91），残留空目录也不应误报「已接入」；
+    // 是否有残留数据由 dataDir / dbExists 表达。
+    let installed = codebuddy_cn_app_path().is_some();
     let db_exists = db_path.as_ref().map(|p| p.exists()).unwrap_or(false);
     let running = is_codebuddy_cn_running();
 
