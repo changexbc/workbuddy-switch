@@ -664,6 +664,29 @@ export interface UpdateInfo {
   message?: string;
 }
 
+/** 统一更新服务的阶段（Rust 状态机，经 `update-state` 事件推送）。 */
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "upToDate"
+  | "available"
+  | "downloading"
+  | "readyToRestart"
+  | "error";
+
+/**
+ * 更新状态快照：托盘菜单与前端弹窗显示同一阶段（单一真相源在 Rust）。
+ *
+ * `latest` 无 `v` 前缀；`percent` 在下载总量未知时为 null；`message` 是错误 / 提示文案。
+ */
+export interface UpdateSnapshot {
+  phase: UpdatePhase;
+  latest: string | null;
+  percent: number | null;
+  message: string | null;
+  checkedAt: number | null;
+}
+
 /** CodeBuddy CN IDE（桌面客户端）状态；与 CodeBuddy CLI 独立。 */
 export interface CodeBuddyCnIdeStatus {
   installed: boolean;

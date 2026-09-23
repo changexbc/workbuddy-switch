@@ -747,14 +747,51 @@ pub fn save_github_config(config: Value) -> Result<Value, String> {
 
 /// GET /api/update/check —— 检查 GitHub Releases 是否有新版本。
 /// force=true 时绕过缓存强制刷新（设置页手动检查）。
+///
+/// 内部走统一更新状态机（`update_service::check`）：检查结果同时写入快照并 emit
+/// `update-state`，托盘菜单与前端弹窗因此始终显示同一阶段；返回值结构与改造前一致。
 #[tauri::command]
-pub async fn check_update(proxy: Option<String>, force: Option<bool>) -> Value {
-    update::update_check(proxy.as_deref(), force.unwrap_or(false)).await
+pub async fn check_update(
+    app: tauri::AppHandle,
+    proxy: Option<String>,
+    force: Option<bool>,
+) -> Value {
+    crate::update_service::check(&app, proxy.as_deref(), force.unwrap_or(false)).await
+}
+
+/// GET /api/update/state —— 当前更新状态快照（前端首屏初始化 + 事件丢失兜底）。
+#[tauri::command]
+pub fn update_state() -> crate::update_service::UpdateSnapshot {
+    crate::update_service::snapshot()
+}
+
+/// POST /api/update/download —— 启动更新包下载。
+///
+/// 异步：立即返回，进度与阶段经 `update-state` 事件推送、托盘 tooltip 实时显示。
+#[tauri::command]
+pub fn update_download(app: tauri::AppHandle) -> Result<(), String> {
+    crate::update_service::start_download(&app)
+}
+
+/// POST /api/update/restart —— 安装已下载的更新包并重启应用。
+///
+/// 安装时机在用户点「重启以完成升级」时：Windows 安装器要求应用退出才能完成安装，
+/// macOS 安装可能触发 `/Applications` 写授权，都不适合在下载完成时静默执行。
+#[tauri::command]
+pub async fn update_restart(app: tauri::AppHandle) -> Result<(), String> {
+    crate::update_service::restart(&app).await
 }
 
 /// 启动当前应用的新进程并退出旧进程，用于更新安装完成后的立即重启。
 #[tauri::command]
 pub fn relaunch_app(_app: tauri::AppHandle) -> Result<(), String> {
+    relaunch_app_inner(&_app)
+}
+
+/// 重启实现：命令与更新服务共用（保留单实例交棒与 `--hidden` 剔除）。
+pub(crate) fn relaunch_app_inner<R: tauri::Runtime>(
+    _app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|e| format!("无法定位应用程序: {e}"))?;
     // 更新重启是普通启动路径；不要把系统自启专用参数带给新进程。
     let args = std::env::args_os().skip(1).filter(|arg| {
@@ -771,16 +808,16 @@ pub fn relaunch_app(_app: tauri::AppHandle) -> Result<(), String> {
     // 可能在旧 listener / 锁消失前连上或抢锁失败，出现「旧进程已退、新进程也退出」
     // 而应用彻底消失。
     #[cfg(desktop)]
-    tauri_plugin_single_instance::destroy(&_app);
+    tauri_plugin_single_instance::destroy(_app);
     #[cfg(target_os = "macos")]
-    crate::instance_lock::release(&_app);
+    crate::instance_lock::release(_app);
     match std::process::Command::new(executable).args(args).spawn() {
         Ok(_) => std::process::exit(0),
         Err(e) => {
             // 已经放弃单例身份：要么把锁拿回来继续跑，要么退出。
             // 不允许「无锁继续运行」（否则之后再启动就会双开）。
             #[cfg(target_os = "macos")]
-            if !crate::instance_lock::reacquire(&_app) {
+            if !crate::instance_lock::reacquire(_app) {
                 std::process::exit(0);
             }
             Err(format!("启动应用失败: {e}"))

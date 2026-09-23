@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
-import type { DownloadEvent } from "@tauri-apps/plugin-updater";
+import { Download, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 
+import { DemoAction } from "@/components/demo-action";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,170 +13,80 @@ import {
 } from "@/components/ui/dialog";
 import * as api from "@/lib/api";
 import { GITHUB_RELEASE_URL, openReleaseUrl } from "@/lib/update";
-import type { UpdateInfo } from "@/lib/types";
-
-type UpdateStage = "checking" | "downloading" | "latest" | "success" | "error";
-
-const UPDATE_CHECK_TIMEOUT_MS = 15_000;
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      reject(new Error("检查更新超时，请检查网络连接后重试"));
-    }, timeoutMs);
-
-    promise.then(resolve, reject).finally(() => window.clearTimeout(timer));
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** 从 Tauri updater 返回的原始 manifest 中取出当前平台的安装包地址。 */
-function getDownloadUrl(rawJson: Record<string, unknown>): string | null {
-  if (typeof rawJson.url === "string") return rawJson.url;
-  if (!isRecord(rawJson.platforms)) return null;
-
-  const ua = navigator.userAgent;
-  const preferredTargets = ua.includes("Windows")
-    ? ["windows-x86_64-nsis", "windows-x86_64"]
-    : ua.includes("Linux")
-      ? ["linux-x86_64"]
-      : ua.includes("Intel")
-        ? ["darwin-x86_64", "darwin-aarch64"]
-        : ["darwin-aarch64", "darwin-x86_64"];
-  for (const target of preferredTargets) {
-    const platform = rawJson.platforms[target];
-    if (isRecord(platform) && typeof platform.url === "string") return platform.url;
-  }
-
-  for (const platform of Object.values(rawJson.platforms)) {
-    if (isRecord(platform) && typeof platform.url === "string") return platform.url;
-  }
-  return null;
-}
+import { useUpdateState } from "@/lib/use-update-state";
 
 interface UpdateInstallDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  update: UpdateInfo | null;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** 统一的签名更新下载进度、成功和失败弹框。 */
-export function UpdateInstallDialog({
-  open,
-  onOpenChange,
-  update,
-}: UpdateInstallDialogProps) {
-  const [stage, setStage] = useState<UpdateStage>("checking");
-  const [error, setError] = useState<string | null>(null);
-  const [targetVersion, setTargetVersion] = useState(update?.latest ?? "新版本");
-  const [received, setReceived] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [retry, setRetry] = useState(0);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+/**
+ * 统一更新弹窗：只展示 Rust 更新状态机（与托盘菜单同源）的阶段与进度。
+ *
+ * 阶段与进度来自 `update-state` 订阅，不再自己调用 `@tauri-apps/plugin-updater`；
+ * 下载 / 重启都只是把动作交给后端（`updateDownload` / `updateRestart`），状态由后端
+ * 持有——关掉弹窗再打开，看到的仍是同一阶段与进度。
+ */
+export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogProps) {
+  const snapshot = useUpdateState();
   const [restarting, setRestarting] = useState(false);
-  const releaseUrl = update?.releaseUrl ?? GITHUB_RELEASE_URL;
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const phase = snapshot.phase;
+  const targetVersion = snapshot.latest ?? "新版本";
+  const percent = snapshot.percent;
+  const busy = phase === "checking" || phase === "downloading";
+  const error = actionError ?? snapshot.message ?? "未知更新错误";
 
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
-
-    setStage("checking");
-    setError(null);
-    setReceived(0);
-    setTotal(0);
-    setDownloadUrl(null);
+    // 每次打开重置本地动作态：阶段与错误文案都由快照承载。
     setRestarting(false);
-    setTargetVersion(update?.latest ?? "新版本");
+    setActionError(null);
+  }, [open]);
 
-    async function install() {
-      try {
-        if (api.isWebui()) {
-          throw new Error("浏览器 webui 模式不能直接安装桌面更新包");
-        }
-
-        const { check } = await import("@tauri-apps/plugin-updater");
-        const configuredProxy = await api
-          .getGithubConfig()
-          .then((config) => config.proxy?.trim() || "")
-          .catch(() => "");
-        const candidate = await withTimeout(
-          check({ proxy: configuredProxy || undefined }),
-          UPDATE_CHECK_TIMEOUT_MS,
-        );
-        if (cancelled) return;
-        if (!candidate) {
-          if (update?.hasUpdate) {
-            setError("发现新版本，但 GitHub Release 暂无可用的签名更新包");
-            setStage("error");
-          } else {
-            setStage("latest");
-          }
-          return;
-        }
-
-        setTargetVersion(candidate.version);
-        setDownloadUrl(getDownloadUrl(candidate.rawJson));
-        setStage("downloading");
-        await candidate.downloadAndInstall((event: DownloadEvent) => {
-          if (cancelled) return;
-          if (event.event === "Started") {
-            setTotal(event.data.contentLength ?? 0);
-            setReceived(0);
-          } else if (event.event === "Progress") {
-            setReceived((current) => current + event.data.chunkLength);
-          }
-        });
-        if (!cancelled) setStage("success");
-      } catch (e) {
-        if (!cancelled) {
-          setError(api.asError(e));
-          setStage("error");
-        }
-      }
-    }
-
-    void install();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, retry, update?.hasUpdate, update?.latest]);
-
-  const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null;
-  const busy = stage === "checking" || stage === "downloading";
-
-  async function openRelease() {
+  async function startDownload() {
+    setActionError(null);
     try {
-      await openReleaseUrl(releaseUrl);
+      await api.updateDownload();
     } catch (e) {
-      setError(api.asError(e));
+      setActionError(`下载更新失败：${api.asError(e)}`);
     }
   }
 
-  async function openDownload() {
-    if (!downloadUrl) return;
+  /** 与托盘一致：已知目标版本则重试下载，否则重试检查。 */
+  async function retry() {
+    if (snapshot.latest) {
+      await startDownload();
+      return;
+    }
+    setActionError(null);
     try {
-      await openReleaseUrl(downloadUrl);
+      const result = await api.checkUpdate(undefined, true);
+      if (!result.ok) {
+        setActionError(result.message || result.error || "检查更新失败");
+      }
     } catch (e) {
-      setError(api.asError(e));
+      setActionError(`检查更新失败：${api.asError(e)}`);
     }
   }
 
   async function restartApp() {
     setRestarting(true);
+    setActionError(null);
     try {
-      await api.relaunchApp();
+      await api.updateRestart();
     } catch (e) {
       setRestarting(false);
-      setError(`重启失败：${api.asError(e)}`);
-      setStage("error");
+      setActionError(`重启失败：${api.asError(e)}`);
+    }
+  }
+
+  async function openRelease() {
+    try {
+      await openReleaseUrl(GITHUB_RELEASE_URL);
+    } catch (e) {
+      setActionError(api.asError(e));
     }
   }
 
@@ -184,36 +94,47 @@ export function UpdateInstallDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next && busy) return;
+        if (!next && (busy || restarting)) return;
         onOpenChange(next);
       }}
     >
       <DialogContent showCloseButton={!busy && !restarting}>
         <DialogHeader>
           <DialogTitle>
-            {stage === "checking" && "正在检查更新"}
-            {stage === "downloading" && `正在升级到 v${targetVersion}`}
-            {stage === "latest" && "当前已是最新版本"}
-            {stage === "success" && "更新已安装"}
-            {stage === "error" && "拉取更新失败"}
+            {phase === "checking" && "正在检查更新"}
+            {phase === "downloading" && `正在升级到 v${targetVersion}`}
+            {(phase === "idle" || phase === "upToDate") && "当前已是最新版本"}
+            {phase === "available" && "发现新版本"}
+            {phase === "readyToRestart" && "更新已就绪"}
+            {phase === "error" && "拉取更新失败"}
           </DialogTitle>
           <DialogDescription>
-            {stage === "checking" && "正在检查 GitHub Release 中的签名更新包，请稍候。"}
-            {stage === "downloading" && "请不要关闭应用，更新包下载完成后会安装到本机。"}
-            {stage === "latest" && "没有发现高于当前版本的签名更新包。"}
-            {stage === "success" && "更新包已安装，可以立即重启应用完成升级。"}
-            {stage === "error" && "自动更新未完成，你仍然可以从 GitHub Release 页面手动下载。"}
+            {phase === "checking" && "正在检查 GitHub Release 中的签名更新包，请稍候。"}
+            {phase === "downloading" &&
+              "请不要关闭应用，更新包下载完成后由你决定何时重启安装。"}
+            {(phase === "idle" || phase === "upToDate") &&
+              "没有发现高于当前版本的签名更新包。"}
+            {phase === "available" &&
+              `发现新版本 v${targetVersion}，下载后由你决定何时重启安装。`}
+            {phase === "readyToRestart" && "更新包已下载，重启应用后完成安装并生效。"}
+            {phase === "error" && "自动更新未完成，你仍然可以从 GitHub Release 页面手动下载。"}
           </DialogDescription>
         </DialogHeader>
 
-        {stage === "checking" && (
+        {phase === "checking" && (
           <div className="flex items-center gap-2 rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             正在连接公开 Release 更新源…
           </div>
         )}
 
-        {stage === "downloading" && (
+        {phase === "available" && (
+          <div className="rounded-md border p-3 text-sm">
+            v{targetVersion} 已确认可升级。点击下方按钮开始下载；下载在后台进行，可随时从托盘查看进度。
+          </div>
+        )}
+
+        {phase === "downloading" && (
           <div className="space-y-2 rounded-md border p-3">
             <div className="flex items-center justify-between text-sm">
               <span className="flex items-center gap-2">
@@ -230,76 +151,65 @@ export function UpdateInstallDialog({
                 style={{ width: `${percent ?? 30}%` }}
               />
             </div>
-            {total > 0 && (
-              <div className="text-right text-xs text-muted-foreground">
-                {formatBytes(received)} / {formatBytes(total)}
-              </div>
-            )}
-            {downloadUrl && (
-              <div className="border-t pt-2 text-xs">
-                <div className="text-muted-foreground">下载地址（点击可手动下载）</div>
-                <button
-                  type="button"
-                  className="mt-1 flex w-full cursor-pointer items-start gap-1 break-all text-left text-primary underline-offset-2 hover:underline"
-                  onClick={() => void openDownload()}
-                >
-                  <ExternalLink className="mt-0.5 size-3.5 shrink-0" />
-                  <span>{downloadUrl}</span>
-                </button>
-              </div>
-            )}
           </div>
         )}
 
-        {stage === "success" && (
+        {phase === "readyToRestart" && (
           <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-800">
             v{targetVersion} 已准备完成，重启应用后生效。
           </div>
         )}
 
-        {stage === "error" && (
+        {phase === "error" && (
           <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
-            <p className="text-destructive">{error || "未知更新错误"}</p>
-            {downloadUrl && (
-              <button
-                type="button"
-                className="flex w-full cursor-pointer items-start gap-1 break-all text-left text-primary underline-offset-2 hover:underline"
-                onClick={() => void openDownload()}
-              >
-                <ExternalLink className="mt-0.5 size-3.5 shrink-0" />
-                <span>{downloadUrl}</span>
-              </button>
-            )}
-            <p className="break-all text-xs text-muted-foreground">{releaseUrl}</p>
+            <p className="text-destructive">{error}</p>
+            <p className="break-all text-xs text-muted-foreground">{GITHUB_RELEASE_URL}</p>
           </div>
         )}
 
         <DialogFooter>
-          {stage === "error" && (
+          {phase === "available" && (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                关闭
+              </Button>
+              <DemoAction>
+                <Button onClick={() => void startDownload()}>
+                  <Download />
+                  下载更新包
+                </Button>
+              </DemoAction>
+            </>
+          )}
+          {phase === "readyToRestart" && (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={restarting}>
+                立即关闭
+              </Button>
+              <DemoAction>
+                <Button onClick={() => void restartApp()} disabled={restarting}>
+                  {restarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                  {restarting ? "正在重启…" : "重启以完成升级"}
+                </Button>
+              </DemoAction>
+            </>
+          )}
+          {phase === "error" && (
             <>
               <Button variant="outline" onClick={() => void openRelease()}>
                 <ExternalLink />
                 打开 GitHub Release
               </Button>
-              <Button onClick={() => setRetry((value) => value + 1)}>
-                <RefreshCw />
-                重试
-              </Button>
+              <DemoAction>
+                <Button onClick={() => void retry()}>
+                  <RefreshCw />
+                  重试
+                </Button>
+              </DemoAction>
             </>
           )}
-          {stage === "success" && (
-            <>
-              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={restarting}>
-                立即关闭
-              </Button>
-              <Button onClick={() => void restartApp()} disabled={restarting}>
-                {restarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                {restarting ? "正在重启…" : "立即重启"}
-              </Button>
-            </>
-          )}
-          {(stage === "latest" || stage === "error") && (
-            <Button variant={stage === "error" ? "ghost" : "default"} onClick={() => onOpenChange(false)}>
+          {(phase === "idle" || phase === "upToDate") && (
+            <Button variant="default" onClick={() => onOpenChange(false)}>
               关闭
             </Button>
           )}

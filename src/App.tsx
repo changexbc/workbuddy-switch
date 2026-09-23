@@ -1,10 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { ArrowUp, MessagesSquare, Settings, Sparkles, User } from "lucide-react";
+import { ArrowUp, Loader2, MessagesSquare, Settings, Sparkles, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
-import type { UpdateInfo } from "@/lib/types";
 import AccountsPage from "@/pages/AccountsPage";
 import CreditStatsPage from "@/pages/CreditStatsPage";
 import TokenStatsPage from "@/pages/TokenStatsPage";
@@ -18,35 +17,35 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useRotateDeferredNotice } from "@/lib/use-rotate-deferred-notice";
+import { useUpdateState } from "@/lib/use-update-state";
 import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
 import { useAccountsStore } from "@/stores/accounts";
 
 function UpdateCenter({ running }: { running: boolean | undefined }) {
   const version = useAccountsStore((s) => s.status?.version);
-  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const snapshot = useUpdateState();
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  useEffect(() => {
-    let disposed = false;
-
-    async function checkForUpdate() {
-      try {
-        const result = await api.checkUpdate();
-        if (!disposed) setInfo(result.ok ? result : null);
-      } catch {
-        // 左下角只展示可操作的升级状态，网络错误不打扰正常使用。
-      }
-    }
-
-    void checkForUpdate();
-    const timer = window.setInterval(() => void checkForUpdate(), 30 * 60 * 1000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  const hasUpdate = Boolean(info?.ok && info.hasUpdate && info.latest);
+  // 阶段由 Rust 更新服务经 `update-state` 推送（托盘同源），前端不再轮询检查。
+  // 已知目标版本时，检查中 / 失败也要保留入口，与托盘「升级到 vX / 点击重试」对齐。
+  const hasKnownTarget = Boolean(snapshot.latest);
+  const hasUpdate =
+    snapshot.phase === "available" ||
+    snapshot.phase === "downloading" ||
+    snapshot.phase === "readyToRestart" ||
+    (hasKnownTarget && (snapshot.phase === "error" || snapshot.phase === "checking"));
+  const updateHint =
+    snapshot.phase === "downloading"
+      ? snapshot.percent === null
+        ? "正在下载更新…"
+        : `正在下载更新 ${snapshot.percent}%`
+      : snapshot.phase === "readyToRestart"
+        ? "重启以完成升级"
+        : snapshot.phase === "error"
+          ? "更新失败，点击重试"
+          : snapshot.phase === "checking"
+            ? "正在检查…"
+            : "更新";
 
   return (
     <>
@@ -63,23 +62,23 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
                     type="button"
                     size="icon"
                     className="size-5 rounded-full p-0"
-                    aria-label="更新"
+                    aria-label={updateHint}
                     onClick={() => setDialogOpen(true)}
                   >
-                    <ArrowUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
+                    {snapshot.phase === "downloading" || snapshot.phase === "checking" ? (
+                      <Loader2 className="size-3 animate-spin" strokeWidth={2.5} aria-hidden="true" />
+                    ) : (
+                      <ArrowUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
+                    )}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="top">更新</TooltipContent>
+                <TooltipContent side="top">{updateHint}</TooltipContent>
               </Tooltip>
             )}
           </div>
         </div>
       </section>
-      <UpdateInstallDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        update={info}
-      />
+      <UpdateInstallDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </>
   );
 }

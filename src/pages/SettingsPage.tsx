@@ -48,6 +48,7 @@ import type {
   UpdateInfo,
 } from "@/lib/types";
 import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
+import { useUpdateState } from "@/lib/use-update-state";
 import { cn } from "@/lib/utils";
 import { accountVariant, variantSupportsCheckin, variantSupportsTravel } from "@/lib/variant";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
@@ -1285,9 +1286,12 @@ function useAuthFile(): string | undefined {
 /** 自动更新：检查公开 GitHub Releases 源 + 安装签名更新。 */
 function UpdateCard() {
   const version = useAccountsStore((s) => s.status?.version);
+  // 阶段与进度来自 Rust 更新服务（托盘同源）：下载完成时按钮换成「重启以完成升级」。
+  const snapshot = useUpdateState();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [githubConfig, setGithubConfig] = useState<GithubConfig>({});
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
@@ -1321,6 +1325,17 @@ function UpdateCard() {
       toast.error("检查更新失败", { description: api.asError(e) });
     } finally {
       setChecking(false);
+    }
+  }
+
+  /** 安装已下载的更新包并重启（下载完成后的主动作，与托盘菜单同一入口）。 */
+  async function restartNow() {
+    setRestarting(true);
+    try {
+      await api.updateRestart();
+    } catch (e) {
+      setRestarting(false);
+      toast.error("重启失败", { description: api.asError(e) });
     }
   }
 
@@ -1420,10 +1435,19 @@ function UpdateCard() {
                 {info.releaseName && <span className="text-muted-foreground"> · {info.releaseName}</span>}
               </div>
               {info.hasUpdate && (
-                <DemoAction><Button size="sm" onClick={() => setInstallOpen(true)}>
-                  <ArrowUpCircle />
-                  立即升级
-                </Button></DemoAction>
+                <DemoAction>
+                  {snapshot.phase === "readyToRestart" ? (
+                    <Button size="sm" onClick={() => void restartNow()} disabled={restarting}>
+                      {restarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                      {restarting ? "正在重启…" : "重启以完成升级"}
+                    </Button>
+                  ) : (
+                    <Button size="sm" onClick={() => setInstallOpen(true)}>
+                      <ArrowUpCircle />
+                      立即升级
+                    </Button>
+                  )}
+                </DemoAction>
               )}
               {info.releaseUrl && (
                 <DemoAction><Button
@@ -1438,11 +1462,7 @@ function UpdateCard() {
             </AlertDescription>
           </Alert>
         )}
-        <UpdateInstallDialog
-          open={installOpen}
-          onOpenChange={setInstallOpen}
-          update={info}
-        />
+        <UpdateInstallDialog open={installOpen} onOpenChange={setInstallOpen} />
       </CardContent>
     </SettingsGroup>
   );

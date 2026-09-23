@@ -4,6 +4,7 @@ mod commands;
 mod instance_lock;
 #[cfg(desktop)]
 mod tray;
+mod update_service;
 
 use std::time::Duration;
 use tauri::Emitter;
@@ -102,6 +103,11 @@ fn spawn_background_loops(app: tauri::AppHandle) {
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
     });
+
+    // 统一更新服务：首次 15 秒后检查一次，之后每 30 分钟（未带 force，走 core 的
+    // 6 小时缓存）。检查由 Rust 常驻，替代前端 30 分钟轮询：轻量模式 / 主窗口关闭时
+    // 同样在跑，托盘菜单随时反映最新阶段。
+    update_service::spawn_periodic_check(app.clone());
 
     // 限额 hook 信号：轮询 `~/.wb-switch/hook-events.jsonl`（CLI / WorkBuddy 的 429 当轮
     // 由客户端 hook 追加），入账后通知前端立即拉取。轻量模式下窗口销毁但进程仍在，
@@ -232,6 +238,9 @@ pub fn run() {
             commands::get_github_config,
             commands::save_github_config,
             commands::check_update,
+            commands::update_state,
+            commands::update_download,
+            commands::update_restart,
             commands::relaunch_app,
             commands::get_launch_at_login_enabled,
             commands::set_launch_at_login_enabled,
