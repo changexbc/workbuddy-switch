@@ -1,0 +1,11 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+const root = path.resolve(import.meta.dirname, '..');
+const target = execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: (.+)$/m)[1];
+execFileSync('cargo', ['build', '--release', '--locked', '-p', 'agent-studio-runtime'], { cwd: root, stdio: 'inherit' });
+const suffix = process.platform === 'win32' ? '.exe' : '';
+const binaries = path.join(root, 'src-tauri/binaries');
+await fs.mkdir(binaries, { recursive: true });
+await fs.copyFile(path.join(root, `target/release/agent-studio-runtime${suffix}`), path.join(binaries, `agent-studio-runtime-${target}${suffix}`));
+console.log(`Prepared native Agent Studio runtime (${target})`);

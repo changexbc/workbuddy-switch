@@ -1,0 +1,310 @@
+[
+  {
+    "hook": {
+      "hook_event_name": "UserPromptSubmit",
+      "prompt": "Hook test"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "request_user_input",
+      "tool_use_id": "q",
+      "tool_input": {
+        "questions": [
+          {
+            "question": "Choose"
+          }
+        ]
+      }
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_use_id": "parallel",
+      "tool_input": {
+        "command": "echo ok"
+      }
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Bash",
+      "tool_use_id": "parallel",
+      "tool_input": {
+        "command": "echo ok"
+      }
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "request_user_input",
+      "tool_use_id": "q"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "request_user_input",
+      "tool_use_id": "q"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_use_id": "shell",
+      "tool_input": {
+        "command": "echo next"
+      }
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PermissionRequest",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "echo next",
+        "description": "Approval"
+      }
+    },
+    "status": "running",
+    "pending": 0,
+    "permissionChecks": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Bash",
+      "tool_use_id": "shell",
+      "tool_input": {
+        "command": "echo next"
+      }
+    },
+    "status": "running",
+    "pending": 0,
+    "permissionChecks": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PermissionRequest",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "echo next"
+      }
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "request_user_input",
+      "tool_use_id": "reordered"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "request_user_input",
+      "tool_use_id": "reordered"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "request_user_input_async",
+      "tool_use_id": "async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "request_user_input_async",
+      "tool_use_id": "async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "UserPromptSubmit",
+      "prompt": "Answer"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "functions.request_user_input_async",
+      "tool_use_id": "functions.async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "functions.request_user_input_async",
+      "tool_use_id": "functions.async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "functions.request_user_input_async",
+      "tool_use_id": "functions.async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "mcp__codex__request_user_input_async",
+      "tool_use_id": "mcp__codex__async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "mcp__codex__request_user_input_async",
+      "tool_use_id": "mcp__codex__async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "mcp__codex__request_user_input_async",
+      "tool_use_id": "mcp__codex__async"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "functions.request_user_input",
+      "tool_use_id": "sync"
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "functions.request_user_input_async",
+      "tool_use_id": "parallel-async"
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "functions.request_user_input_async",
+      "tool_use_id": "parallel-async"
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "functions.request_user_input_async",
+      "tool_use_id": "parallel-async"
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_name": "functions.request_user_input",
+      "tool_use_id": "sync"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "request_user_input",
+      "tool_use_id": "cancel"
+    },
+    "status": "wait",
+    "pending": 1
+  },
+  {
+    "hook": {
+      "hook_event_name": "Interrupt"
+    },
+    "status": "aborted",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "request_user_input",
+      "tool_use_id": "late"
+    },
+    "status": "aborted",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "UserPromptSubmit",
+      "turn_id": "new",
+      "prompt": "Next turn"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "PostToolUse",
+      "tool_use_id": "late"
+    },
+    "status": "running",
+    "pending": 0
+  },
+  {
+    "hook": {
+      "hook_event_name": "Stop",
+      "turn_id": "new"
+    },
+    "status": "done",
+    "pending": 0
+  }
+]

@@ -1,0 +1,24 @@
+[package]
+name = "tauri-plugin-agent-studio"
+links = "tauri-plugin-agent-studio"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Agent Studio Tauri integration"
+[lib]
+name = "agent_studio_desktop"
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+[dependencies]
+agent-studio-runtime = { path = "../agent-studio-runtime", version = "0.1.0" }
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSEvent", "NSApplication", "NSCursor"] }
+objc2-foundation = "0.3"
+block2 = "0.6"
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfiguration"] }

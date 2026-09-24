@@ -1,0 +1,7 @@
+{
+  "event_name": "permission_requested",
+  "session_id": "sim-basic",
+  "round_id": "turn-1",
+  "event_id": "evt-2",
+  "request_id": "perm-1"
+}

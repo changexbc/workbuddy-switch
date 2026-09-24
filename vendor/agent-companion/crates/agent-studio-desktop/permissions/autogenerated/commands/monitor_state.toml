@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-monitor-state"
+description = "Enables the monitor_state command without any pre-configured scope."
+commands.allow = ["monitor_state"]
+
+[[permission]]
+identifier = "deny-monitor-state"
+description = "Denies the monitor_state command without any pre-configured scope."
+commands.deny = ["monitor_state"]

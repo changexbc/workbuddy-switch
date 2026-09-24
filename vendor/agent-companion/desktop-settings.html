@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Companion · 悬浮窗设置</title><link rel="icon" type="image/png" sizes="32x32" href="./favicon.png"><link rel="apple-touch-icon" href="./apple-touch-icon.png"><link rel="stylesheet" href="/src/desktop/settings.css"></head>
+<body>
+  <!-- Outside React's root: visible before the module graph has loaded. -->
+  <main id="settings-loading" class="rail-settings" aria-busy="true" aria-label="正在读取设置">
+    <header><span class="eyebrow">AGENT COMPANION</span><h1>悬浮窗设置</h1><p>让桌面上的小伙伴，按你的习惯陪伴。</p></header>
+    <div class="settings-skeleton" aria-hidden="true">
+      <div class="skeleton-heading"></div>
+      <div class="styles"><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
+      <div class="skeleton-row"></div><div class="skeleton-row"></div>
+      <div class="skeleton-heading"></div>
+      <div class="skeleton-agent"></div><div class="skeleton-agent"></div><div class="skeleton-agent"></div><div class="skeleton-agent"></div>
+      <div class="skeleton-heading"></div><div class="skeleton-row"></div>
+    </div>
+    <p class="settings-loading-status" role="status">正在读取设置…</p>
+  </main>
+  <div id="root"></div><script type="module" src="/src/desktop/settings.tsx"></script>
+</body>
+</html>

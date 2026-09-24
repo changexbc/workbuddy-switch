@@ -1,0 +1,8 @@
+{
+  "event_name": "prompt_submitted",
+  "session_id": "sim-basic",
+  "round_id": "turn-1",
+  "event_id": "evt-1",
+  "prompt": "把登录页按钮对齐",
+  "cwd": "/Users/you/projects/demo"
+}

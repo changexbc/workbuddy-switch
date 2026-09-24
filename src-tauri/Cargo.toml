@@ -26,7 +26,7 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 wb-switch-core = { path = "../crates/wb-switch-core" }
@@ -36,6 +36,7 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2.7.2"
+agent-studio-desktop = { package = "tauri-plugin-agent-studio", path = "../vendor/agent-companion/crates/agent-studio-desktop" }
 
 # 系统自启（开机静默启动）与单实例互斥：仅桌面目标支持（macOS / Windows / Linux）。
 # 单实例插件必须最先注册（见 lib.rs），第二个进程会在建窗口 / 建托盘前退出。

@@ -4,12 +4,13 @@
   "version": "0.1.47",
   "identifier": "com.wbswitch.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:desktop",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:desktop",
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
@@ -42,7 +43,8 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "externalBin": ["binaries/agent-studio-runtime"]
   },
   "plugins": {
     "updater": {

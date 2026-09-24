@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-companion.local/schemas/custom-agent-hooks-v1.json",
+  "title": "Agent Companion 自定义 Hook 模板 v1",
+  "description": "声明式模板：把第三方工具推送的原始 JSON 映射为 Agent Companion 的标准事件。模板是数据，不会被应用执行；应用也不会自动安装或卸载第三方 Hook。字段语义必须与目标工具实际发送的载荷一致。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "transport", "mapping", "events"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "固定为 1。未知版本会被拒绝。"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "not": { "enum": ["codex", "workbuddy", "codebuddy-ide", "codeg"] },
+      "description": "来源 ID，内部使用 custom:<id>。不能使用内置来源 ID（codex、workbuddy、codebuddy-ide、codeg），也不能与已导入的来源重复。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "界面显示名称。"
+    },
+    "transport": {
+      "const": "hook",
+      "description": "首版仅支持本机命令提交。"
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "sessionId"],
+      "description": "字段映射。值一律为 RFC 6901 JSON Pointer，不支持 JSONPath 或表达式。缺失的可选字段按“未提供”处理。",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/pointer",
+          "description": "原始事件名。必填；缺失或非字符串会拒绝该事件并记录诊断。"
+        },
+        "sessionId": {
+          "$ref": "#/definitions/pointer",
+          "description": "会话 ID。必填；缺失或类型错误会拒绝该事件。"
+        },
+        "roundId": {
+          "$ref": "#/definitions/pointer",
+          "description": "轮次 ID。提供后可严格隔离旧轮次迟到事件。"
+        },
+        "eventId": {
+          "$ref": "#/definitions/pointer",
+          "description": "事件 ID。提供后按来源+会话去重。"
+        },
+        "timestamp": {
+          "$ref": "#/definitions/pointer",
+          "description": "整数 Unix 毫秒。字段缺失或为 null 时使用接收时间；指向的值不是正整数时拒绝该事件，不改用接收时间。"
+        },
+        "cwd": {
+          "$ref": "#/definitions/pointer",
+          "description": "工作目录，用于显示项目名。"
+        },
+        "title": {
+          "$ref": "#/definitions/pointer",
+          "description": "会话标题。"
+        },
+        "requestId": {
+          "$ref": "#/definitions/pointer",
+          "description": "等待项 ID。提供后 wait/resume 按具体等待项匹配；不提供时同一会话只支持一个等待项。"
+        }
+      }
+    },
+    "ignoreIfPresent": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/definitions/pointer" },
+      "description": "任一 Pointer 指向非空值（null 与空字符串都视为不存在）时忽略该事件，用于过滤子任务等载荷。"
+    },
+    "events": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": { "type": "string", "minLength": 1, "maxLength": 200 },
+      "additionalProperties": { "$ref": "#/definitions/action" },
+      "description": "原始事件名 → 动作。未列出的事件会被忽略并计入诊断，不会创建会话。"
+    }
+  },
+  "definitions": {
+    "pointer": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^(?:/(?:[^~/]|~[01])+)+$",
+      "description": "RFC 6901 JSON Pointer，例如 /session_id。token 不能为空，~ 必须转义为 ~0 或 ~1；长度按字符计。"
+    },
+    "action": {
+      "description": "动作对象。其他 action 不接受 reason/status 等多余字段。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action"],
+          "properties": { "action": { "const": "start", "description": "新一轮执行开始。" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "reason"],
+          "properties": {
+            "action": { "const": "wait" },
+            "reason": { "enum": ["permission", "input"], "description": "等待权限确认或等待用户输入。" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action"],
+          "properties": { "action": { "const": "resume", "description": "解除当前等待项。" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "status"],
+          "properties": {
+            "action": { "const": "finish" },
+            "status": { "enum": ["done", "error"], "description": "本轮成功或失败结束。" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action"],
+          "properties": { "action": { "const": "close", "description": "会话关闭；运行中的轮次以 aborted 结束。" } }
+        }
+      ]
+    }
+  }
+}

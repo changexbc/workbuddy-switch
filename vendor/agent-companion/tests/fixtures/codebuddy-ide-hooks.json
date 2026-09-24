@@ -1,0 +1,17 @@
+[
+  {"hook":{"hook_event_name":"SessionStart"},"status":null},
+  {"hook":{"hook_event_name":"UserPromptSubmit","generation_id":"g1","prompt":"测试 IDE Hook"},"status":"running"},
+  {"hook":{"hook_event_name":"PreToolUse","generation_id":"g1","tool_name":"Bash","tool_input":{"command":"echo ok","requires_approval":true}},"status":"running"},
+  {"hook":{"hook_event_name":"PreToolUse","generation_id":"g1","tool_name":"ask_followup_question","tool_input":{"questions":[{"question":"选一个","options":["A","B"]}]}},"status":"wait"},
+  {"hook":{"hook_event_name":"PostToolUse","generation_id":"g1","tool_name":"Bash","tool_input":{"command":"echo ok"}},"status":"wait"},
+  {"hook":{"hook_event_name":"PostToolUse","generation_id":"g1","tool_name":"ask_followup_question","tool_input":{"questions":[{"question":"选一个","options":["A","B"]}]},"tool_response":{"result":{"type":"multi_question_result","answers":{}}}},"status":"wait"},
+  {"hook":{"hook_event_name":"Stop","generation_id":"g1"},"status":"wait"},
+  {"hook":{"hook_event_name":"UserPromptSubmit","generation_id":"g2","prompt":"A"},"status":"running"},
+  {"hook":{"hook_event_name":"Stop","generation_id":"g1"},"status":"running","accepted":false},
+  {"hook":{"hook_event_name":"PreToolUse","generation_id":"g2","tool_name":"ask_followup_question","tool_input":{"question":"确认？"}},"status":"wait"},
+  {"hook":{"hook_event_name":"PostToolUse","generation_id":"g2","tool_name":"ask_followup_question","tool_input":{"question":"确认？"},"tool_response":{"answers":{"q":"yes"}}},"status":"running"},
+  {"hook":{"hook_event_name":"Stop","generation_id":"g2"},"status":"done"},
+  {"hook":{"hook_event_name":"SessionEnd","reason":"other"},"status":"done"},
+  {"hook":{"hook_event_name":"UserPromptSubmit","generation_id":"g3","prompt":"下一轮"},"status":"running"},
+  {"hook":{"hook_event_name":"SessionEnd","reason":"other"},"status":"aborted"}
+]

@@ -85,6 +85,12 @@ export function isDesktop(): boolean {
   return !isWebui() && !isMobilePlatform();
 }
 
+/** Agent Companion 只由桌面宿主管理，不能经 WebUI 或演示模式访问。 */
+function requireCompanionDesktop(): void {
+  if (demoModeEnabled) throw new Error(DEMO_UNAVAILABLE_MESSAGE);
+  if (!isDesktop()) throw new Error("Agent Companion 仅在桌面版中可用");
+}
+
 type Route = { method: "GET" | "POST"; path: string };
 
 /** Tauri command → HTTP 路由映射（webui 模式）。 */
@@ -462,6 +468,35 @@ export function revealAppInFinder(): Promise<void> {
   if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
   if (isWebui()) return Promise.resolve();
   return call("reveal_app_in_finder");
+}
+
+/** 后端持久化的悬浮栏启用状态；默认值由后端决定。 */
+export function getCompanionEnabled(): Promise<boolean> {
+  try {
+    requireCompanionDesktop();
+    return call("get_companion_enabled");
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+/** 返回后端确认的最终状态，不在前端单独持久化。 */
+export function setCompanionEnabled(enabled: boolean): Promise<boolean> {
+  try {
+    requireCompanionDesktop();
+    return call("set_companion_enabled", { enabled });
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+export function openCompanionSettings(): Promise<void> {
+  try {
+    requireCompanionDesktop();
+    return call("open_companion_settings");
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 // ---------------------------------------------------------------------------

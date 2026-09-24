@@ -1,0 +1,8 @@
+{
+  "event_name": "prompt_submitted",
+  "session_id": "sim-child",
+  "round_id": "turn-1",
+  "event_id": "evt-2",
+  "prompt": "子任务",
+  "parent_session_id": "sim-parent"
+}

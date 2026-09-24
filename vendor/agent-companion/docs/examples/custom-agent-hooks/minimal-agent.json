@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "minimal-agent",
+  "name": "Minimal Agent",
+  "transport": "hook",
+  "mapping": {
+    "event": "/kind",
+    "sessionId": "/sid"
+  },
+  "events": {
+    "begin": { "action": "start" },
+    "end": { "action": "finish", "status": "done" }
+  }
+}

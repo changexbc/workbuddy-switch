@@ -1532,6 +1532,89 @@ function StartupCard() {
   );
 }
 
+/** 桌面版 Agent Companion：状态以宿主后端的持久化结果为准。 */
+function CompanionCard() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  async function load() {
+    setLoadFailed(false);
+    try {
+      setEnabled(await api.getCompanionEnabled());
+    } catch (error) {
+      setLoadFailed(true);
+      toast.error("悬浮窗状态读取失败", { description: api.asError(error) });
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.getCompanionEnabled()
+      .then((value) => {
+        if (!cancelled) setEnabled(value);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLoadFailed(true);
+          toast.error("悬浮窗状态读取失败", { description: api.asError(error) });
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function onToggle(next: boolean) {
+    if (busy || enabled === null) return;
+    setBusy(true);
+    try {
+      const confirmed = await api.setCompanionEnabled(next);
+      setEnabled(confirmed);
+      toast.success(confirmed ? "已启用 Agent Companion 悬浮窗" : "已关闭 Agent Companion 悬浮窗");
+    } catch (error) {
+      toast.error("悬浮窗设置失败", { description: api.asError(error) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openSettings() {
+    try {
+      await api.openCompanionSettings();
+    } catch (error) {
+      toast.error("打开悬浮窗设置失败", { description: api.asError(error) });
+    }
+  }
+
+  return (
+    <SettingsGroup id="settings-companion" title="Agent Companion">
+      <CardContent className="space-y-0 p-0">
+        <SettingsFieldRow
+          className="border-b-0"
+          label="启用会话悬浮窗"
+          description="启用后显示悬浮栏；开机静默启动时也会显示，可从托盘临时隐藏"
+          htmlFor="companion-enabled"
+        >
+          <div className="flex items-center gap-2">
+            {loadFailed && enabled === null ? (
+              <Button size="sm" variant="outline" onClick={() => void load()}>重试</Button>
+            ) : null}
+            {enabled ? (
+              <Button size="sm" variant="outline" onClick={() => void openSettings()}>悬浮窗设置</Button>
+            ) : null}
+            <Switch
+              id="companion-enabled"
+              checked={enabled ?? false}
+              disabled={busy || enabled === null}
+              onCheckedChange={(value) => void onToggle(value)}
+              aria-label="启用会话悬浮窗"
+            />
+          </div>
+        </SettingsFieldRow>
+      </CardContent>
+    </SettingsGroup>
+  );
+}
+
 /** 外观：主题选择（持久化到 localStorage）。 */
 const NOTIFICATION_LEVEL_LABEL: Record<AppNotification["level"], string> = {
   success: "成功",
@@ -1974,7 +2057,7 @@ function RateLimitCard() {
   );
 }
 
-/** 设置页：外观 / 权限检测 / 自动签到（含自动旅行）/ 自动轮换 / 限额监听 / 更新配置；演示模式不渲染自动签到。 */
+/** 设置页：演示模式不渲染自动签到；Agent Companion 只在桌面正式版显示。 */
 export default function SettingsPage() {
   return (
     <div className="mx-auto min-w-0 w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
@@ -1991,6 +2074,7 @@ export default function SettingsPage() {
         {api.isDemoMode() ? null : <AutoCheckinCard />}
         <AutoRotateCard />
         <RateLimitCard />
+        {api.isDesktop() && !api.isDemoMode() ? <CompanionCard /> : null}
         {api.isDesktop() || api.isDemoMode() ? <StartupCard /> : null}
         <NotificationHistoryCard />
         <ErrorLogCard />

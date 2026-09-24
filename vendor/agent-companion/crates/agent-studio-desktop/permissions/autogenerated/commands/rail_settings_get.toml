@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-rail-settings-get"
+description = "Enables the rail_settings_get command without any pre-configured scope."
+commands.allow = ["rail_settings_get"]
+
+[[permission]]
+identifier = "deny-rail-settings-get"
+description = "Denies the rail_settings_get command without any pre-configured scope."
+commands.deny = ["rail_settings_get"]

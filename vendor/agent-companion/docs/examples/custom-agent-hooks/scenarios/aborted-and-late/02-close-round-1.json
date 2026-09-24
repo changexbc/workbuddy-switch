@@ -1,0 +1,6 @@
+{
+  "event_name": "session_closed",
+  "session_id": "sim-close",
+  "round_id": "turn-1",
+  "event_id": "evt-2"
+}

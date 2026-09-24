@@ -62,6 +62,8 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
             "update-now" => start_update_download(app),
             "update-restart" => start_update_restart(app),
             "lightweight-mode" => toggle_lightweight(app),
+            "companion-toggle" => crate::companion::toggle_rail(app),
+            "companion-settings" => crate::companion::open_settings_from_tray(app),
             "quit-app" => app.exit(0),
             _ => {}
         })
@@ -648,6 +650,22 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         LIGHTWEIGHT_MODE.load(Ordering::Acquire),
         None::<&str>,
     )?;
+    let companion_enabled = !crate::is_screenshot_demo()
+        && agent_studio_desktop::is_enabled(app.app_handle());
+    let companion_toggle = MenuItem::with_id(
+        app,
+        "companion-toggle",
+        "显示 / 隐藏悬浮窗",
+        companion_enabled,
+        None::<&str>,
+    )?;
+    let companion_settings = MenuItem::with_id(
+        app,
+        "companion-settings",
+        "悬浮窗设置",
+        companion_enabled,
+        None::<&str>,
+    )?;
     let quit_item = MenuItem::with_id(app, "quit-app", "退出应用", true, None::<&str>)?;
 
     MenuBuilder::new(app)
@@ -658,6 +676,9 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         .item(&update_item)
         .separator()
         .item(&lightweight_item)
+        .separator()
+        .item(&companion_toggle)
+        .item(&companion_settings)
         .separator()
         .item(&quit_item)
         .build()

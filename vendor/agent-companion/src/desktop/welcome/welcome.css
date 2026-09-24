@@ -1,0 +1,4 @@
+.desktop-welcome{position:absolute;inset:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:20}
+.desktop-welcome #living-line{filter:drop-shadow(0 0 1px #ffffffed) drop-shadow(0 0 .5px #ffffffed) drop-shadow(0 0 var(--welcome-glow-radius,2px) rgb(190 190 190 / var(--welcome-glow,0))) drop-shadow(0 0 8px rgb(255 255 255 / var(--welcome-halo,0))) drop-shadow(0 0 12px rgb(90 90 90 / var(--welcome-halo,0)))}
+.welcome-blocking>:not(.desktop-welcome){visibility:hidden!important;pointer-events:none!important}
+.welcome-running .desktop-strip{animation:none!important}

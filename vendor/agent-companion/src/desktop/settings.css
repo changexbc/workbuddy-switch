@@ -1,0 +1,137 @@
+:root{font-family:"PingFang SC","Hiragino Sans GB",sans-serif;color:#294239;background:#f4f7f4;font-synthesis:none;color-scheme:light}*{box-sizing:border-box}body{margin:0}.rail-settings{max-width:520px;margin:auto;padding:34px 28px 24px}.eyebrow{font-size:10px;font-weight:700;letter-spacing:2px;color:#729082}h1{font-size:25px;letter-spacing:-.8px;margin:9px 0}header p{font-size:12px;color:#7b8d83;margin:0 0 28px}h2{font-size:11px;letter-spacing:1px;color:#788d80;font-weight:500;margin:0 0 12px}fieldset{border:0;padding:0;margin:0;min-width:0}section+section{margin-top:23px}.styles{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}.portraits{display:flex;justify-content:center;align-items:center;height:49px;margin-bottom:7px}.portraits svg{width:43px;height:43px}.styles strong{font-size:12px;display:block}.styles small{display:block;font-size:10px;color:#809187;margin-top:5px}.row{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:65px;border-bottom:1px solid #e0e8e1}.row strong{display:block;font-size:12px;font-weight:500}.row small{display:block;font-size:10px;color:#8a978e;margin-top:6px}.window-chrome-drag{position:fixed;inset:0 0 auto;height:30px}.tauri-desktop .rail-settings{padding-top:45px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.section-hint{font-size:11px;line-height:1.6;color:#819187;margin:0 0 8px}.agent-row{min-height:49px}.agent-name{display:flex;align-items:center;gap:10px}.agent-name img{width:20px;height:20px;object-fit:contain}
+/* The page owns its fieldset, so it also owns how a disabled fieldset reads. The
+   switch is the only control that can also disable itself (unsupported autostart)
+   and shows `not-allowed` there; inside a disabled fieldset it shows `default`. */
+fieldset:disabled button,fieldset:disabled select,fieldset:disabled input{cursor:default}
+
+/* Parsed with the HTML, before React loads; the same shell covers data reads. */
+.rail-settings[hidden]{display:none}
+#settings-loading{padding-top:45px}
+.settings-skeleton{animation:settings-pulse 1.5s ease-in-out infinite}
+.skeleton-heading{width:92px;height:12px;background:#dce6de;border-radius:4px;margin-bottom:12px}
+.skeleton-card{height:117px;border:1px solid #e0e8e1;border-radius:8px;background:#e6ede7}
+.skeleton-row,.skeleton-agent{height:65px;border-bottom:1px solid #e0e8e1;display:flex;align-items:center;justify-content:space-between}
+.skeleton-agent{height:49px}
+.skeleton-row::before,.skeleton-agent::before{content:"";width:132px;height:12px;background:#dce6de;border-radius:4px}
+.skeleton-row::after,.skeleton-agent::after{content:"";width:32px;height:18px;background:#dce6de;border-radius:10px}
+.skeleton-row+.skeleton-heading,.skeleton-agent+.skeleton-heading{margin-top:23px}
+.settings-loading-status{font-size:11px;color:#7c8e82;margin:24px 0 0}
+@keyframes settings-pulse{50%{opacity:.5}}
+@media(prefers-reduced-motion:reduce){.settings-skeleton{animation:none}}
+
+.integration-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:8px}
+.integration-heading h2{margin:0}
+.integration-manager>.section-hint{margin-bottom:16px}
+.integration-item{border-bottom:1px solid #e0e8e1}
+.integration-title{display:flex;align-items:center;gap:12px;min-height:68px;padding:12px 4px;cursor:pointer;list-style:none;border-radius:6px}
+.integration-title::-webkit-details-marker{display:none}
+.integration-title:hover{background:#eaf0e9}
+.integration-identity{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
+.integration-identity img{width:22px;height:22px;object-fit:contain}
+.integration-identity strong{display:block;font-size:12px;font-weight:500}
+.integration-identity small{display:block;margin-top:4px;font-size:10px;color:#7b8d83}
+.integration-badge{flex-shrink:0;font-size:10px;color:#587363;background:#e8efe8;border-radius:4px;padding:3px 7px}
+.integration-badge[data-state=error],.integration-badge[data-state=partial],.integration-badge[data-state=pending]{color:#856222;background:#f5ecd9}
+.integration-chevron{width:6px;height:6px;flex-shrink:0;border-right:1px solid #7b8d83;border-bottom:1px solid #7b8d83;transform:rotate(-45deg);margin:0 5px}
+.integration-item[open]>.integration-title .integration-chevron{transform:rotate(45deg)}
+.integration-content{padding:0 12px 20px 38px}
+.integration-detail,.integration-message{font-size:11px;line-height:1.7;color:#718478;margin:0 0 10px;overflow-wrap:anywhere}
+.integration-message{margin-top:12px}
+.integration-message:empty{display:none}
+.integration-locations{font-size:10px;color:#718478;margin:12px 0}
+.integration-locations summary{cursor:pointer;width:fit-content}
+.integration-locations code{display:block;margin-top:8px;overflow-wrap:anywhere;font-size:10px}
+.integration-policy,.integration-footnote{font-size:10px;line-height:1.7;color:#819187;margin:12px 0 0}
+.integration-actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.integration-manager button{font-size:11px;padding:6px 10px;min-height:30px}
+.integration-item summary:focus-visible{outline:2px solid #477d66;outline-offset:4px}
+
+.custom-import{border:1px dashed #cfdcd3;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.custom-import input[type=file]{font-size:11px;color:#587363;max-width:100%}
+.custom-payload span{display:block;font-size:10px;color:#819187;margin-bottom:6px}
+.custom-payload textarea{width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;line-height:1.6;color:#294239;background:#fbfdfb;border:1px solid #dbe5dd;border-radius:6px;padding:8px;resize:vertical}
+.custom-source-fallback{display:flex;align-items:center;justify-content:center;width:22px;height:22px;flex-shrink:0;border-radius:5px;background:#e8efe8;color:#587363;font-size:11px;font-weight:600}
+.custom-command{display:flex;align-items:flex-start;gap:10px;margin-top:8px}
+.custom-command code{flex:1;min-width:0;font-size:10px;line-height:1.7;color:#4c6156;background:#f1f6f2;border:1px solid #dbe5dd;border-radius:6px;padding:8px;overflow-wrap:anywhere}
+.custom-setup ol{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.custom-setup code{display:inline;margin:0;padding:1px 4px;background:#f1f6f2;border:1px solid #dbe5dd;border-radius:4px}
+.integration-detail[data-state=error]{color:#8a5a2b}
+.integration-detail[data-state=ok]{color:#4c6156}
+.custom-integration-manager>.section-hint{margin-bottom:16px}
+.custom-integration-manager button{font-size:11px;padding:6px 10px;min-height:30px}
+
+/* A compact settings group for listening drafts and immediate integration actions. */
+.agent-card .integration-heading{height:45px;margin:0;gap:8px}
+.agent-card .integration-refresh{font-size:10px;min-height:28px;padding:4px 7px;gap:5px;color:#7a8e80;box-shadow:none}
+.integration-refresh svg{width:13px;height:13px}
+.agent-card .integration-title{display:grid;grid-template-columns:minmax(0,1fr) 70px 32px 24px;column-gap:10px;align-items:center}
+
+
+.agent-card .integration-item{border:0}
+.agent-card .integration-item+.integration-item{border-top:1px solid #e8eee7}
+.agent-card .integration-title{height:50px;min-height:50px;padding:0;cursor:default;border-radius:0}
+.agent-card .integration-title:hover{background:transparent}
+.agent-card .integration-identity{gap:9px}
+.agent-card .integration-identity strong{font-size:12px;font-weight:500;letter-spacing:-.15px}
+.agent-card .integration-badge{display:flex;align-items:center;gap:5px;background:none;padding:0;border-radius:0;font-size:10px;white-space:nowrap;color:#88958b}
+.agent-card .integration-badge::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;flex:none;opacity:.7}
+.agent-card .integration-badge[data-state=installed]{color:#638573}
+.agent-card .integration-badge[data-state=error],.agent-card .integration-badge[data-state=partial],.agent-card .integration-badge[data-state=pending]{color:#a47a3d;background:none}
+.agent-card button[role=switch]{padding:0;min-height:0}
+.agent-card .integration-disclosure{display:flex;align-items:center;justify-content:center;width:24px;height:30px;min-height:30px;padding:0;border:0;border-radius:6px;background:transparent;cursor:pointer}
+.agent-card .integration-disclosure:hover{background:#edf2eb}
+.agent-card .integration-disclosure:focus-visible{outline:2px solid #477d66;outline-offset:4px}
+.agent-card .integration-chevron{margin:0;transition:transform 150ms ease}
+.agent-card [data-expanded=true] .integration-chevron{transform:rotate(45deg)}
+/* A quiet inset distinguishes the expanded details from the other Agent rows. */
+.agent-card .integration-content{margin:0 0 14px;padding:0;background:transparent;border:0;border-radius:0}
+.agent-card .integration-content[hidden]{display:none}
+.integration-detail-panel{padding:11px 12px 10px;border-radius:8px;background:#f0f7f2}
+.agent-card .integration-detail{font-size:11px;line-height:1.6;margin:0;color:#65796c}
+.agent-card .integration-detail[data-state=error],.agent-card .integration-detail[data-state=partial]{color:#956b35}
+.integration-metadata{margin-top:0}
+.agent-card .integration-detail+.integration-metadata{margin-top:8px}
+.integration-event,.integration-locations{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:start;gap:8px;font-size:10px;line-height:1.6}
+.integration-event{padding:2px 0 9px;border-bottom:1px solid #dce9df}
+.integration-event>span:first-child,.integration-metadata-label{color:#73877b}
+.integration-event>span:last-child{color:#344f3e;font-weight:500;font-variant-numeric:tabular-nums}
+.agent-card .integration-locations{margin:9px 0 0;border:0}
+.integration-location-list{min-width:0;margin:0;padding:0;list-style:none}
+.integration-location-row{display:flex;align-items:center;gap:6px;min-height:28px}
+.integration-location-row+.integration-location-row{margin-top:4px}
+.agent-card .integration-location-row code{flex:1;min-width:0;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;line-height:1.5;color:#34483e;white-space:normal;overflow-wrap:anywhere}
+.agent-card .integration-open-folder{display:grid;place-items:center;flex:none;width:28px;height:28px;min-height:28px;padding:4px;border:0;border-radius:5px;background:transparent;color:#526b5a;box-shadow:none}
+.agent-card .integration-open-folder:hover{background:#e0eee4;color:#2f5942}
+.agent-card .integration-open-folder svg{width:17px;height:17px}
+.agent-card .integration-policy{flex:1 1 176px;margin:0;font-size:10px;line-height:1.6;color:#7a8974}
+.integration-detail-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:9px;padding-top:9px;border-top:1px solid #dce9df;flex-wrap:wrap}
+.agent-card .integration-actions{display:flex;align-items:center;gap:9px;margin:0;flex-wrap:wrap}
+.agent-card .integration-actions button{font-size:10px;line-height:1.5;min-height:27px;padding:3px 8px;border-radius:6px;box-shadow:none}
+.agent-card .integration-actions .integration-repair{border:1px solid #a8c9b2;background:#f9fcf9}
+.agent-card .integration-repair{color:#3f603e}
+.agent-card .integration-repair:hover{background:#e6f1e8}
+.agent-card .integration-actions .integration-remove{padding-inline:4px;border:0;background:transparent}
+.agent-card .integration-remove:hover{background:transparent;color:#94543c;text-decoration:underline;text-underline-offset:3px}
+.agent-card .integration-footnote{margin:0;font-size:9px;color:#84917d;white-space:nowrap}
+.agent-card .integration-message{margin:0;padding:8px 0 3px;font-size:10px;border-top:1px solid #e8eee7}
+@media(max-width:390px){.agent-card .integration-title{grid-template-columns:minmax(0,1fr) 61px 32px 22px;column-gap:5px}.agent-card .integration-identity{gap:6px}.agent-card .integration-identity strong{font-size:11px}.agent-card .integration-identity img{width:20px;height:20px}.agent-card .integration-badge{font-size:9px;gap:4px}}
+@media(max-width:390px){.agent-card .integration-locations{grid-template-columns:1fr;gap:2px}}
+.agent-card .integration-refresh{background:transparent;border-color:transparent;box-shadow:none}
+
+/* Shared, quiet groups keep all configuration sections on the same visual level. */
+.settings-group{border:1px solid #dfe7df;border-radius:12px;padding:0 12px;background:rgba(255,255,255,.22)}
+.settings-group>.row:last-child{border-bottom:0}
+.settings-group .row{min-height:64px}
+.agent-card .integration-heading{height:32px;margin-bottom:8px}
+.settings-save-feedback{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
+.settings-save-feedback p{font-size:10px;color:#8a978e;line-height:1.6;margin:0;overflow-wrap:anywhere}
+.settings-save-feedback[data-error=true] p{color:#9a6438}
+.settings-save-feedback button{flex-shrink:0;font-size:11px}
+.settings-dialog-overlay{position:fixed;inset:0;background:rgba(28,43,35,.22);z-index:50}
+.settings-dialog{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:calc(100% - 40px);max-width:360px;z-index:51;border:1px solid #dce5dd;border-radius:14px;background:#f8faf7;padding:22px;box-shadow:0 12px 48px #203b2929}
+.settings-dialog h2{font-size:15px;color:#294239;letter-spacing:0;font-weight:600;margin:0 0 12px}
+.settings-dialog p{font-size:12px;color:#75877b;line-height:1.8;margin:0}
+.settings-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}
+.settings-dialog-actions button{font-size:11px;padding:8px 12px}

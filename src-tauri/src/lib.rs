@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod commands;
+mod companion;
 #[cfg(target_os = "macos")]
 mod instance_lock;
 #[cfg(desktop)]
@@ -147,6 +148,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init());
 
     #[cfg(desktop)]
+    if !is_screenshot_demo() {
+        builder = builder.plugin(agent_studio_desktop::init(companion::config()));
+    }
+
+    #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -250,6 +256,9 @@ pub fn run() {
             commands::log_error,
             commands::get_error_log_path,
             commands::reveal_error_log,
+            companion::get_companion_enabled,
+            companion::set_companion_enabled,
+            companion::open_companion_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

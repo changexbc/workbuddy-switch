@@ -1,0 +1,459 @@
+{
+  "sourceRepository": "agent-mac-office",
+  "baseCommit": "cccb946e94f589d3706b7def2e23c475595acf01",
+  "includesUncommittedWork": true,
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "3b3beff15ab5b001ef78d0261ea646b3b99ffe68a938fff86b74910df902a529"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "c8ab2fdeb091a888e3e4e116bfa8a35d02eace3cd0a8e7f43d34fba1cdb59e56"
+    },
+    {
+      "path": "collector/desktop.js",
+      "sha256": "be47dd19c07f454b9e01bf6fe5b9ff99e8a1b8a0f91bc6f59ec345c584a3ba28"
+    },
+    {
+      "path": "collector/hooks/codebuddy-ide-status.py",
+      "sha256": "88e13f6af17666a608e8becdc7e52adc768b74f5661efe3f25405ced1d3d3109"
+    },
+    {
+      "path": "collector/hooks/codex-status.py",
+      "sha256": "2433b7afafd037c9e4ab88df759f614fa9ea152c7a6fa223b1a6224ab2d5036f"
+    },
+    {
+      "path": "collector/hooks/workbuddy-status.py",
+      "sha256": "a2d19bbd9503c3c48f3cfd11de86bb22e75306bcfe74d3412f12f72eb2f56270"
+    },
+    {
+      "path": "collector/lib/codebuddy-ide.js",
+      "sha256": "3744c5c7616ae350d446389c326dc7a19dad642430dda20cf3c6de0daea6d55c"
+    },
+    {
+      "path": "collector/lib/codeg.js",
+      "sha256": "631fbe2b82de84a1b83f57b2d2511f31aaa3289829681e4bedd84efee7eab2c0"
+    },
+    {
+      "path": "collector/lib/codex-live.js",
+      "sha256": "ff6d52185dde21543a48ce5435887bc40d5857453607080515c8d998e351d904"
+    },
+    {
+      "path": "collector/lib/codex-read-state.js",
+      "sha256": "4fd4834729b45cd786ff45bba55ce7cf731f47e6eb6352e41fbef4113c591105"
+    },
+    {
+      "path": "collector/lib/codex-resume.js",
+      "sha256": "68a76340f8c24aa0f8ebe81e7f13a9a5c19b27b351b7672f06bc04c400768c03"
+    },
+    {
+      "path": "collector/lib/codex.js",
+      "sha256": "bd9714d47bb9fc98f16e0753de88203a3f8caaef23003bc825fc60e128188c98"
+    },
+    {
+      "path": "collector/lib/collector.js",
+      "sha256": "2b78e174cb4f6f64d644de5d0d9b4707946f4e1d082ec12363f8e2154e3ce2f3"
+    },
+    {
+      "path": "collector/lib/host-process.js",
+      "sha256": "5dee7da40775abdfee59718c2d796a36d56a4bdf791a7cddd5b2f19fb2625be0"
+    },
+    {
+      "path": "collector/lib/hub.js",
+      "sha256": "cfcdc1ae98ac869a6d8eed82e9ad288a6144c3be9d47e49cb95e80394f82653b"
+    },
+    {
+      "path": "collector/lib/open-app.js",
+      "sha256": "7829286985bb34db6312102816374144a90be7b8d8fba1b3a5d1bba8d7ad4c6f"
+    },
+    {
+      "path": "collector/lib/settings.js",
+      "sha256": "9bd7203ea9d0af12b5eba6eb8ba655e4d1d80a51b2074aaf9ae310db8492ece7"
+    },
+    {
+      "path": "collector/lib/tail.js",
+      "sha256": "490bf567442e1a87224a13d13794528bab7a04437b233102048859e92449e744"
+    },
+    {
+      "path": "collector/lib/workbuddy.js",
+      "sha256": "2455cfe269983a8f8b7b3bbe82337cbc8df8a66679a9739a4ced50aebffb79eb"
+    },
+    {
+      "path": "collector/server.js",
+      "sha256": "2df4fe7cf53826c6e21a4958fda34819822b34b7df42c88ab5c0d9d8e33488fd"
+    },
+    {
+      "path": "crates/agent-studio-core/Cargo.toml",
+      "sha256": "39e3695962b8319941e713c66370378a711903e4fbcf0331102502999ddb0a85"
+    },
+    {
+      "path": "crates/agent-studio-core/examples/inspect_performance.rs",
+      "sha256": "8d44297f08f042a68a2ff86075e91add32229b8f7e9ce64a3bb66cf910b894a7"
+    },
+    {
+      "path": "crates/agent-studio-core/examples/replay.rs",
+      "sha256": "5095f45cd6e4979b1932f2e0cc0de96ab431ac473e81ee7542fb7cda7ef9d4b2"
+    },
+    {
+      "path": "crates/agent-studio-core/src/adapters/codeg.rs",
+      "sha256": "c0c1515c9db1be08eba70289df0f155d41f024c003587d2e1bbee30a2255f3f8"
+    },
+    {
+      "path": "crates/agent-studio-core/src/adapters/codex.rs",
+      "sha256": "5989c11c425237f5966eb33a137b23a98a3154d2a7298591825b055ac8827033"
+    },
+    {
+      "path": "crates/agent-studio-core/src/adapters/ide.rs",
+      "sha256": "3fc418aacf31a26d426662baa5ab57f4e02e9c61f774e524100c35b7c8146442"
+    },
+    {
+      "path": "crates/agent-studio-core/src/adapters/mod.rs",
+      "sha256": "6bea1dafb039d0b944f59724956818b14e40e078d120d595a24f0b790f1e139e"
+    },
+    {
+      "path": "crates/agent-studio-core/src/adapters/workbuddy.rs",
+      "sha256": "2bdd253f275a9fb7a9d097922b5c4d71e21cdf358006b33e44571205e0c96cc1"
+    },
+    {
+      "path": "crates/agent-studio-core/src/codex_read_state.rs",
+      "sha256": "082f723bd5364157d94a2664f73751031b77b5700a821fcd8cd59ce3b0eed983"
+    },
+    {
+      "path": "crates/agent-studio-core/src/host_process.rs",
+      "sha256": "aec2058872b2ba1f002be86218c4dd2e9aba9f6c27ba7c0bbfc103fcc981ff41"
+    },
+    {
+      "path": "crates/agent-studio-core/src/hub.rs",
+      "sha256": "c7333f4976961994ba56bc09b70350be9fa26cf3cf5320531ad678843beee352"
+    },
+    {
+      "path": "crates/agent-studio-core/src/lib.rs",
+      "sha256": "f2cab1fa2129f67a5957007df01d1048a53ce451ac8c4cdd23679ec2f2ae378e"
+    },
+    {
+      "path": "crates/agent-studio-core/src/settings.rs",
+      "sha256": "070224bed25b1abf801a950dc39a643f4e2f07eb3f8753259fcead5bf515a621"
+    },
+    {
+      "path": "crates/agent-studio-core/src/tail.rs",
+      "sha256": "f7e92a6ed1171d4c61f1ae1312ef222a2d8c5491f456f28473dde0137b37ff7a"
+    },
+    {
+      "path": "crates/agent-studio-core/tests/lifecycle.rs",
+      "sha256": "1973db1204d90627c21afde0e49f0be2b60d6e37951133a3e4ec236aa8391046"
+    },
+    {
+      "path": "crates/agent-studio-desktop/Cargo.toml",
+      "sha256": "3d375d2c14448d2fa65d282bfb7941c26b056db5e8c43bc0385bcbf2bb932ba4"
+    },
+    {
+      "path": "crates/agent-studio-desktop/build.rs",
+      "sha256": "e79c47b00f32657ae3bbbdf0b4ba5dfc3e4eb449a9cef5a646fdbf894a2f7950"
+    },
+    {
+      "path": "crates/agent-studio-desktop/examples/cursor_probe.rs",
+      "sha256": "6c7550963dac5682c1c4372fb2c873469d934bbd47daf97930df468d41b0441a"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/close_settings.toml",
+      "sha256": "35d5ce8dc165293f4d55ed47ff8da66953306f94ca7f42ae819dfd818350abb3"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/collector_request.toml",
+      "sha256": "ad9d4224c3eeb8524aa16e1c51b28ad3650b1a102b49594b9137d349d056b8d2"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/monitor_state.toml",
+      "sha256": "e9f680af63a51152e2f24f003b84c4ba565a81a0bceea5ffe7a8090af8520a10"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/open_session_url.toml",
+      "sha256": "2ed913399d31d02b19ebf7dcf3b294dfa87fc1ada3b51e31a3becd08ea714b53"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/open_view.toml",
+      "sha256": "355e0af3be05436a992c5143b765c6fd02462864e919f43d1c9d07994eaec46b"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/rail_settings_get.toml",
+      "sha256": "c126f09b0f0cdd4deb9d3aec69b472d7f07568c709c2329d47f89ee1e8286560"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/rail_settings_set.toml",
+      "sha256": "425c82b758148f25266321face53a93a9ed8d298ba9612dfcaf205a049ca9fe4"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/commands/set_hit_regions.toml",
+      "sha256": "ef6ba68b6b3485c5c84a10507909470f1d461e52eeb52031ab3c8a17536b4481"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/autogenerated/reference.md",
+      "sha256": "c33e174b89710b55d10e780c5fb7f0ff1ceac6cf43ca05a0ea8005b7cc3d39a7"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/default.toml",
+      "sha256": "d57398c714bda03a3849032d66fa4ed64a7ad1907c54905cc7aff7e5cae7eb3c"
+    },
+    {
+      "path": "crates/agent-studio-desktop/permissions/schemas/schema.json",
+      "sha256": "709af5b15d8113f7c3a74cd22a3ffdaadf44faabfe819268d8990bfee23dfd6c"
+    },
+    {
+      "path": "crates/agent-studio-desktop/src/background_cursor.rs",
+      "sha256": "9958e3aa28384ea9f300a83006bf6424fa5f05014cb6455b1adbab8f1d66ca54"
+    },
+    {
+      "path": "crates/agent-studio-desktop/src/hit_test.rs",
+      "sha256": "1170661b2d20a61ef03c6afd56b8104f2a7e1ee4029fb6c834e8359ee7ecc506"
+    },
+    {
+      "path": "crates/agent-studio-desktop/src/lib.rs",
+      "sha256": "ebbc6e59c1049cce8c3790258c07328964e713541f2335823d10f0d4bfe5412b"
+    },
+    {
+      "path": "crates/agent-studio-desktop/src/rail_settings.rs",
+      "sha256": "d8ffd40ecd85c63012da7dfa067add150b502d2087e28781be434644fd51ecdd"
+    },
+    {
+      "path": "crates/agent-studio-desktop/src/session.rs",
+      "sha256": "4e0cbcc97e2af059d72a60cb2e7f6ac63f97942962b439e1b7176a6a93b1e9a7"
+    },
+    {
+      "path": "crates/agent-studio-runtime/Cargo.toml",
+      "sha256": "ecc5e45d8bbaa07b5b10146434c36b746f9a1f39005738d9ca711ea9b39d9558"
+    },
+    {
+      "path": "crates/agent-studio-runtime/src/lib.rs",
+      "sha256": "01383e8758d90ffe1afcb971b9e4a4aebaf1d3a492a03aa69aa6059b6f6842d3"
+    },
+    {
+      "path": "crates/agent-studio-runtime/src/main.rs",
+      "sha256": "03039fa6de94365c526cc783dbb07469475483f23b7cdcc94fcda18cb2fee138"
+    },
+    {
+      "path": "desktop-settings.html",
+      "sha256": "8e7c512210eeb33a54176036bf94067cc9dad6e25647d9b0162374eb23562bf4"
+    },
+    {
+      "path": "desktop.html",
+      "sha256": "355521b4d1a72a107641756ebc40611c6a90eac5c82b9bee817c8ba9d623de05"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "95e4d7a47cce4e6156d0f6c62b9dec26d5a6db8afdd5dc10d87b747245baf358"
+    },
+    {
+      "path": "public/icons/agents/codebuddy-ide.png",
+      "sha256": "1dcc7d16b1e2607a9bd28c8a6b8b68cbce1667666d5b0bdb6283eb31f6377cef"
+    },
+    {
+      "path": "public/icons/agents/codeg.png",
+      "sha256": "ff709e3b7f08ab7743c3407a005ceda31f0ec3128c7527dbe8605af378d56405"
+    },
+    {
+      "path": "public/icons/agents/codex.png",
+      "sha256": "605861f74bb8e9327d1fbf0a2c54b3d3fa62e952b81528464c206bc1452263e4"
+    },
+    {
+      "path": "public/icons/agents/grok.png",
+      "sha256": "786d553320850d92f1dd6a3ade4afe0290653e0146c7c55cf429439e21023630"
+    },
+    {
+      "path": "public/icons/agents/workbuddy.png",
+      "sha256": "126fd8009d2ae055cd822e29d5de48379a6dacb19adb80fb0ff5fd063efb8deb"
+    },
+    {
+      "path": "scripts/prepare-desktop.mjs",
+      "sha256": "4dbc1a5f067d872752840f0da39f6cf6698237ba6a594b4587ba27c431bb29fe"
+    },
+    {
+      "path": "scripts/qa-native-runtime.mjs",
+      "sha256": "71e4b34f653e2c330a7a8ba1460a78281faa147f5e5621dc7a1f9e8ec2640b0a"
+    },
+    {
+      "path": "scripts/qa-rust-parity.mjs",
+      "sha256": "107c5d1201b5288316a88745b1ce5842d66d49473a64f531d52bf51d8ccec7ab"
+    },
+    {
+      "path": "src/desktop/avatar.css",
+      "sha256": "1fca0e3bc5734bcd339edb6fb0f7769829a685516c8bc50ce6425dde30c8c75f"
+    },
+    {
+      "path": "src/desktop/avatar.js",
+      "sha256": "028ed16b468099a306d9485aeb220a910dd28dc8b93303e46fb1881183626e0b"
+    },
+    {
+      "path": "src/desktop/host.js",
+      "sha256": "5904fa3bb56b371ebc7de0ef585d1f94d2f172ba80f929f5f9c7ddfacb048f03"
+    },
+    {
+      "path": "src/desktop/idle-lamp.css",
+      "sha256": "de58d100b9f4d35ad0a2ba400837829eb1d08e093fc388a31a0a4ac19583414e"
+    },
+    {
+      "path": "src/desktop/idle-lamp.js",
+      "sha256": "362e3687b8eb9b6fc5c9bcb60bb7bb97f85d19a106bb1fb789600f3fd2cb6194"
+    },
+    {
+      "path": "src/desktop/listening.js",
+      "sha256": "0cac57c27aa1114c64b8e273c5a4acfbb189f3b189a13e67f20fa35600a30257"
+    },
+    {
+      "path": "src/desktop/preferences.js",
+      "sha256": "3fdbdef932ded44ac9ca20e6a3607f1ab31d1e4cf41f3855f9f99f816ef6b127"
+    },
+    {
+      "path": "src/desktop/rail-model.js",
+      "sha256": "ab383982b87307eca56b91d3319ac4b63f59cf20f620e9426d52b4f4f6ebda3c"
+    },
+    {
+      "path": "src/desktop/rail.css",
+      "sha256": "be5236cbb252b0d86345d6a45983afe97078a9ab72eca76756589d45fc2b907a"
+    },
+    {
+      "path": "src/desktop/rail.js",
+      "sha256": "9d60aa84b91319ce234b5f1868d1e2fb46f7ec5a6d528b418709983232f4f00f"
+    },
+    {
+      "path": "src/desktop/settings.css",
+      "sha256": "c681c57f6973ab817cf9218edd7c5467d3ced47c614f703b9c7e0a144671ecdc"
+    },
+    {
+      "path": "src/desktop/settings.js",
+      "sha256": "4035c14d019f5e5a043c3c2680d270b67ca586e038844ac4cbabfb30e35753ad"
+    },
+    {
+      "path": "src/desktop/welcome/cat-motion.js",
+      "sha256": "3b20f762e5a10f97762b6eab82895e1cd17ba116b85b4f3f79696a8cddb6fa61"
+    },
+    {
+      "path": "src/desktop/welcome/index.js",
+      "sha256": "d34875b5ea5c3dbdcc0efd8a102b7e8193e9bb271bcb89bda909f9e2a37b6859"
+    },
+    {
+      "path": "src/desktop/welcome/welcome.css",
+      "sha256": "ef06cb800d9185f2331646377db9201a7fcd449583ed1c7b845b6bd7fb1b1a1f"
+    },
+    {
+      "path": "src/monitor/codex-internal-prompts.json",
+      "sha256": "b85596ef9e1a802bf3a759181a0b6bc0332785f1ef89f698906717806c0f10ac"
+    },
+    {
+      "path": "src/monitor/model.js",
+      "sha256": "007197853f49d4e792211ee7920f8843122e3f288c3e87c24aefbe4d73fbe5be"
+    },
+    {
+      "path": "src/monitor/presentation.js",
+      "sha256": "43ca44a81f62ae54cdac3f1c8a70c5a459cf9673bc9d62e00a97fb064fe3b1a5"
+    },
+    {
+      "path": "src/monitor/reminders.js",
+      "sha256": "38177fa830ebeee7b3d47392cf41a678a919bc5f2325b5bac22a4d4a41e93270"
+    },
+    {
+      "path": "src/monitor/session-link.js",
+      "sha256": "61e299e0591e473e8486a76b2ba83988470af2f66cca104846435957b388b3c8"
+    },
+    {
+      "path": "src/monitor/session-model.js",
+      "sha256": "e30791b5952ad896694b3d729f2ce588b53ce9154fdcb99c57593ef4d9d6bf5c"
+    },
+    {
+      "path": "src/monitor/session-visibility.js",
+      "sha256": "33502e19f6d17f6d7edc050a7db79da13e0790db2f8a36ef9737b7c19cd2d3a9"
+    },
+    {
+      "path": "src/monitor/transport.js",
+      "sha256": "428a96e3245a4aa93a64e2e0ee5892b6555ad29b38bfb3ae42e7a07c0b107245"
+    },
+    {
+      "path": "src/settings-config.js",
+      "sha256": "c5d9d69f2d5bbba7717ea14b3b3a233f1d76ee11fcd8df3d2769a4456c522267"
+    },
+    {
+      "path": "src-tauri/Cargo.lock",
+      "sha256": "56a1c195ceef395c8a8f24211f57ae428c2979ac53b425d34e099ae215a99bd5"
+    },
+    {
+      "path": "src-tauri/Cargo.toml",
+      "sha256": "f20b016975b4d6b36d2b4cd240752e41d4dcc46be80acfe3133573ce4a9c41c7"
+    },
+    {
+      "path": "src-tauri/build.rs",
+      "sha256": "9df767e7354d932c3b91aefa4e426647377167536d9f36dc517d340d1266179d"
+    },
+    {
+      "path": "src-tauri/capabilities/default.json",
+      "sha256": "28cd5bf006c9d3f036ec21af56413a740c0da60e3c528d5ce4bf4c538e012294"
+    },
+    {
+      "path": "src-tauri/icons/icon.icns",
+      "sha256": "c0038b1adf7697cdf200e36ec4a3bb35ff6827e5f50e17a50010b33aee2b6523"
+    },
+    {
+      "path": "src-tauri/icons/icon.ico",
+      "sha256": "4d308ea3ec7355e6726e0bc3fed9a33552955cd7298539585864d7a186b4150a"
+    },
+    {
+      "path": "src-tauri/icons/icon.png",
+      "sha256": "f767891fa928c337d780a2ed25b2d5329a69ddbdeeb9eb2c07c8d2046bcd765b"
+    },
+    {
+      "path": "src-tauri/tauri.conf.json",
+      "sha256": "1bcdf991dd77b89800c3acd1f927fd52876e7933266ad92557fedcfb1316a98a"
+    },
+    {
+      "path": "tests/codebuddy-ide-hooks.test.js",
+      "sha256": "3806c0d5806caf0b5e6e4d6f77b8caf65fa9ce26542c83fba6a0508affac453e"
+    },
+    {
+      "path": "tests/codeg-hooks.test.js",
+      "sha256": "7a671ef64b70b52c9796bab120b45cbf0b55cb8671eeeac7b9410dfe5d2e39f8"
+    },
+    {
+      "path": "tests/codex-hooks.test.js",
+      "sha256": "342d4e083978eecb0b65d153f699791814bf826ee67cde11d770b83616c6309c"
+    },
+    {
+      "path": "tests/codex-read-state.test.js",
+      "sha256": "04200e1e0a6a7e568338776f50f8f2a4a09fba8caedc84003a22a332780945df"
+    },
+    {
+      "path": "tests/desktop.test.js",
+      "sha256": "a294c78a9f59c0eb3790bb4c78481ab31b6e9c41e4e1e7a18ec007eec3c527eb"
+    },
+    {
+      "path": "tests/fixtures/codebuddy-ide-hooks.json",
+      "sha256": "7c8ab2ee59cef947dc748ff33a6e7f227ee79c22dc6f00d4bb1a72ed4a589979"
+    },
+    {
+      "path": "tests/fixtures/codex-hooks.json",
+      "sha256": "5d4ba2b31bcd92eeb451e1a22307df38b2fa7d45db6897a77a66596717f434af"
+    },
+    {
+      "path": "tests/host-process.test.js",
+      "sha256": "186d3f2fdf94ebac4311bbafdf91a767debcd3cdbe2fd12055092200df3670ab"
+    },
+    {
+      "path": "tests/monitor.test.js",
+      "sha256": "b3110fc534de1a65f7b197fdf7776f439ca628797c90e841761763c3b71c3810"
+    },
+    {
+      "path": "tests/session-link.test.js",
+      "sha256": "689eedc39c836feebc8510281306777fddbdc83256af1e64ad0a425ccfc9c03e"
+    },
+    {
+      "path": "tests/session-visibility.test.js",
+      "sha256": "446500220efa801459dfecf1305ff07a30b820c90e483f5d3f9e1b3def608993"
+    },
+    {
+      "path": "tests/settings.test.js",
+      "sha256": "24db9cd6376976471c7e1e32b1516624f62ade23a2e271453f9035e6ecdf52f7"
+    },
+    {
+      "path": "tests/workbuddy-hooks.test.js",
+      "sha256": "da39e8322a6ae00f2d4bc1c11e88e82b96e219f33ceecabdb3378d62faade337"
+    }
+  ]
+}

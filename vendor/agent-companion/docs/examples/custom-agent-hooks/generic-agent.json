@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "example-agent",
+  "name": "Example Agent",
+  "transport": "hook",
+  "mapping": {
+    "event": "/event_name",
+    "sessionId": "/session_id",
+    "roundId": "/round_id",
+    "eventId": "/event_id",
+    "timestamp": "/ts",
+    "cwd": "/cwd",
+    "title": "/prompt",
+    "requestId": "/request_id"
+  },
+  "ignoreIfPresent": ["/parent_session_id"],
+  "events": {
+    "prompt_submitted": { "action": "start" },
+    "permission_requested": { "action": "wait", "reason": "permission" },
+    "input_requested": { "action": "wait", "reason": "input" },
+    "execution_resumed": { "action": "resume" },
+    "response_finished": { "action": "finish", "status": "done" },
+    "response_failed": { "action": "finish", "status": "error" },
+    "session_closed": { "action": "close" }
+  }
+}

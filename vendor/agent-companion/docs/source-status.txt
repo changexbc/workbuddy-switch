@@ -1,0 +1,48 @@
+ M README.md
+ M artifacts/cotti-qa/drinking.png
+ M artifacts/cotti-qa/pickup.png
+ M artifacts/cotti-qa/result.json
+ M artifacts/cotti-qa/shop.png
+ M collector/lib/codeg.js
+ M collector/lib/collector.js
+ M collector/server.js
+ M crates/agent-studio-core/src/adapters/codeg.rs
+ M crates/agent-studio-core/src/adapters/mod.rs
+ M crates/agent-studio-core/tests/lifecycle.rs
+ M crates/agent-studio-runtime/src/main.rs
+ M index.html
+ M src-tauri/src/main.rs
+ M src/cotti-layout.js
+ M src/desktop/avatar.css
+ M src/desktop/avatar.js
+ M src/desktop/host.js
+ M src/desktop/rail.css
+ M src/desktop/rail.js
+ M src/fixed-shots.js
+ M src/main.js
+ M src/monitor/session-link.js
+ M src/monitor/style.css
+ M src/settings/shell.css
+ M src/view-toolbar.js
+ M src/weather.js
+ M tests/fixed-shots.test.js
+ M tests/monitor.test.js
+ M tests/weather.test.js
+?? artifacts/brand-cat/
+?? artifacts/ear-motion/
+?? artifacts/empty-state-options/
+?? artifacts/idle-cat/
+?? artifacts/lamp-integration/
+?? artifacts/wb-cat-motion/
+?? artifacts/weather-switch/
+?? artifacts/welcome-color/
+?? artifacts/welcome-integration/
+?? docs/design/rail-welcome.md
+?? mouse.svg
+?? scripts/qa-weather-switch.mjs
+?? src-tauri/src/welcome_qa.rs
+?? src/desktop/idle-lamp.css
+?? src/desktop/idle-lamp.js
+?? src/desktop/welcome/
+?? tests/codeg-hooks.test.js
+?? tmp-inspect/

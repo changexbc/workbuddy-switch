@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Agent Companion",
+  "version": "0.1.0",
+  "identifier": "com.agentcompanion.desktop",
+  "build": {
+    "beforeDevCommand": "npm run desktop:web",
+    "additionalWatchFolders": [
+      "../crates"
+    ],
+    "devUrl": "http://127.0.0.1:4189",
+    "beforeBuildCommand": "npm run desktop:prepare && npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": [
+      "app"
+    ],
+    "externalBin": [
+      "binaries/agent-studio-runtime"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

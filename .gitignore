@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+public/companion/
+src-tauri/binaries/agent-studio-runtime-*
 *.local
 
 # Rust / Tauri 构建产物（workspace target）

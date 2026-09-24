@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+
+    "allowJs": true,
+    "checkJs": false,
+
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "tests/**/*.js", "scripts/**/*.mjs"],
+  "exclude": ["node_modules", "dist", "artifacts", "target", "src-tauri", "crates", "collector"]
+}

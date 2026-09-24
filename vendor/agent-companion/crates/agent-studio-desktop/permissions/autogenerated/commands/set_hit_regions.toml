@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-set-hit-regions"
+description = "Enables the set_hit_regions command without any pre-configured scope."
+commands.allow = ["set_hit_regions"]
+
+[[permission]]
+identifier = "deny-set-hit-regions"
+description = "Denies the set_hit_regions command without any pre-configured scope."
+commands.deny = ["set_hit_regions"]

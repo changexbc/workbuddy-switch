@@ -1,0 +1,8 @@
+{
+  "event_name": "prompt_submitted",
+  "session_id": "sim-close",
+  "round_id": "turn-2",
+  "event_id": "evt-3",
+  "prompt": "继续下一个任务",
+  "cwd": "/Users/you/projects/demo"
+}

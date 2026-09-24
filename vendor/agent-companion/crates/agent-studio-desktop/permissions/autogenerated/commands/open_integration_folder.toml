@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-open-integration-folder"
+description = "Enables the open_integration_folder command without any pre-configured scope."
+commands.allow = ["open_integration_folder"]
+
+[[permission]]
+identifier = "deny-open-integration-folder"
+description = "Denies the open_integration_folder command without any pre-configured scope."
+commands.deny = ["open_integration_folder"]

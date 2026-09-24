@@ -1,0 +1,100 @@
+/*
+ * Tailwind entry for the desktop windows.
+ *
+ * Only the settings window imports this today; the rail joins in a later phase.
+ * The theme tokens below are the palette that `settings.css` already used, so
+ * shadcn components reuse the existing design instead of introducing a new one.
+ *
+ * Cascade note: `settings.css` is unlayered while everything Tailwind emits is
+ * inside `@layer theme, base, components, utilities`. Unlayered CSS therefore
+ * wins every conflict, which is what keeps the pre-migration look intact while
+ * the controls move to utilities one by one.
+ */
+@import "tailwindcss";
+
+@source "../**/*.{ts,tsx}";
+
+/*
+ * Preflight is a broad reset and it sits *below* the stylesheets that predate
+ * this migration, so wherever those stylesheets stay quiet, the user-agent
+ * default they were written against is silently replaced. This block puts the
+ * ones that actually changed a rendered page back.
+ *
+ * `revert` rolls back to the previous *origin* — for an author declaration that
+ * is the user agent — and only when this layer wins the cascade. An unlayered
+ * rule in settings.css always beats `@layer base`, so anything that file states
+ * explicitly is untouched.
+ *
+ * The list is evidence-driven, not exhaustive: it was derived from
+ * artifacts/frontend-migration/style-diff.mjs, which diffs every computed
+ * property of every element against the pre-migration page. Known preflight
+ * rules deliberately left alone, each because the element is unused in these
+ * windows or settings.css already states the same property unlayered:
+ *   - `* { margin:0; padding:0; border:0 solid }` other than <p>/<option>
+ *   - `small { font-size: 80% }` — settings.css sets 10px on `.row small` and
+ *     `.styles small`, the only two contexts <small> appears in
+ *   - `button, input, select { font: inherit; background: transparent }`
+ *   - `ol, ul, menu { list-style: none }` — no lists in either window
+ *   - `[hidden] { display: none !important }` — rail.css:7 states the same rule,
+ *     with a wider selector (it also hides `until-found`)
+ * The rail (P3) imports this file too and must re-run the same diff.
+ */
+@layer base {
+  html {
+    line-height: normal;
+    tab-size: revert;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-size: revert;
+    font-weight: revert;
+  }
+  img, svg, video, canvas, audio, iframe, embed, object {
+    display: revert;
+    vertical-align: revert;
+  }
+  img, video {
+    max-width: revert;
+    height: revert;
+  }
+  option {
+    padding: revert;
+  }
+  /* Preflight zeroes every margin, including the ones the UA gives <p>. */
+  p {
+    margin: revert;
+  }
+}
+
+@theme {
+  --color-background: #f4f7f4;
+  --color-foreground: #294239;
+  --color-primary: #355c48;
+  --color-primary-foreground: #ffffff;
+  --color-primary-hover: #244835;
+  --color-secondary: #ffffff;
+  --color-secondary-foreground: #294239;
+  --color-accent: #edf5ef;
+  --color-accent-foreground: #294239;
+  --color-muted: #eaf2eb;
+  --color-muted-foreground: #8a978e;
+  --color-border: #e0e8e1;
+  --color-input: #d6e1d8;
+  --color-ring: #477d66;
+
+  /* Controls carried over from settings.css. */
+  --color-track: #ccd7cf;
+  --color-track-on: #719c82;
+  --color-outline: #abc4b3;
+  --color-strong: #365348;
+  --color-soft: #9ab8a5;
+  --color-pressed: #729a82;
+  --color-line: #dbe5dd;
+  --color-eyebrow: #729082;
+  --color-hint: #819187;
+  --color-caption: #809187;
+  --color-status: #7c8e82;
+
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 15px;
+}

@@ -108,7 +108,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -190,6 +190,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AGENT_COMPANION_TARGET: ${{ matrix.target }}
         run: |
           VER="${GITHUB_REF_NAME#v}"
           if ! [[ "$VER" =~ ^[0-9] ]]; then

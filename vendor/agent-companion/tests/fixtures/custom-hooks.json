@@ -1,0 +1,419 @@
+{
+  "note": "Shared fixtures for the custom-agent-hooks contract. The Rust core (crates/agent-studio-core/src/custom) and the Node collector (collector/lib/custom.js) must agree on every entry here; scripts/qa-custom-parity.mjs deep-compares their normalized output.",
+  "limits": {
+    "templateBytes": 1048576,
+    "payloadBytes": 1048576,
+    "nameMax": 120,
+    "pointerMax": 512,
+    "eventsMax": 64,
+    "eventNameMax": 200,
+    "ignoreIfPresentMax": 16,
+    "sessionIdMax": 256,
+    "idFieldMax": 256,
+    "eventIdMax": 200,
+    "cwdMax": 2048,
+    "titleMax": 4096,
+    "dedupPerSession": 64,
+    "sessionsMax": 256,
+    "diagnosticsMax": 50
+  },
+  "base": {
+    "schemaVersion": 1,
+    "id": "example-agent",
+    "name": "Example Agent",
+    "transport": "hook",
+    "mapping": {
+      "event": "/event_name",
+      "sessionId": "/session_id",
+      "roundId": "/round_id",
+      "eventId": "/event_id",
+      "timestamp": "/ts",
+      "cwd": "/cwd",
+      "title": "/prompt",
+      "requestId": "/request_id"
+    },
+    "ignoreIfPresent": ["/parent_session_id"],
+    "events": {
+      "prompt_submitted": {"action": "start"},
+      "permission_requested": {"action": "wait", "reason": "permission"},
+      "input_requested": {"action": "wait", "reason": "input"},
+      "execution_resumed": {"action": "resume"},
+      "response_finished": {"action": "finish", "status": "done"},
+      "response_failed": {"action": "finish", "status": "error"},
+      "session_closed": {"action": "close"}
+    }
+  },
+  "templates": {
+    "example": {
+      "schemaVersion": 1,
+      "id": "example-agent",
+      "name": "Example Agent",
+      "transport": "hook",
+      "mapping": {
+        "event": "/event_name",
+        "sessionId": "/session_id",
+        "roundId": "/round_id",
+        "eventId": "/event_id",
+        "timestamp": "/ts",
+        "cwd": "/cwd",
+        "title": "/prompt",
+        "requestId": "/request_id"
+      },
+      "ignoreIfPresent": ["/parent_session_id"],
+      "events": {
+        "prompt_submitted": {"action": "start"},
+        "permission_requested": {"action": "wait", "reason": "permission"},
+        "input_requested": {"action": "wait", "reason": "input"},
+        "execution_resumed": {"action": "resume"},
+        "response_finished": {"action": "finish", "status": "done"},
+        "response_failed": {"action": "finish", "status": "error"},
+        "session_closed": {"action": "close"}
+      }
+    },
+    "minimal": {
+      "schemaVersion": 1,
+      "id": "minimal-agent",
+      "name": "Minimal Agent",
+      "transport": "hook",
+      "mapping": {"event": "/kind", "sessionId": "/sid"},
+      "events": {
+        "begin": {"action": "start"},
+        "end": {"action": "finish", "status": "done"}
+      }
+    }
+  },
+  "invalid": [
+    {"name": "schema-version", "path": "/schemaVersion", "mutate": [{"op": "set", "pointer": "/schemaVersion", "value": 2}]},
+    {"name": "schema-version-missing", "path": "/schemaVersion", "mutate": [{"op": "remove", "pointer": "/schemaVersion"}]},
+    {"name": "id-uppercase", "path": "/id", "mutate": [{"op": "set", "pointer": "/id", "value": "Example-Agent"}]},
+    {"name": "id-builtin", "path": "/id", "mutate": [{"op": "set", "pointer": "/id", "value": "codex"}]},
+    {"name": "id-builtin-dash", "path": "/id", "mutate": [{"op": "set", "pointer": "/id", "value": "codebuddy-ide"}]},
+    {"name": "id-empty", "path": "/id", "mutate": [{"op": "set", "pointer": "/id", "value": ""}]},
+    {"name": "id-too-long", "path": "/id", "mutate": [{"op": "set", "pointer": "/id", "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]},
+    {"name": "id-not-string", "path": "/id", "mutate": [{"op": "set", "pointer": "/id", "value": 7}]},
+    {"name": "name-missing", "path": "/name", "mutate": [{"op": "remove", "pointer": "/name"}]},
+    {"name": "name-empty", "path": "/name", "mutate": [{"op": "set", "pointer": "/name", "value": ""}]},
+    {"name": "transport-invalid", "path": "/transport", "mutate": [{"op": "set", "pointer": "/transport", "value": "http"}]},
+    {"name": "transport-missing", "path": "/transport", "mutate": [{"op": "remove", "pointer": "/transport"}]},
+    {"name": "unknown-top-key", "path": "/extra", "mutate": [{"op": "set", "pointer": "/extra", "value": true}]},
+    {"name": "mapping-missing", "path": "/mapping", "mutate": [{"op": "remove", "pointer": "/mapping"}]},
+    {"name": "mapping-event-missing", "path": "/mapping/event", "mutate": [{"op": "remove", "pointer": "/mapping/event"}]},
+    {"name": "mapping-event-not-pointer", "path": "/mapping/event", "mutate": [{"op": "set", "pointer": "/mapping/event", "value": "event_name"}]},
+    {"name": "mapping-session-missing", "path": "/mapping/sessionId", "mutate": [{"op": "remove", "pointer": "/mapping/sessionId"}]},
+    {"name": "mapping-session-not-pointer", "path": "/mapping/sessionId", "mutate": [{"op": "set", "pointer": "/mapping/sessionId", "value": "/"}]},
+    {"name": "mapping-unknown-key", "path": "/mapping/session_id", "mutate": [{"op": "set", "pointer": "/mapping/session_id", "value": "/sid"}]},
+    {"name": "pointer-bad-escape", "path": "/mapping/event", "mutate": [{"op": "set", "pointer": "/mapping/event", "value": "/bad~2escape"}]},
+    {"name": "pointer-too-long", "path": "/mapping/event", "mutate": [{"op": "set", "pointer": "/mapping/event", "value": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]},
+    {"name": "events-missing", "path": "/events", "mutate": [{"op": "remove", "pointer": "/events"}]},
+    {"name": "events-empty", "path": "/events", "mutate": [{"op": "set", "pointer": "/events", "value": {}}]},
+    {"name": "events-unknown-action", "path": "/events/prompt_submitted/action", "mutate": [{"op": "set", "pointer": "/events/prompt_submitted/action", "value": "pause"}]},
+    {"name": "events-action-missing", "path": "/events/prompt_submitted/action", "mutate": [{"op": "remove", "pointer": "/events/prompt_submitted/action"}]},
+    {"name": "events-not-object", "path": "/events/prompt_submitted", "mutate": [{"op": "set", "pointer": "/events/prompt_submitted", "value": "start"}]},
+    {"name": "wait-missing-reason", "path": "/events/permission_requested/reason", "mutate": [{"op": "remove", "pointer": "/events/permission_requested/reason"}]},
+    {"name": "wait-bad-reason", "path": "/events/permission_requested/reason", "mutate": [{"op": "set", "pointer": "/events/permission_requested/reason", "value": "timeout"}]},
+    {"name": "wait-extra-key", "path": "/events/permission_requested/status", "mutate": [{"op": "set", "pointer": "/events/permission_requested/status", "value": "done"}]},
+    {"name": "finish-missing-status", "path": "/events/response_finished/status", "mutate": [{"op": "remove", "pointer": "/events/response_finished/status"}]},
+    {"name": "finish-bad-status", "path": "/events/response_finished/status", "mutate": [{"op": "set", "pointer": "/events/response_finished/status", "value": "ok"}]},
+    {"name": "start-extra-key", "path": "/events/prompt_submitted/reason", "mutate": [{"op": "set", "pointer": "/events/prompt_submitted/reason", "value": "permission"}]},
+    {"name": "ignore-not-array", "path": "/ignoreIfPresent", "mutate": [{"op": "set", "pointer": "/ignoreIfPresent", "value": "/parent_session_id"}]},
+    {"name": "ignore-bad-pointer", "path": "/ignoreIfPresent/0", "mutate": [{"op": "set", "pointer": "/ignoreIfPresent/0", "value": "parent_session_id"}]},
+    {"name": "ignore-item-not-string", "path": "/ignoreIfPresent/0", "mutate": [{"op": "set", "pointer": "/ignoreIfPresent/0", "value": 3}]}
+  ],
+  "cases": [
+    {
+      "name": "start-with-round",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "prompt": "Fix the bug", "cwd": "/repo/example", "ts": 1700000000000}}],
+      "expect": {"outcome": "accepted", "action": "start"}
+    },
+    {
+      "name": "unknown-event",
+      "payloads": [{"template": "example", "payload": {"event_name": "something_else", "session_id": "s1", "ts": 1700000001000}}],
+      "expect": {"outcome": "ignored", "reason": "unknown_event"}
+    },
+    {
+      "name": "event-missing",
+      "payloads": [{"template": "example", "payload": {"session_id": "s1", "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "missing_event", "path": "/mapping/event"}
+    },
+    {
+      "name": "event-wrong-type",
+      "payloads": [{"template": "example", "payload": {"event_name": 7, "session_id": "s1", "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "type_mismatch", "path": "/mapping/event"}
+    },
+    {
+      "name": "session-missing",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "missing_session_id", "path": "/mapping/sessionId"}
+    },
+    {
+      "name": "session-wrong-type",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": 42, "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "type_mismatch", "path": "/mapping/sessionId"}
+    },
+    {
+      "name": "session-too-long",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss", "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "too_long", "path": "/mapping/sessionId"}
+    },
+    {
+      "name": "timestamp-wrong-type",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "ts": "1700000001000"}}],
+      "expect": {"outcome": "rejected", "reason": "type_mismatch", "path": "/mapping/timestamp"}
+    },
+    {
+      "name": "round-wrong-type",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": 5, "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "type_mismatch", "path": "/mapping/roundId"}
+    },
+    {
+      "name": "event-id-wrong-type",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "event_id": "", "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "type_mismatch", "path": "/mapping/eventId"}
+    },
+    {
+      "name": "cwd-wrong-type",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "cwd": 5, "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "type_mismatch", "path": "/mapping/cwd"}
+    },
+    {
+      "name": "title-too-long",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "prompt": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt", "ts": 1700000001000}}],
+      "expect": {"outcome": "rejected", "reason": "too_long", "path": "/mapping/title"}
+    },
+    {
+      "name": "subtask-ignored",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "parent_session_id": "p1", "ts": 1700000001000}}],
+      "expect": {"outcome": "ignored", "reason": "ignored_field_present"}
+    },
+    {
+      "name": "subtask-null-is-absent",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "parent_session_id": null, "ts": 1700000001000}}],
+      "expect": {"outcome": "accepted", "action": "start"}
+    },
+    {
+      "name": "subtask-empty-string-is-absent",
+      "payloads": [{"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "parent_session_id": "", "ts": 1700000001000}}],
+      "expect": {"outcome": "accepted", "action": "start"}
+    },
+    {
+      "name": "duplicate-event-id",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "event_id": "e1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "event_id": "e1", "ts": 1700000001000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "duplicate_event"}
+    },
+    {
+      "name": "duplicate-start-same-round",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s1", "round_id": "r1", "status": "done", "ts": 1700000001000}},
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000002000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "duplicate_start"}
+    },
+    {
+      "name": "duplicate-start-while-running",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "duplicate_start"}
+    },
+    {
+      "name": "wait-without-active-round",
+      "payloads": [{"template": "example", "payload": {"event_name": "permission_requested", "session_id": "s1", "round_id": "r1", "request_id": "q1", "ts": 1700000001000}}],
+      "expect": {"outcome": "ignored", "reason": "no_active_round"}
+    },
+    {
+      "name": "finish-without-active-round",
+      "payloads": [{"template": "example", "payload": {"event_name": "response_finished", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}}],
+      "expect": {"outcome": "ignored", "reason": "no_active_round"}
+    },
+    {
+      "name": "resume-without-active-round",
+      "payloads": [{"template": "example", "payload": {"event_name": "execution_resumed", "session_id": "s1", "round_id": "r1", "request_id": "q1", "ts": 1700000001000}}],
+      "expect": {"outcome": "ignored", "reason": "no_active_round"}
+    },
+    {
+      "name": "late-round-finish",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}},
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r2", "ts": 1700000002000}},
+        {"template": "example", "payload": {"event_name": "response_failed", "session_id": "s1", "round_id": "r1", "ts": 1700000003000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "late_round"}
+    },
+    {
+      "name": "finish-after-finish",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}},
+        {"template": "example", "payload": {"event_name": "response_failed", "session_id": "s1", "round_id": "r1", "ts": 1700000002000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "round_ended"}
+    },
+    {
+      "name": "close-after-finish",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}},
+        {"template": "example", "payload": {"event_name": "session_closed", "session_id": "s1", "round_id": "r1", "ts": 1700000002000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "round_ended"}
+    },
+    {
+      "name": "close-during-round",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "session_closed", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}}
+      ],
+      "expect": {"outcome": "accepted", "action": "close"}
+    },
+    {
+      "name": "wait-with-request-id-then-resume",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "permission_requested", "session_id": "s1", "round_id": "r1", "request_id": "q1", "ts": 1700000001000}},
+        {"template": "example", "payload": {"event_name": "execution_resumed", "session_id": "s1", "round_id": "r1", "request_id": "q1", "ts": 1700000002000}}
+      ],
+      "expect": {"outcome": "accepted", "action": "resume"}
+    },
+    {
+      "name": "resume-unknown-request-id",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "permission_requested", "session_id": "s1", "round_id": "r1", "request_id": "q1", "ts": 1700000001000}},
+        {"template": "example", "payload": {"event_name": "execution_resumed", "session_id": "s1", "round_id": "r1", "request_id": "other", "ts": 1700000002000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "no_pending_wait"}
+    },
+    {
+      "name": "resume-without-pending",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "execution_resumed", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}}
+      ],
+      "expect": {"outcome": "ignored", "reason": "no_pending_wait"}
+    },
+    {
+      "name": "wait-without-request-id",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "ts": 1700000000000}},
+        {"template": "example", "payload": {"event_name": "input_requested", "session_id": "s1", "round_id": "r1", "ts": 1700000001000}},
+        {"template": "example", "payload": {"event_name": "execution_resumed", "session_id": "s1", "round_id": "r1", "ts": 1700000002000}}
+      ],
+      "expect": {"outcome": "accepted", "action": "resume"}
+    },
+    {
+      "name": "non-object-payload",
+      "payloads": [{"template": "example", "payload": 42}],
+      "expect": {"outcome": "rejected", "reason": "invalid_payload", "path": ""}
+    },
+    {
+      "name": "assigned-round-for-minimal-template",
+      "payloads": [{"template": "minimal", "payload": {"kind": "begin", "sid": "s1"}}],
+      "expect": {"outcome": "accepted", "action": "start"}
+    },
+    {
+      "name": "minimal-finish",
+      "payloads": [
+        {"template": "minimal", "payload": {"kind": "begin", "sid": "s1"}},
+        {"template": "minimal", "payload": {"kind": "end", "sid": "s1"}}
+      ],
+      "expect": {"outcome": "accepted", "action": "finish"}
+    },
+    {
+      "name": "minimal-unknown-event",
+      "payloads": [{"template": "minimal", "payload": {"kind": "other", "sid": "s1"}}],
+      "expect": {"outcome": "ignored", "reason": "unknown_event"}
+    }
+  ],
+  "sequences": [
+    {
+      "name": "lifecycle-wait-done",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s1", "round_id": "r1", "prompt": "Fix the bug", "cwd": "/repo/example", "ts": 4102444800000}},
+        {"template": "example", "payload": {"event_name": "permission_requested", "session_id": "s1", "round_id": "r1", "request_id": "q1", "ts": 4102444801000}},
+        {"template": "example", "payload": {"event_name": "execution_resumed", "session_id": "s1", "round_id": "r1", "request_id": "q1", "ts": 4102444802000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s1", "round_id": "r1", "ts": 4102444803000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s1", "round_id": "r1", "ts": 4102444804000}},
+        {"template": "example", "payload": {"event_name": "response_failed", "session_id": "s1", "round_id": "r1", "ts": 4102444805000}}
+      ],
+      "expect": {
+        "sessions": [{"id": "custom:example-agent:s1", "status": "done", "roundId": "r1", "title": "Fix the bug", "project": "example", "pending": 0}],
+        "events": [{"kind": "wait", "roundId": "r1", "sessionId": "custom:example-agent:s1"}, {"kind": "done", "roundId": "r1", "sessionId": "custom:example-agent:s1"}],
+        "diagnostics": [{"outcome": "accepted", "reason": "start"}, {"outcome": "accepted", "reason": "wait"}, {"outcome": "accepted", "reason": "resume"}, {"outcome": "accepted", "reason": "finish"}, {"outcome": "ignored", "reason": "round_ended"}, {"outcome": "ignored", "reason": "round_ended"}]
+      }
+    },
+    {
+      "name": "close-aborts-running-round",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s2", "round_id": "r2", "ts": 4102444800000}},
+        {"template": "example", "payload": {"event_name": "session_closed", "session_id": "s2", "round_id": "r2", "ts": 4102444801000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s2", "round_id": "r2", "ts": 4102444802000}}
+      ],
+      "expect": {
+        "sessions": [{"id": "custom:example-agent:s2", "status": "aborted", "roundId": "r2", "pending": 0, "endedBy": "session_closed"}],
+        "events": [],
+        "diagnostics": [{"outcome": "accepted", "reason": "start"}, {"outcome": "accepted", "reason": "close"}, {"outcome": "ignored", "reason": "round_ended"}]
+      }
+    },
+    {
+      "name": "rounds-isolated-and-late-round-dropped",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s3", "round_id": "r1", "ts": 4102444800000}},
+        {"template": "example", "payload": {"event_name": "response_finished", "session_id": "s3", "round_id": "r1", "ts": 4102444801000}},
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s3", "round_id": "r2", "ts": 4102444802000}},
+        {"template": "example", "payload": {"event_name": "response_failed", "session_id": "s3", "round_id": "r1", "ts": 4102444803000}},
+        {"template": "example", "payload": {"event_name": "permission_requested", "session_id": "s3", "round_id": "r2", "request_id": "q9", "ts": 4102444804000}}
+      ],
+      "expect": {
+        "sessions": [{"id": "custom:example-agent:s3", "status": "wait", "roundId": "r2", "pending": 1}],
+        "events": [{"kind": "done", "roundId": "r1", "sessionId": "custom:example-agent:s3"}, {"kind": "wait", "roundId": "r2", "sessionId": "custom:example-agent:s3"}],
+        "diagnostics": [{"outcome": "accepted", "reason": "start"}, {"outcome": "accepted", "reason": "finish"}, {"outcome": "accepted", "reason": "start"}, {"outcome": "ignored", "reason": "late_round"}, {"outcome": "accepted", "reason": "wait"}]
+      }
+    },
+    {
+      "name": "assigned-round-without-round-mapping",
+      "payloads": [
+        {"template": "minimal", "payload": {"kind": "begin", "sid": "s4"}},
+        {"template": "minimal", "payload": {"kind": "end", "sid": "s4"}},
+        {"template": "minimal", "payload": {"kind": "end", "sid": "s4"}}
+      ],
+      "expect": {
+        "sessions": [{"id": "custom:minimal-agent:s4", "status": "done", "roundIdPrefix": "custom:", "pending": 0}],
+        "events": [{"kind": "done", "roundIdPrefix": "custom:", "sessionId": "custom:minimal-agent:s4"}],
+        "diagnostics": [{"outcome": "accepted", "reason": "start"}, {"outcome": "accepted", "reason": "finish"}, {"outcome": "ignored", "reason": "round_ended"}]
+      }
+    },
+    {
+      "name": "subtask-event-does-not-create-a-session",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "s5", "round_id": "r5", "ts": 4102444800000}},
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "child", "round_id": "rc", "parent_session_id": "s5", "ts": 4102444801000}}
+      ],
+      "expect": {
+        "sessions": [{"id": "custom:example-agent:s5", "status": "running", "roundId": "r5", "pending": 0}],
+        "events": [],
+        "diagnostics": [{"outcome": "accepted", "reason": "start"}, {"outcome": "ignored", "reason": "ignored_field_present"}]
+      }
+    },
+    {
+      "name": "same-session-id-across-sources-stays-separate",
+      "payloads": [
+        {"template": "example", "payload": {"event_name": "prompt_submitted", "session_id": "same", "round_id": "ra", "ts": 4102444800000}},
+        {"template": "minimal", "payload": {"kind": "begin", "sid": "same"}}
+      ],
+      "expect": {
+        "sessions": [
+          {"id": "custom:example-agent:same", "status": "running", "roundId": "ra", "pending": 0},
+          {"id": "custom:minimal-agent:same", "status": "running", "roundIdPrefix": "custom:", "pending": 0}
+        ],
+        "events": [],
+        "diagnostics": [{"outcome": "accepted", "reason": "start"}, {"outcome": "accepted", "reason": "start"}]
+      }
+    }
+  ]
+}
