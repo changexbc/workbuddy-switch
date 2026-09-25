@@ -51,3 +51,49 @@ jobs:
       # 交叉编译 x86_64，跑测试需要 Rosetta，不适用于本 job。
       - name: Run tests
         run: cargo test -p wb-switch-core
+
+  # 前端类型、格式与 lint 门禁。跑在 macOS 上：clippy 按宿主平台展开 cfg 分支，
+  # 与开发者本机一致，本地全绿即 CI 全绿（linux/windows 专属分支不在此 job 覆盖）。
+  # clippy 必须带 --no-deps：vendor/agent-companion 是 path 依赖快照，其告警不归本仓库。
+  lint:
+    name: lint (tsc + fmt + clippy + server tests)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      # 与 rust-tests 相同的 key 前缀，直接复用依赖编译产物。
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # tsc 顺带产出 dist：clippy 检查 src-tauri 时 tauri-build 要求 frontendDist 存在。
+      - name: Type-check and build frontend
+        run: npm run build
+
+      - name: Check formatting
+        run: cargo fmt --check -p wb-switch-core -p wb-switch-server -p wb-switch-rust
+
+      - name: Clippy
+        run: cargo clippy -p wb-switch-core -p wb-switch-server -p wb-switch-rust --all-targets --no-deps -- -D warnings
+
+      # server 的 8 个测试此前从不运行（rust-tests 只覆盖 core）。
+      - name: Server tests
+        run: cargo test -p wb-switch-server
