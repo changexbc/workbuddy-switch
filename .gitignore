@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 public/companion/
+public/companion-demo/
 src-tauri/binaries/agent-studio-runtime-*
 *.local
 

@@ -10,6 +10,8 @@ import CreditStatsPage from "@/pages/CreditStatsPage";
 import TokenStatsPage from "@/pages/TokenStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
+import { CompanionDemoDialog } from "@/components/companion-demo-dialog";
+import { DemoAction } from "@/components/demo-action";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -90,11 +92,40 @@ function CompanionFooter() {
   );
 }
 
+/**
+ * 演示模式的悬浮窗入口：与桌面正式版同形，但点击打开的是只读演示浮层。
+ * 设置入口沿用演示模式的禁用约定（`DemoAction`），不触发任何本机命令。
+ */
+function CompanionDemoFooter() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="flex min-w-0 items-center gap-1 text-sidebar-foreground">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗" onClick={() => setOpen(true)}>
+            <img src={companionTrayIcon} alt="" className="size-6 object-contain" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">会话悬浮窗</TooltipContent>
+      </Tooltip>
+      <DemoAction>
+        <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="悬浮窗设置">
+          <Settings className="size-4" aria-hidden="true" />
+        </Button>
+      </DemoAction>
+      <CompanionDemoDialog open={open} onOpenChange={setOpen} />
+    </div>
+  );
+}
+
 function UpdateCenter({ running }: { running: boolean | undefined }) {
   const version = useAccountsStore((s) => s.status?.version);
   const snapshot = useUpdateState();
   const [dialogOpen, setDialogOpen] = useState(false);
   const showCompanion = api.isDesktop() && !demoModeEnabled;
+  // 演示模式只提供只读演示浮层，不渲染正式版的悬浮窗开关。
+  const showCompanionDemo = demoModeEnabled;
 
   // 阶段由 Rust 更新服务经 `update-state` 推送（托盘同源），前端不再轮询检查。
   // 已知目标版本时，检查中 / 失败也要保留入口，与托盘「升级到 vX / 点击重试」对齐。
@@ -121,7 +152,7 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
     <>
       <section className="mt-auto border-t border-sidebar-border px-2 pt-3 text-xs">
         <div className="flex items-center gap-2 text-[13px] text-sidebar-foreground">
-          {showCompanion ? <CompanionFooter /> : (
+          {showCompanion ? <CompanionFooter /> : showCompanionDemo ? <CompanionDemoFooter /> : (
             <>
               <StatusDot on={Boolean(running)} />
               <span className="min-w-0 flex-1 truncate">WorkBuddy</span>
