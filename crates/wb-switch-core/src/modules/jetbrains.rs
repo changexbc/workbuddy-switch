@@ -490,7 +490,159 @@ fn close_timeout_error(alive: &[u32]) -> String {
     )
 }
 
-/// 优雅关闭指定 IDE 实例（Windows: `taskkill /PID /T` 等价 WM_CLOSE，走保存提示）。
+/// Windows 侧的 JetBrains IDE 优雅关闭（user32 消息流程）。
+///
+/// 不走 `windows` crate 的 feature，直接 `extern "system"` 声明所需的最小 API 面，
+/// 避免为一条消息路径扩大依赖图。
+#[cfg(target_os = "windows")]
+mod win_close {
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumWindows(lpEnumFunc: WNDENUMPROC, lParam: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+        fn SetForegroundWindow(hwnd: isize) -> i32;
+    }
+    type WNDENUMPROC = Option<unsafe extern "system" fn(isize, isize) -> i32>;
+
+    const WM_SYSCOMMAND: u32 = 0x0112;
+    const SC_CLOSE: usize = 0xF060;
+    const WM_KEYDOWN: u32 = 0x0100;
+    const WM_KEYUP: u32 = 0x0101;
+    const VK_RETURN: usize = 0x000D;
+
+    struct WindowRow {
+        hwnd: isize,
+        pid: u32,
+    }
+
+    unsafe extern "system" fn enum_cb(hwnd: isize, lparam: isize) -> i32 {
+        if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return 1;
+        }
+        let out = &mut *(lparam as *mut Vec<WindowRow>);
+        out.push(WindowRow { hwnd, pid });
+        1
+    }
+
+    /// 当前全部可见顶层窗口（hwnd + 归属 PID）。
+    fn visible_windows() -> Vec<WindowRow> {
+        let mut rows: Vec<WindowRow> = Vec::new();
+        unsafe {
+            EnumWindows(Some(enum_cb), &mut rows as *mut _ as isize);
+        }
+        rows
+    }
+
+    /// 对目标 PID 发出 `SC_CLOSE`；返回是否命中了至少一个窗口。
+    fn post_sc_close(windows: &[WindowRow], pid: u32) -> bool {
+        let mut sent = false;
+        for w in windows.iter().filter(|w| w.pid == pid) {
+            unsafe {
+                PostMessageW(w.hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+            }
+            sent = true;
+            // 一个实例发一次就够：确认框由 IDE 自己弹，多发可能叠加多个对话框。
+            break;
+        }
+        sent
+    }
+
+    /// 向确认对话框发送 Enter（默认按钮 = 退出）。焦点切换是 best-effort，
+    /// 消息直达窗口句柄，不依赖前台状态。
+    fn confirm_dialog(hwnd: isize) {
+        unsafe {
+            SetForegroundWindow(hwnd);
+            PostMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 0);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        unsafe {
+            PostMessageW(hwnd, WM_KEYUP, VK_RETURN, 0);
+        }
+    }
+
+    /// 进程存活探测：`PROCESS_QUERY_LIMITED_INFORMATION` 读退出码，
+    /// 避免每次轮询都起 tasklist 子进程。
+    fn pid_alive(pid: u32) -> bool {
+        unsafe {
+            let handle = open_process(0x1000, 0, pid); // PROCESS_QUERY_LIMITED_INFORMATION
+            if handle == 0 {
+                return false;
+            }
+            let mut code: u32 = 0;
+            let ok = get_exit_code_process(handle, &mut code);
+            close_handle(handle);
+            ok != 0 && code == 259 // STILL_ACTIVE
+        }
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        #[link_name = "OpenProcess"]
+        fn open_process(desired: u32, inherit: i32, pid: u32) -> isize;
+        #[link_name = "GetExitCodeProcess"]
+        fn get_exit_code_process(handle: isize, code: *mut u32) -> i32;
+        #[link_name = "CloseHandle"]
+        fn close_handle(handle: isize) -> i32;
+    }
+
+    /// 优雅关闭目标 PID（发 SC_CLOSE → 新窗口弹现即发 Enter → 等待退出），
+    /// 返回超时后仍存活的 PID。
+    pub fn close_gracefully(pids: &[u32], timeout: Duration) -> Vec<u32> {
+        let before: HashSet<isize> = visible_windows().into_iter().map(|w| w.hwnd).collect();
+        let mut pending: Vec<u32> = pids.to_vec();
+        let mut confirmed_dialogs: HashSet<isize> = HashSet::new();
+
+        let mut windows = visible_windows();
+        for pid in &pending {
+            post_sc_close(&windows, *pid);
+        }
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            pending.retain(|pid| pid_alive(*pid));
+            if pending.is_empty() {
+                return Vec::new();
+            }
+            if Instant::now() >= deadline {
+                return pending;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+
+            windows = visible_windows();
+            for w in &windows {
+                if pending.contains(&w.pid)
+                    && !before.contains(&w.hwnd)
+                    && !confirmed_dialogs.contains(&w.hwnd)
+                {
+                    // SC_CLOSE 后新出现的可见窗口 = IDE 自己弹的退出确认（标题随
+                    // IDE 语言变化，故不匹配文本）。只确认一次：若默认按钮不是
+                    // 退出（如「保存/不保存/取消」场景），重发 Enter 只会误触发。
+                    confirmed_dialogs.insert(w.hwnd);
+                    confirm_dialog(w.hwnd);
+                }
+            }
+        }
+    }
+}
+
+/// 优雅关闭指定 IDE 实例。
+///
+/// Windows 的 JetBrains IDE（AWT/Swing 窗口）**对 `WM_CLOSE` / `WM_ENDSESSION`
+/// 静默忽略**（与 VS Code 等 Electron 应用不同，`taskkill` 不带 `/F` 等价消息
+/// 发了也退不掉），可用的优雅路径是 `WM_SYSCOMMAND/SC_CLOSE`：它走 Swing 的
+/// `windowClosing` 链，由 IDE 自己弹出「确认退出」对话框，再向该对话框发送
+/// Enter 触发默认按钮（退出），IDE 即保存会话后干净退出。确认框的标题随 IDE
+/// 语言变化，因此用「SC_CLOSE 后新出现的可见窗口」识别，不匹配标题。
 fn close_ides(instances: &[RunningIde], timeout_secs: i64) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -498,12 +650,8 @@ fn close_ides(instances: &[RunningIde], timeout_secs: i64) -> Result<(), String>
         if pids.is_empty() {
             return Ok(());
         }
-        for pid in &pids {
-            let pid_arg = pid.to_string();
-            let _ = process::run_cmd_timeout("taskkill", &["/PID", &pid_arg, "/T"], 10);
-        }
         let alive =
-            process::wait_windows_pids_gone(&pids, Duration::from_secs(timeout_secs.max(1) as u64));
+            win_close::close_gracefully(&pids, Duration::from_secs(timeout_secs.max(1) as u64));
         if alive.is_empty() {
             Ok(())
         } else {
