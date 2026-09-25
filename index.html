@@ -8,18 +8,17 @@
     <!--
       首屏兜底样式：纯内联，不引用任何外部资源（离线 / 资源加载失败时同样可见）。
       正常启动时 React 挂载会清空 #root，占位自然消失；主题跟随系统，避免深色下闪白。
+
+      样式必须只落在 .wb-boot 上，不要写 body：这段内联样式是「未分层」的，
+      而项目 CSS 走 Tailwind 的 @layer base，级联中未分层样式优先于所有分层样式。
+      写到 body 上会盖掉应用自己的 body 颜色（--foreground），系统深色 + 应用浅色时
+      所有未显式指定颜色的正文文字会继承成兜底用的近白色，看起来像文字消失。
     -->
     <style>
       html,
       body {
         margin: 0;
         min-height: 100%;
-      }
-      body {
-        background: #ffffff;
-        color: #18181b;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       }
       .wb-boot {
         box-sizing: border-box;
@@ -31,6 +30,10 @@
         gap: 10px;
         padding: 32px;
         text-align: center;
+        background: #ffffff;
+        color: #18181b;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       }
       .wb-boot-title {
         font-size: 15px;
@@ -64,7 +67,7 @@
         color: #71717a;
       }
       @media (prefers-color-scheme: dark) {
-        body {
+        .wb-boot {
           background: #18181b;
           color: #fafafa;
         }
