@@ -261,18 +261,22 @@ pub async fn get_jetbrains_status() -> Result<Value, String> {
 ///
 /// `restart` 缺省 true：IDE 正在运行时由后端「优雅退出 → 写入 → 重新打开」，
 /// 传 false 则退回「请先完全退出 IDE」的手动模式。
+/// `configDirs` 可选：目标配置目录名列表（如 ["PyCharm2026.2"]），缺省 / 空数组
+/// = 全部装了插件的 IDE；非空时只写所选目录、只关闭/重开这些目录的运行实例。
 ///
 /// async + spawn_blocking：等待 IDE 退出 + 读写 secret-storage.xml 都可能阻塞。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn switch_jetbrains_account(
     account_id: String,
     restart: Option<bool>,
+    config_dirs: Option<Vec<String>>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
         return Err("缺少 accountId".to_string());
     }
+    let dirs = config_dirs.filter(|list| !list.is_empty());
     tauri::async_runtime::spawn_blocking(move || {
-        jetbrains::switch_account(&account_id, restart.unwrap_or(true))
+        jetbrains::switch_account(&account_id, restart.unwrap_or(true), dirs.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?

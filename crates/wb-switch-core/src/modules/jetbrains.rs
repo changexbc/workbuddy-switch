@@ -773,7 +773,7 @@ fn launch_ide(inst: &RunningIde) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// 切换目标：一个装有（或可装）CodeBuddy 插件的产品配置目录。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Target {
     /// 产品配置目录（如 `%APPDATA%\JetBrains\PyCharm2026.2`）。
     config_dir: PathBuf,
@@ -869,8 +869,38 @@ pub fn status() -> Value {
     })
 }
 
-/// 切换前置校验：账号 / `access_token` / 至少一个装了插件的配置目录。
-fn validate_switch_target(account_id: &str) -> Result<(Value, Vec<Target>), String> {
+/// 按前端选择（配置目录名列表）过滤切换目标。
+///
+/// `None` / 空列表 = 全部装了插件的目录（缺省行为）；给了列表但一个都没匹配上
+/// 属于前端状态过期（如选择期间插件被卸载），显式报错而不是静默扩成全部。
+fn filter_targets_by_selection(
+    targets: Vec<Target>,
+    config_dirs: Option<&[String]>,
+) -> Result<Vec<Target>, String> {
+    let Some(selected) = config_dirs else {
+        return Ok(targets);
+    };
+    if selected.is_empty() {
+        return Ok(targets);
+    }
+    let filtered: Vec<Target> = targets
+        .into_iter()
+        .filter(|t| selected.iter().any(|s| s == &t.name))
+        .collect();
+    if filtered.is_empty() {
+        return Err(format!(
+            "所选 JetBrains IDE（{}）均未安装 CodeBuddy 插件，请刷新状态后重试。",
+            selected.join("、")
+        ));
+    }
+    Ok(filtered)
+}
+
+/// 切换前置校验：账号 / `access_token` / 按选择过滤后的目标目录。
+fn validate_switch_target(
+    account_id: &str,
+    config_dirs: Option<&[String]>,
+) -> Result<(Value, Vec<Target>), String> {
     let acc =
         account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
     let token = get_str(&acc, "access_token")
@@ -891,15 +921,20 @@ fn validate_switch_target(account_id: &str) -> Result<(Value, Vec<Target>), Stri
             "未找到已安装 CodeBuddy 插件的 JetBrains IDE。请先在 IDEA / PyCharm 中安装「Tencent Cloud CodeBuddy」插件后重试。".to_string(),
         );
     }
+    let targets = filter_targets_by_selection(targets, config_dirs)?;
     Ok((acc, targets))
 }
 
 /// 「编辑器已按需关闭后」的切换主体：写所有目标 → 记录当前账号 → 重开。
 ///
 /// 各目标独立读取既有 secret 做 merge：已登录的目标走 upsert（保留扩展私有字段），
-/// 未登录的目标走新建完整载荷，互不影响。
-fn switch_after_close_inner(account_id: &str, closed: &[RunningIde]) -> Result<Value, String> {
-    let (acc, targets) = validate_switch_target(account_id)?;
+/// 未登录的目标走新建完整载荷，互不影响。`config_dirs` 限定写入范围（None = 全部）。
+fn switch_after_close_inner(
+    account_id: &str,
+    closed: &[RunningIde],
+    config_dirs: Option<&[String]>,
+) -> Result<Value, String> {
+    let (acc, targets) = validate_switch_target(account_id, config_dirs)?;
 
     let mut written: Vec<String> = Vec::new();
     for target in &targets {
@@ -978,15 +1013,22 @@ fn relaunch_closed_on_error(closed: &[RunningIde], error: String) -> String {
 
 /// 切换 JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件账号。
 ///
+/// `config_dirs`：目标配置目录名列表（如 `["PyCharm2026.2"]`）。`None` / 空列表
+/// = 全部装了插件的 IDE；非空时只写所选目录、只关闭/重开这些目录的运行实例。
+///
 /// 时序：校验 → 采集运行快照 → 关闭决策（运行中且 `restart=false` 报错、
 /// `restart=true` 优雅退出；映射不到配置目录的进程一律不动）→ 写入 → 重开。
-pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> {
-    validate_switch_target(account_id)?;
-    let target_names: Vec<String> = list_targets()
+pub fn switch_account(
+    account_id: &str,
+    restart: bool,
+    config_dirs: Option<&[String]>,
+) -> Result<Value, String> {
+    let target_names: Vec<String> = validate_switch_target(account_id, config_dirs)?
+        .1
         .into_iter()
-        .filter(|t| t.plugin_installed)
         .map(|t| t.name)
         .collect();
+    let selected: Option<&[String]> = Some(&target_names);
     let matched: Vec<RunningIde> = running_ides()
         .into_iter()
         .filter(|inst| {
@@ -1004,7 +1046,7 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
         close_ides(&matched, CLOSE_TIMEOUT_SECS)?;
     }
 
-    match switch_after_close_inner(account_id, &matched) {
+    match switch_after_close_inner(account_id, &matched, selected) {
         Ok(value) => Ok(value),
         Err(error) => Err(relaunch_closed_on_error(&matched, error)),
     }
@@ -1235,5 +1277,35 @@ mod tests {
         // 契约回归：matched 非空 + restart=false 必须在关进程前报错（不触碰进程表）。
         assert!(RUNNING_MANUAL_HINT.contains("正在运行"));
         assert_eq!(CLOSE_TIMEOUT_SECS, 60);
+    }
+
+    fn make_target(name: &str) -> Target {
+        Target {
+            config_dir: PathBuf::from(format!("/tmp/{name}")),
+            name: name.to_string(),
+            plugin_installed: true,
+        }
+    }
+
+    /// 目标选择语义：None / 空 = 全部；非空 = 精确过滤；全不匹配显式报错。
+    #[test]
+    fn filter_targets_by_selection_semantics() {
+        let all = vec![
+            make_target("PyCharm2026.2"),
+            make_target("IntelliJIdea2026.2"),
+        ];
+
+        let none = filter_targets_by_selection(all.clone(), None).unwrap();
+        assert_eq!(none.len(), 2);
+        let empty = filter_targets_by_selection(all.clone(), Some(&[])).unwrap();
+        assert_eq!(empty.len(), 2);
+
+        let selected = vec!["PyCharm2026.2".to_string()];
+        let picked = filter_targets_by_selection(all.clone(), Some(&selected)).unwrap();
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].name, "PyCharm2026.2");
+
+        let missing = vec!["PyCharm2020.1".to_string()];
+        assert!(filter_targets_by_selection(all, Some(&missing)).is_err());
     }
 }

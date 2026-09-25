@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
+import { JetbrainsSwitchDialog } from "@/components/jetbrains-switch-dialog";
 import { DemoAction } from "@/components/demo-action";
 import {
   CodeBuddyAiIdeMark,
@@ -205,7 +206,8 @@ export default function AccountsPage() {
   /** VS Code 扩展切换弹窗目标（null=关闭）；切换与可选会话复制在弹窗内完成。 */
   const [vscodeSwitchAccount, setVscodeSwitchAccount] = useState<AccountMeta | null>(null);
   const [jetbrains, setJetbrains] = useState<JetbrainsStatus | null>(null);
-  const [jetbrainsSwitchingId, setJetbrainsSwitchingId] = useState<string | null>(null);
+  /** JetBrains 切换弹窗目标（null=关闭）；切换与目标 IDE 选择在弹窗内完成。 */
+  const [jetbrainsSwitchTarget, setJetbrainsSwitchTarget] = useState<AccountMeta | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
   /** 刷新按钮触发的批量签到进行中 */
   const [checkinAllRunning, setCheckinAllRunning] = useState(false);
@@ -703,29 +705,6 @@ export default function AccountsPage() {
     }
   }
 
-  async function onSwitchJetbrains(account: AccountMeta) {
-    if (jetbrainsSwitchingId !== null) return;
-    setJetbrainsSwitchingId(account.id);
-    const toastId = toast.loading("正在切换 JetBrains IDE…", {
-      description: "将注入凭证，运行中的 IDEA / PyCharm 会先退出再自动重开",
-    });
-    try {
-      const result = await api.switchJetbrainsAccount(account.id, true);
-      await refreshJetbrainsStatus();
-      toast.success("JetBrains IDE 已切换", {
-        id: toastId,
-        description: result.message || result.account,
-      });
-    } catch (error) {
-      toast.error("JetBrains IDE 切换失败", {
-        id: toastId,
-        description: api.asError(error),
-      });
-    } finally {
-      setJetbrainsSwitchingId(null);
-    }
-  }
-
   async function onInstallCodebuddyCli() {
     // 桌面 App（Tauri WebView）不支持 window.confirm，改用 Dialog 确认
     setInstallConfirmOpen(true);
@@ -1100,9 +1079,8 @@ export default function AccountsPage() {
                 jetbrainsPluginInstalled={Boolean(jetbrains?.pluginInstalled)}
                 jetbrainsAvailable={Boolean(jetbrains?.installed && jetbrains?.pluginInstalled)}
                 jetbrainsActive={a.id === jetbrainsCurrentAccountId}
-                jetbrainsBusy={jetbrainsSwitchingId !== null}
-                jetbrainsLoading={jetbrainsSwitchingId === a.id}
-                onSwitchJetbrains={onSwitchJetbrains}
+                jetbrainsBusy={jetbrainsSwitchTarget !== null}
+                onSwitchJetbrains={setJetbrainsSwitchTarget}
                 featuresDisabled={false}
               />
             ))}
@@ -1144,6 +1122,17 @@ export default function AccountsPage() {
         vscodeExtStatus={vscodeExt}
         onDone={() => {
           void refreshVscodeExtStatus();
+        }}
+      />
+      <JetbrainsSwitchDialog
+        open={jetbrainsSwitchTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setJetbrainsSwitchTarget(null);
+        }}
+        account={jetbrainsSwitchTarget}
+        jetbrainsStatus={jetbrains}
+        onDone={() => {
+          void refreshJetbrainsStatus();
         }}
       />
 

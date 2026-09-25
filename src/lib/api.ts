@@ -341,9 +341,15 @@ export function getJetbrainsStatus(): Promise<JetbrainsStatus> {
  *
  * `restart` 默认 true：IDE 运行时由后端先优雅退出、写入后再重新打开；
  * 传 false 退回「请先完全退出 IDE」的手动模式（不在 IDE 中自动操作）。
+ * `configDirs` 可选：目标配置目录名列表（如 ["PyCharm2026.2"]），缺省 / 空
+ * = 全部装了插件的 IDE；非空时只写所选目录、只关闭/重开这些目录的运行实例。
  */
-export function switchJetbrainsAccount(accountId: string, restart = true): Promise<JetbrainsSwitchResult> {
-  return call("switch_jetbrains_account", { accountId, restart });
+export function switchJetbrainsAccount(
+  accountId: string,
+  restart = true,
+  configDirs?: string[],
+): Promise<JetbrainsSwitchResult> {
+  return call("switch_jetbrains_account", { accountId, restart, configDirs });
 }
 
 export function detectJetbrainsAccount(): Promise<{

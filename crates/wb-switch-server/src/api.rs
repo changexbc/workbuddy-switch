@@ -420,7 +420,18 @@ async fn api_jetbrains_switch(Json(body): Json<Value>) -> Response {
         .get("restart")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    match jetbrains::switch_account(account_id, restart) {
+    // 可选：目标配置目录名列表（如 ["PyCharm2026.2"]）。缺省 / 空数组 = 全部装了插件的 IDE。
+    let config_dirs: Option<Vec<String>> = body
+        .get("configDirs")
+        .and_then(|v| v.as_array())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .filter(|list| !list.is_empty());
+    match jetbrains::switch_account(account_id, restart, config_dirs.as_deref()) {
         Ok(v) => json_ok(v),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
     }
