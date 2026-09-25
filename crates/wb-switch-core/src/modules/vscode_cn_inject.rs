@@ -90,7 +90,12 @@ pub const CODEBUDDY_CN_TARGET: VscodeSafeStorageTarget = VscodeSafeStorageTarget
     secret_item_prefix_extension_id: SECRET_EXTENSION_ID,
     secret_key: SECRET_KEY,
     macos_keychain_service: "CodeBuddy CN Safe Storage",
-    linux_secret_tool_app_names: &["CodeBuddy CN", "codebuddy cn", "codebuddy-cn", "codebuddycn"],
+    linux_secret_tool_app_names: &[
+        "CodeBuddy CN",
+        "codebuddy cn",
+        "codebuddy-cn",
+        "codebuddycn",
+    ],
 };
 
 /// CodeBuddy 国际版 IDE（桌面客户端）目标描述符。
@@ -376,12 +381,14 @@ fn run_command_get_trimmed(program: &str, args: &[&str], timeout_secs: u64) -> O
 fn get_macos_safe_storage_password(service: &str) -> Result<String, String> {
     // 只查询一次：解密只依赖 password 本身、与 account 属性无关，
     // 单次查询最多触发一次钥匙串授权弹窗（多候选循环会逐次弹窗）。
-    run_command_get_trimmed("security", &["find-generic-password", "-w", "-s", service], 10)
-        .ok_or_else(|| {
-            format!(
-                "无法从 Keychain 读取「{service}」密码。请先手动打开对应应用并登录一次。"
-            )
-        })
+    run_command_get_trimmed(
+        "security",
+        &["find-generic-password", "-w", "-s", service],
+        10,
+    )
+    .ok_or_else(|| {
+        format!("无法从 Keychain 读取「{service}」密码。请先手动打开对应应用并登录一次。")
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -444,16 +451,8 @@ fn dpapi_decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
             cbData: 0,
             pbData: std::ptr::null_mut(),
         };
-        CryptUnprotectData(
-            &mut data_in,
-            None,
-            None,
-            None,
-            None,
-            0,
-            &mut data_out,
-        )
-        .map_err(|e| format!("DPAPI CryptUnprotectData failed: {e}"))?;
+        CryptUnprotectData(&mut data_in, None, None, None, None, 0, &mut data_out)
+            .map_err(|e| format!("DPAPI CryptUnprotectData failed: {e}"))?;
         if data_out.pbData.is_null() || data_out.cbData == 0 {
             return Err("DPAPI returned empty data".to_string());
         }
@@ -467,8 +466,8 @@ fn dpapi_decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(target_os = "windows")]
 fn get_windows_encryption_key(data_root: &Path) -> Result<Vec<u8>, String> {
     let local_state = get_local_state_path(data_root)?;
-    let text = std::fs::read_to_string(&local_state)
-        .map_err(|e| format!("读取 Local State 失败: {e}"))?;
+    let text =
+        std::fs::read_to_string(&local_state).map_err(|e| format!("读取 Local State 失败: {e}"))?;
     let json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("解析 Local State 失败: {e}"))?;
     let encrypted_key_b64 = json["os_crypt"]["encrypted_key"]
@@ -537,7 +536,7 @@ fn decrypt_secret_payload(
         let _ = data_root;
         let password = get_macos_safe_storage_password(target.macos_keychain_service)?;
         let key = pbkdf2_sha1_key(&password, 1003);
-        return decrypt_cbc_prefixed(encrypted, V10_PREFIX, &key);
+        decrypt_cbc_prefixed(encrypted, V10_PREFIX, &key)
     }
     #[cfg(target_os = "linux")]
     {
@@ -585,7 +584,7 @@ fn encrypt_secret_payload(
         let _ = (preferred_prefix, data_root);
         let password = get_macos_safe_storage_password(target.macos_keychain_service)?;
         let key = pbkdf2_sha1_key(&password, 1003);
-        return encrypt_cbc_prefixed(V10_PREFIX, &key, plaintext);
+        encrypt_cbc_prefixed(V10_PREFIX, &key, plaintext)
     }
     #[cfg(target_os = "linux")]
     {
@@ -661,8 +660,7 @@ pub fn read_secret_for(
         return Ok(None);
     };
     let data_root = data_root_from_db(&db_path)?.to_path_buf();
-    let conn = Connection::open(&db_path)
-        .map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
+    let conn = Connection::open(&db_path).map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
     let key = secret_storage_item_key_for(target);
     let raw_value: Option<String> = match conn.query_row(
         "SELECT value FROM ItemTable WHERE key = ?1",
@@ -751,8 +749,7 @@ pub fn inject_secret_for(
     let db_path = resolve_state_db_path_for(target, user_data_dir)?;
     let data_root = data_root_from_db(&db_path)?.to_path_buf();
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建 state.vscdb 父目录失败: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建 state.vscdb 父目录失败: {e}"))?;
     }
     let conn = Connection::open(&db_path).map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
     conn.execute(
@@ -841,7 +838,10 @@ mod tests {
             let target = flavor.target();
             assert_eq!(target.secret_key, flavor.secret_key());
             assert_eq!(target.macos_keychain_service, flavor.keychain_service());
-            assert_eq!(target.linux_secret_tool_app_names, flavor.linux_secret_apps());
+            assert_eq!(
+                target.linux_secret_tool_app_names,
+                flavor.linux_secret_apps()
+            );
             assert_eq!(target.display_name, flavor.product_label());
         }
     }
@@ -904,10 +904,8 @@ mod tests {
 
     #[test]
     fn resolve_prefers_existing_candidate() {
-        let dir = std::env::temp_dir().join(format!(
-            "wb-cn-ide-path-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("wb-cn-ide-path-test-{}", uuid::Uuid::new_v4()));
         let db = dir.join("User").join("globalStorage").join("state.vscdb");
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         std::fs::write(&db, b"").unwrap();
@@ -1008,7 +1006,10 @@ mod tests {
                 !root.join("globalStorage").exists(),
                 "{label}: 不得创建 globalStorage/"
             );
-            assert!(!root.join("state.vscdb").exists(), "{label}: 不得创建 state.vscdb");
+            assert!(
+                !root.join("state.vscdb").exists(),
+                "{label}: 不得创建 state.vscdb"
+            );
         }
 
         std::fs::remove_dir_all(base).ok();

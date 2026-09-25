@@ -114,7 +114,8 @@ fn active_account_id_from_state() -> Option<String> {
 
 /// 把底层解密错误翻译成更明确的用户文案（尤其非 `v10` 前缀的场景）。
 fn describe_secret_error(err: String) -> String {
-    if err.contains("Unexpected ciphertext prefix") || err.contains("Unsupported Linux ciphertext prefix")
+    if err.contains("Unexpected ciphertext prefix")
+        || err.contains("Unsupported Linux ciphertext prefix")
     {
         format!(
             "{err}\n\n检测到 VS Code 使用了当前版本不支持的 Safe Storage 加密前缀（可能是 Chromium 127+ 的 v20 app-bound 加密）。目前仅支持 v10，请反馈该问题。"
@@ -200,7 +201,10 @@ pub fn build_ext_session_json(acc: &Value, existing: Option<&str>) -> String {
     root.insert("refreshToken".to_string(), json!(refresh_token));
     root.insert("expiresAt".to_string(), json!(expires_at));
     root.insert("domain".to_string(), json!(domain));
-    root.insert("accessToken".to_string(), json!(format!("{uid}+{access_token}")));
+    root.insert(
+        "accessToken".to_string(),
+        json!(format!("{uid}+{access_token}")),
+    );
     root.insert("converted".to_string(), json!(true));
     root.insert("account".to_string(), account_obj.clone());
     root.insert("auth".to_string(), Value::Object(auth));
@@ -216,9 +220,11 @@ pub fn build_ext_session_json(acc: &Value, existing: Option<&str>) -> String {
                     map.insert("lastLogin".to_string(), json!(false));
                 }
             }
-            let matched = target_key
-                .as_deref()
-                .and_then(|key| entries.iter().position(|entry| account_entry_key(entry) == Some(key)));
+            let matched = target_key.as_deref().and_then(|key| {
+                entries
+                    .iter()
+                    .position(|entry| account_entry_key(entry) == Some(key))
+            });
             match matched {
                 Some(index) => entries[index] = account_obj,
                 None => entries.push(account_obj),
@@ -318,7 +324,9 @@ fn linux_cmdline_is_code(cmdline: &str) -> bool {
         return false;
     }
     // 主进程命令行形如 `/usr/share/code/code …`；辅助进程命令行不含主程序路径。
-    lower.contains("/code/code") || lower.contains("/bin/code") || lower.contains("visual studio code")
+    lower.contains("/code/code")
+        || lower.contains("/bin/code")
+        || lower.contains("visual studio code")
 }
 
 #[cfg_attr(
@@ -1061,7 +1069,9 @@ mod tests {
     fn code_image_name_is_exact_not_insiders_or_codebuddy() {
         assert!(is_code_image_name("Code.exe"));
         assert!(is_code_image_name("code"));
-        assert!(is_code_image_name(r"C:\Users\Zhou\AppData\Local\Programs\Microsoft VS Code\Code.exe"));
+        assert!(is_code_image_name(
+            r"C:\Users\Zhou\AppData\Local\Programs\Microsoft VS Code\Code.exe"
+        ));
         assert!(!is_code_image_name("Code - Insiders.exe"));
         assert!(!is_code_image_name("CodeBuddy CN.exe"));
         assert!(!is_code_image_name("CodeBuddy.exe"));
@@ -1091,12 +1101,18 @@ mod tests {
     fn linux_cmdline_matcher_accepts_code_not_variants() {
         assert!(linux_cmdline_is_code("/usr/share/code/code --unity-launch"));
         assert!(linux_cmdline_is_code("/usr/bin/code --no-sandbox"));
-        assert!(linux_exe_is_code(std::path::Path::new("/usr/share/code/code")));
+        assert!(linux_exe_is_code(std::path::Path::new(
+            "/usr/share/code/code"
+        )));
         assert!(!linux_cmdline_is_code("/usr/bin/workbuddy-switch"));
-        assert!(!linux_cmdline_is_code("/usr/share/code/code --type=gpu-process"));
+        assert!(!linux_cmdline_is_code(
+            "/usr/share/code/code --type=gpu-process"
+        ));
         assert!(!linux_cmdline_is_code("/usr/bin/code-insiders"));
         assert!(!linux_cmdline_is_code("/opt/codebuddy-cn/codebuddy-cn"));
-        assert!(!linux_exe_is_code(std::path::Path::new("/usr/bin/code-insiders")));
+        assert!(!linux_exe_is_code(std::path::Path::new(
+            "/usr/bin/code-insiders"
+        )));
     }
 
     #[test]

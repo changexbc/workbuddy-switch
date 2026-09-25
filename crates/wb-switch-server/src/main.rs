@@ -101,13 +101,13 @@ fn variant_arg(args: &[String]) -> WbVariant {
 
 fn print_status(variant: WbVariant) {
     let auth = auth_file::read_auth_file(variant);
-    let current = auth.as_ref().and_then(|a| {
+    let current = auth.as_ref().map(|a| {
         let acct = a.get("account").cloned().unwrap_or_else(|| json!({}));
-        Some(json!({
+        json!({
             "uid": account::display_value(&acct, "uid"),
             "nickname": account::display_value(&acct, "nickname"),
             "email": account::display_value(&acct, "email"),
-        }))
+        })
     });
     let running = process::is_workbuddy_running(variant);
     println!("workbuddy-switch v{}", update::APP_VERSION);
@@ -135,7 +135,7 @@ async fn main() {
         "version" | "--version" | "-V" => {
             println!("workbuddy-switch {}", env!("CARGO_PKG_VERSION"));
         }
-        "serve" | _ => serve(&args).await,
+        _ => serve(&args).await,
     }
 }
 

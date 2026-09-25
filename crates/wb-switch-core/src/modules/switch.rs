@@ -446,7 +446,12 @@ mod tests {
         // 本次复制/同步新产生一条未完成操作。
         save_operation(
             &paths,
-            &operation("op-new", OpPhase::DbWritten, Some("目标会话记录更新失败"), 2),
+            &operation(
+                "op-new",
+                OpPhase::DbWritten,
+                Some("目标会话记录更新失败"),
+                2,
+            ),
         )
         .unwrap();
         let created = newly_unfinished_writes(

@@ -344,7 +344,10 @@ pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             // 更新源已无可用包（版本已追平）。
             Ok(None) => {
                 eprintln!("[更新] 更新源无可用更新包，转为已是最新");
-                set_phase(&app, apply_check_result(&json!({"ok": true, "hasUpdate": false})));
+                set_phase(
+                    &app,
+                    apply_check_result(&json!({"ok": true, "hasUpdate": false})),
+                );
                 reset_tooltip(&app);
             }
             Err(message) => {
@@ -635,7 +638,8 @@ mod tests {
     fn check_without_update_lands_on_up_to_date() {
         let _guard = lock();
         reset();
-        let snapshot = apply_check_result(&json!({"ok": true, "latest": "0.1.0", "hasUpdate": false}));
+        let snapshot =
+            apply_check_result(&json!({"ok": true, "latest": "0.1.0", "hasUpdate": false}));
         assert_eq!(snapshot.phase, UpdatePhase::UpToDate);
         assert_eq!(snapshot.latest, None);
         assert!(snapshot.checked_at.is_some());
@@ -768,7 +772,11 @@ mod tests {
         reset();
         begin_download("9.9.9");
         assert_eq!(advance_progress(1, Some(1000)), Some(0));
-        assert_eq!(advance_progress(2, Some(1000)), None, "同一整数百分比不重复写");
+        assert_eq!(
+            advance_progress(2, Some(1000)),
+            None,
+            "同一整数百分比不重复写"
+        );
         assert_eq!(advance_progress(10, Some(1000)), Some(1));
         assert_eq!(snapshot().percent, Some(1));
         assert_eq!(advance_progress(10, None), None, "总量未知不写百分比");

@@ -140,8 +140,14 @@ mod tests {
     fn error_log_ring_keeps_only_the_last_200_lines() {
         let (dir, path) = temp_log_path("ring");
         for index in 0..250 {
-            record_at(&path, "frontend_unhandled", &format!("错误 {index}"), "", index as i64)
-                .unwrap();
+            record_at(
+                &path,
+                "frontend_unhandled",
+                &format!("错误 {index}"),
+                "",
+                index as i64,
+            )
+            .unwrap();
         }
 
         let lines: Vec<String> = std::fs::read_to_string(&path)
@@ -173,16 +179,30 @@ mod tests {
     fn error_log_entry_has_fixed_fields_and_truncates_detail() {
         let (dir, path) = temp_log_path("fields");
 
-        record_at(&path, "frontend_crash", "渲染崩溃", "堆栈信息", 1_700_000_000_000).unwrap();
+        record_at(
+            &path,
+            "frontend_crash",
+            "渲染崩溃",
+            "堆栈信息",
+            1_700_000_000_000,
+        )
+        .unwrap();
         let entries = read_entries(&path);
         assert_eq!(entries.len(), 1);
         let entry = entries[0].as_object().unwrap();
-        assert_eq!(entry.len(), 6, "字段集固定为 ts/kind/message/detail/appVersion/os");
+        assert_eq!(
+            entry.len(),
+            6,
+            "字段集固定为 ts/kind/message/detail/appVersion/os"
+        );
         assert_eq!(entry["ts"], json!(1_700_000_000_000i64));
         assert_eq!(entry["kind"], json!("frontend_crash"));
         assert_eq!(entry["message"], json!("渲染崩溃"));
         assert_eq!(entry["detail"], json!("堆栈信息"));
-        assert_eq!(entry["appVersion"], json!(crate::modules::update::APP_VERSION));
+        assert_eq!(
+            entry["appVersion"],
+            json!(crate::modules::update::APP_VERSION)
+        );
         assert_eq!(entry["os"], json!(std::env::consts::OS));
 
         // 未知 kind 归一为 backend，不落任意字符串。

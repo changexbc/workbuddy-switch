@@ -1145,9 +1145,7 @@ fn finish_copy_from_body(
         DbCopyOutcome::SourceRowMissing => {
             return Err("数据库中找不到源会话记录，未复制".to_string())
         }
-        DbCopyOutcome::NoSessionsTable => {
-            return Err("会话数据缺少数据表，未复制".to_string())
-        }
+        DbCopyOutcome::NoSessionsTable => return Err("会话数据缺少数据表，未复制".to_string()),
         DbCopyOutcome::NoDb => return Err("会话数据不存在，未复制".to_string()),
     }
     verify_session_row(paths, &operation.target.session_id, &operation.target.uid)?;
@@ -2531,7 +2529,8 @@ fn update_target_session_row(
         .map_err(|error| format!("目标会话记录更新失败：{error}"))?;
     if affected != 1 {
         return Err(
-            "目标会话记录归属校验失败：会话不存在、不属于目标账号或已被删除，未按成功处理".to_string(),
+            "目标会话记录归属校验失败：会话不存在、不属于目标账号或已被删除，未按成功处理"
+                .to_string(),
         );
     }
     match (read_session_row(&tx, &target.session_id)?, before) {
@@ -2542,7 +2541,9 @@ fn update_target_session_row(
                 || after.title != before.title
                 || after.custom_title != before.custom_title
             {
-                return Err("目标会话记录的归属或标题在保存期间发生变化，已回滚本次更新".to_string());
+                return Err(
+                    "目标会话记录的归属或标题在保存期间发生变化，已回滚本次更新".to_string()
+                );
             }
             if after.updated_at != Some(new_updated_at) {
                 return Err("目标会话记录更新时间未按本次保存生效，未按成功处理".to_string());
@@ -3515,7 +3516,9 @@ mod tests {
         assert!(paths.session_links_file().ends_with("session_links.json"));
         assert!(paths.session_links_dir().ends_with("session-links"));
         assert!(paths.baselines_dir().ends_with("session-links/baselines"));
-        assert!(paths.preview_tokens_dir().ends_with("session-links/previews"));
+        assert!(paths
+            .preview_tokens_dir()
+            .ends_with("session-links/previews"));
         assert!(paths.operations_dir().ends_with("session-links/operations"));
         assert!(paths
             .link_store_lock_file()
@@ -3528,7 +3531,10 @@ mod tests {
             auth_file: PathBuf::new(),
             link_namespace: LinkNamespace::WorkBuddy,
         };
-        assert_eq!(at_root.session_links_file(), root.join("session_links.json"));
+        assert_eq!(
+            at_root.session_links_file(),
+            root.join("session_links.json")
+        );
         assert_eq!(at_root.session_links_dir(), root.join("session-links"));
         assert_eq!(
             at_root.baselines_dir(),
@@ -3580,10 +3586,7 @@ mod tests {
         assert_ne!(vscode.session_links_file(), workbuddy.session_links_file());
         assert_ne!(vscode.session_links_dir(), workbuddy.session_links_dir());
         assert_ne!(vscode.baselines_dir(), workbuddy.baselines_dir());
-        assert_ne!(
-            vscode.preview_tokens_dir(),
-            workbuddy.preview_tokens_dir()
-        );
+        assert_ne!(vscode.preview_tokens_dir(), workbuddy.preview_tokens_dir());
         assert_ne!(vscode.operations_dir(), workbuddy.operations_dir());
         assert_ne!(
             vscode.link_store_lock_file(),
@@ -4039,7 +4042,11 @@ mod tests {
         assert!(session_backup::scan_lifecycle(&env.paths)
             .records
             .is_empty());
-        assert_eq!(env.body_files().len(), 4, "两条来源内容与两个复制后的内容都在");
+        assert_eq!(
+            env.body_files().len(),
+            4,
+            "两条来源内容与两个复制后的内容都在"
+        );
     }
 
     /// 归属不可验证（临时目录路径被替换为符号链接）：业务成功保持不变、材料保留并上报，
@@ -5357,7 +5364,10 @@ mod tests {
         assert_eq!(group["extraB"], 5);
         assert_eq!(group["availableModes"], json!([]));
         assert!(group.get("previewToken").is_none(), "不可勾选的组不发凭据");
-        assert!(group["reason"].as_str().unwrap().contains("只有目标账号新增"));
+        assert!(group["reason"]
+            .as_str()
+            .unwrap()
+            .contains("只有目标账号新增"));
 
         // 预览不写目标：正文与关联版本都不变。
         assert_eq!(
@@ -5398,7 +5408,10 @@ mod tests {
         assert_eq!(group["availableModes"], json!([]));
         assert!(group.get("previewToken").is_none(), "不可执行的组不发凭据");
         assert!(
-            group["reason"].as_str().unwrap().contains("对应的会话已失效"),
+            group["reason"]
+                .as_str()
+                .unwrap()
+                .contains("对应的会话已失效"),
             "{preview}"
         );
         // 契约：不可验证时 source/target 为 0、baseline 为 null（前端类型据此声明）。
@@ -5431,7 +5444,10 @@ mod tests {
         let skipped = &report["skipped"][0];
         assert_eq!(skipped["reasonCode"], REASON_PREVIEW_STALE);
         assert!(
-            skipped["message"].as_str().unwrap().contains("当前账号的内容已变化"),
+            skipped["message"]
+                .as_str()
+                .unwrap()
+                .contains("当前账号的内容已变化"),
             "{skipped}"
         );
         assert_eq!(
@@ -5454,7 +5470,10 @@ mod tests {
             let skipped = &report["skipped"][0];
             assert_eq!(skipped["reasonCode"], REASON_PREVIEW_STALE, "{report}");
             assert!(
-                skipped["message"].as_str().unwrap().contains("目标账号的内容已变化"),
+                skipped["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("目标账号的内容已变化"),
                 "{skipped}"
             );
         }

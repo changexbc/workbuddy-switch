@@ -303,9 +303,7 @@ fn imported_account_from_root(root: Value, variant: WbVariant) -> Option<Value> 
             .or_else(|| auth_obj.get("refreshExpiresAt")),
     );
 
-    if access_token.is_none() {
-        return None;
-    }
+    access_token.as_ref()?;
 
     Some(json!({
         "id": uuid::Uuid::new_v4().to_string(),

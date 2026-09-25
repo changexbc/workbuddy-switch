@@ -33,7 +33,7 @@ static ROTATE_RUNNING: AtomicBool = AtomicBool::new(false);
 static LAST_CHECK_AT: AtomicI64 = AtomicI64::new(0);
 static LAST_SWITCH_AT: AtomicI64 = AtomicI64::new(0);
 
-/// 一天的毫秒数（新代码里用它代替裸写的 `24 * 3600_000`）。
+/// 一天的毫秒数（新代码里用它代替裸写的 `24 * 3_600_000`）。
 const DAY_MS: i64 = 24 * 3_600_000;
 
 /// 存活门控跳过时的固定原因：轮换日志与"是否该提示"的判定都认这一条。
@@ -153,7 +153,7 @@ pub fn decide_target(
         if remaining_ms > min_urgency_ms {
             return Decision::Skip(format!(
                 "所有账号到期都还早（最紧迫的还剩 {} 天），无需切换",
-                remaining_ms / (24 * 3600_000)
+                remaining_ms / (24 * 3_600_000)
             ));
         }
     }
@@ -189,8 +189,8 @@ pub fn decide_target(
             if cur_ts > 0 && target_ts < cur_ts && cur_ts - target_ts < min_gap_ms {
                 return Decision::Skip(format!(
                     "目标到期仅早 {} 小时，未达切换阈值（{} 小时）",
-                    (cur_ts - target_ts) / 3600_000,
-                    min_gap_ms / 3600_000
+                    (cur_ts - target_ts) / 3_600_000,
+                    min_gap_ms / 3_600_000
                 ));
             }
         }
@@ -299,8 +299,8 @@ pub async fn run_rotate_cycle() -> Value {
             current_id.as_deref(),
             last_switch_opt,
             cooldown_minutes * 60_000,
-            min_gap_hours * 3600_000,
-            min_urgency_hours * 3600_000,
+            min_gap_hours * 3_600_000,
+            min_urgency_hours * 3_600_000,
             has_live_session,
             min_remaining_credits,
         )
@@ -327,7 +327,7 @@ pub async fn run_rotate_cycle() -> Value {
         }))
         .collect::<Vec<_>>());
     if let Some(id) = &current_id {
-        log["from"] = json!({"id": id, "name": cli_status.get("activeAccountName").cloned().unwrap_or_else(|| json!(null))});
+        log["from"] = json!({"id": id, "name": cli_status.get("activeAccountName").cloned().unwrap_or_default()});
     }
 
     let mut notify: Option<Value> = None;
@@ -405,9 +405,9 @@ pub fn rotate_status() -> Value {
     let last_switch = LAST_SWITCH_AT.load(Ordering::SeqCst);
     json!({
         "config": cfg,
-        "cliConfigured": cli_status.get("configured").cloned().unwrap_or_else(|| json!(false)),
-        "activeAccountId": cli_status.get("activeAccountId").cloned().unwrap_or_else(|| json!(null)),
-        "activeAccountName": cli_status.get("activeAccountName").cloned().unwrap_or_else(|| json!(null)),
+        "cliConfigured": cli_status.get("configured").cloned().unwrap_or(json!(false)),
+        "activeAccountId": cli_status.get("activeAccountId").cloned().unwrap_or_default(),
+        "activeAccountName": cli_status.get("activeAccountName").cloned().unwrap_or_default(),
         "lastCheckAt": (last_check > 0).then_some(last_check),
         "lastSwitchAt": (last_switch > 0).then_some(last_switch),
     })
@@ -424,8 +424,8 @@ pub fn rotate_logs() -> Vec<Value> {
 mod tests {
     use super::*;
 
-    const GAP: i64 = 24 * 3600_000; // 防抖动差异阈值
-    const URG: i64 = 72 * 3600_000; // 紧迫度阈值
+    const GAP: i64 = 24 * 3_600_000; // 防抖动差异阈值
+    const URG: i64 = 72 * 3_600_000; // 紧迫度阈值
     const HOUR_MS: i64 = 3_600_000;
 
     fn cand(id: &str, expire_at: Option<i64>, remaining: f64, valid: bool) -> Candidate {
@@ -470,8 +470,8 @@ mod tests {
     fn switches_to_most_urgent_account() {
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 30 * 24 * 3600_000), 100.0, true),
-            cand("b", Some(now + 1 * 24 * 3600_000), 50.0, true),
+            cand("a", Some(now + 30 * 24 * 3_600_000), 100.0, true),
+            cand("b", Some(now + 24 * 3_600_000), 50.0, true),
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
@@ -483,8 +483,8 @@ mod tests {
     fn noop_when_current_is_most_urgent() {
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 1 * 24 * 3600_000), 50.0, true),
-            cand("b", Some(now + 30 * 24 * 3600_000), 100.0, true),
+            cand("a", Some(now + 24 * 3_600_000), 50.0, true),
+            cand("b", Some(now + 30 * 24 * 3_600_000), 100.0, true),
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
@@ -497,9 +497,9 @@ mod tests {
         // 目标 c 比当前 a 早到期，但差异 < 24h → 不切（防抖动）
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 24 * 3600_000), 50.0, true),
-            cand("b", Some(now + 22 * 3600_000), 60.0, true),
-            cand("c", Some(now + 21 * 3600_000), 70.0, true),
+            cand("a", Some(now + 24 * 3_600_000), 50.0, true),
+            cand("b", Some(now + 22 * 3_600_000), 60.0, true),
+            cand("c", Some(now + 21 * 3_600_000), 70.0, true),
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
@@ -511,8 +511,8 @@ mod tests {
     fn switches_when_gap_above_threshold() {
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 30 * 24 * 3600_000), 100.0, true),
-            cand("b", Some(now + 1 * 24 * 3600_000), 50.0, true),
+            cand("a", Some(now + 30 * 24 * 3_600_000), 100.0, true),
+            cand("b", Some(now + 24 * 3_600_000), 50.0, true),
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
@@ -524,8 +524,8 @@ mod tests {
     fn respects_cooldown() {
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 30 * 24 * 3600_000), 100.0, true),
-            cand("b", Some(now + 1 * 24 * 3600_000), 50.0, true),
+            cand("a", Some(now + 30 * 24 * 3_600_000), 100.0, true),
+            cand("b", Some(now + 24 * 3_600_000), 50.0, true),
         ];
         // 刚切过（10 分钟前），冷却 30 分钟 → 不切
         assert_eq!(
@@ -561,8 +561,8 @@ mod tests {
     fn expired_and_failed_accounts_excluded() {
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 2 * 24 * 3600_000), 100.0, true),
-            cand("expired", Some(now - 1 * 3600_000), 0.0, false),
+            cand("a", Some(now + 2 * 24 * 3_600_000), 100.0, true),
+            cand("expired", Some(now - 3_600_000), 0.0, false),
             cand("failed", None, 0.0, false),
         ];
         assert_eq!(
@@ -588,8 +588,8 @@ mod tests {
         // 所有账号 5 天后才过期：最紧迫剩余 > 72h → 不切
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 6 * 24 * 3600_000), 100.0, true),
-            cand("b", Some(now + 5 * 24 * 3600_000), 50.0, true),
+            cand("a", Some(now + 6 * 24 * 3_600_000), 100.0, true),
+            cand("b", Some(now + 5 * 24 * 3_600_000), 50.0, true),
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
@@ -741,8 +741,8 @@ mod tests {
     fn skips_when_target_low_remaining() {
         let now = now_ms();
         let candidates = vec![
-            cand("a", Some(now + 30 * 24 * 3600_000), 100.0, true),
-            cand("b", Some(now + 1 * 24 * 3600_000), 10.0, true),
+            cand("a", Some(now + 30 * 24 * 3_600_000), 100.0, true),
+            cand("b", Some(now + 24 * 3_600_000), 10.0, true),
         ];
         // 目标剩余 10 < 阈值 30 → 不值得切
         assert_eq!(

@@ -89,10 +89,11 @@ fn conversation_index(root: &Path, uid: &str) -> BTreeMap<String, ConversationLo
                 .filter(|name| !name.is_empty())
                 .unwrap_or("(无标题)")
                 .to_string();
-            out.entry(id.to_string()).or_insert_with(|| ConversationLocator {
-                workspace_hash: workspace_hash.clone(),
-                title,
-            });
+            out.entry(id.to_string())
+                .or_insert_with(|| ConversationLocator {
+                    workspace_hash: workspace_hash.clone(),
+                    title,
+                });
         }
     }
     out
@@ -280,55 +281,55 @@ fn register_one(
             }
         };
         let group = &mut store.groups[index];
-        let source_member_id =
-            match session_link::find_member(group, &source_uid, &source_id).map(|m| m.member_id.clone())
-            {
-                Some(member_id) => {
-                    session_link::set_member_state(group, &member_id, MemberState::Active);
-                    member_id
-                }
-                None => {
-                    let member_id = uuid::Uuid::new_v4().to_string();
-                    session_link::add_active_member(
-                        group,
-                        LinkMember {
-                            member_id: member_id.clone(),
-                            account_id: source_account_id,
-                            uid: source_uid.clone(),
-                            session_id: source_id.clone(),
-                            state: MemberState::Active,
-                            linked_at: now_ms(),
-                            last_synced_at: None,
-                        },
-                    );
-                    member_id
-                }
-            };
-        let target_member_id =
-            match session_link::find_member(group, &target_uid, &target_id).map(|m| m.member_id.clone())
-            {
-                Some(member_id) => {
-                    session_link::set_member_state(group, &member_id, MemberState::Active);
-                    member_id
-                }
-                None => {
-                    let member_id = uuid::Uuid::new_v4().to_string();
-                    // 同账号上一次的 active 成员在这里被显式 supersede：保留记录、不再有效。
-                    session_link::add_active_member(
-                        group,
-                        LinkMember {
-                            member_id: member_id.clone(),
-                            account_id: target_account_id,
-                            uid: target_uid.clone(),
-                            session_id: target_id.clone(),
-                            state: MemberState::Active,
-                            linked_at: now_ms(),
-                            last_synced_at: None,
-                        },
-                    );
-                    member_id
-                }
-            };
+        let source_member_id = match session_link::find_member(group, &source_uid, &source_id)
+            .map(|m| m.member_id.clone())
+        {
+            Some(member_id) => {
+                session_link::set_member_state(group, &member_id, MemberState::Active);
+                member_id
+            }
+            None => {
+                let member_id = uuid::Uuid::new_v4().to_string();
+                session_link::add_active_member(
+                    group,
+                    LinkMember {
+                        member_id: member_id.clone(),
+                        account_id: source_account_id,
+                        uid: source_uid.clone(),
+                        session_id: source_id.clone(),
+                        state: MemberState::Active,
+                        linked_at: now_ms(),
+                        last_synced_at: None,
+                    },
+                );
+                member_id
+            }
+        };
+        let target_member_id = match session_link::find_member(group, &target_uid, &target_id)
+            .map(|m| m.member_id.clone())
+        {
+            Some(member_id) => {
+                session_link::set_member_state(group, &member_id, MemberState::Active);
+                member_id
+            }
+            None => {
+                let member_id = uuid::Uuid::new_v4().to_string();
+                // 同账号上一次的 active 成员在这里被显式 supersede：保留记录、不再有效。
+                session_link::add_active_member(
+                    group,
+                    LinkMember {
+                        member_id: member_id.clone(),
+                        account_id: target_account_id,
+                        uid: target_uid.clone(),
+                        session_id: target_id.clone(),
+                        state: MemberState::Active,
+                        linked_at: now_ms(),
+                        last_synced_at: None,
+                    },
+                );
+                member_id
+            }
+        };
         // 复制完成时的双方内容即共同基线（design §5：复制时即打基线）。
         let baseline_ref = uuid::Uuid::new_v4().to_string();
         session_link::save_baseline(paths, &baseline_ref, &normalized)?;
@@ -371,7 +372,12 @@ pub fn links_preview(target_acc: &Value) -> Result<Value, String> {
             "未检测到 VS Code CodeBuddy 插件当前登录账号，无法同步会话。请先在 VS Code 中登录该插件后重试。"
                 .to_string()
         })?;
-    links_preview_at(&root, &SessionPaths::for_vscode_ext(), &source_uid, target_acc)
+    links_preview_at(
+        &root,
+        &SessionPaths::for_vscode_ext(),
+        &source_uid,
+        target_acc,
+    )
 }
 
 /// [`links_preview`] 的可测实现：显式传入数据根、存储路径与来源 uid。
@@ -727,7 +733,9 @@ enum SyncItemOutcome {
         verdict: Option<SyncVerdict>,
     },
     /// 入参或凭据非法、模式越权：拒绝，不静默执行。
-    Rejected { message: String },
+    Rejected {
+        message: String,
+    },
 }
 
 /// 重新校验单条选择：凭据、身份、成员、基线、正文逐项核对（design §7.3）。
@@ -756,7 +764,11 @@ fn plan_sync_item(
     if binding.source.uid != context.source_uid || binding.target.uid != context.target_uid {
         return skip("账号已变化，检查结果已失效".to_string());
     }
-    let Some(group) = store.groups.iter().find(|group| group.id == selection.group_id) else {
+    let Some(group) = store
+        .groups
+        .iter()
+        .find(|group| group.id == selection.group_id)
+    else {
         return skip("会话的关联关系已不存在，检查结果已失效".to_string());
     };
     let (Some(source_member), Some(target_member)) = (
@@ -998,8 +1010,7 @@ fn fast_forward(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, Stri
                 break;
             }
         }
-        let derived =
-            derived.ok_or_else(|| "目标账号已存在同名请求，已停止同步".to_string())?;
+        let derived = derived.ok_or_else(|| "目标账号已存在同名请求，已停止同步".to_string())?;
         used_request_ids.insert(derived.clone());
         translation.insert(source_id.clone(), derived);
     }
@@ -1123,10 +1134,7 @@ fn plan_message_file(
         );
         translation.insert(source_id.to_string(), id.clone());
         let content = vscode_session_link::translate_message(value, translation).to_string();
-        let path = plan
-            .target_dir
-            .join("messages")
-            .join(format!("{id}.json"));
+        let path = plan.target_dir.join("messages").join(format!("{id}.json"));
         match std::fs::read_to_string(&path) {
             // 目标已有同名文件且内容不同：换 salt 重试，不覆盖别人的内容。
             Ok(existing) if existing != content => continue,
@@ -1573,10 +1581,9 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(json!({"id": user_id, "type": "text", "role": "user", "isComplete": true}));
-        index["messages"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"id": assistant_id, "type": "text", "role": "assistant", "isComplete": false}));
+        index["messages"].as_array_mut().unwrap().push(
+            json!({"id": assistant_id, "type": "text", "role": "assistant", "isComplete": false}),
+        );
         index["requests"].as_array_mut().unwrap().push(json!({
             "id": request_id, "type": "craft", "messages": [user_id, assistant_id],
             "state": "complete", "startedAt": 1789532363000_i64,
@@ -1598,10 +1605,7 @@ mod tests {
         let errors =
             register_copied_sessions(&fixture.root, &fixture.paths(), WbVariant::Cn, &report);
         assert!(errors.is_empty(), "登记失败：{errors:?}");
-        report["copied"][0]["newId"]
-            .as_str()
-            .unwrap()
-            .to_string()
+        report["copied"][0]["newId"].as_str().unwrap().to_string()
     }
 
     fn records(conv_dir: &Path) -> Vec<String> {
@@ -1771,7 +1775,10 @@ mod tests {
         // 命名空间隔离：只写 VS Code 专属文件，WorkBuddy 的关联表不出现（AC6 的存储面）。
         assert!(fixture.store.join("vscode_session_links.json").is_file());
         assert!(!fixture.store.join("session_links.json").exists());
-        assert!(fixture.store.join("vscode-session-links/baselines").is_dir());
+        assert!(fixture
+            .store
+            .join("vscode-session-links/baselines")
+            .is_dir());
         assert!(!fixture.store.join("session-links").exists());
 
         let store = match session_link::load_store(&fixture.paths()) {
@@ -1873,10 +1880,7 @@ mod tests {
             vscode_session_link::derive_message_id(DST_UID, &target_conv, 3, &source_digests[3], 0)
         );
         // 最强断言：归一化后逐条摘要与源完全一致。
-        assert_eq!(
-            digests(&target_dir, &target_conv),
-            source_digests
-        );
+        assert_eq!(digests(&target_dir, &target_conv), source_digests);
         // 附件补入（源侧新增的附件出现在副本里）。
         assert!(target_dir.join("assets/新附件.txt").is_file());
 
@@ -2006,7 +2010,11 @@ mod tests {
         assert_eq!(report["synced"].as_array().unwrap().len(), 0, "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
         assert!(error.contains("重建副本会话目录失败"), "{error}");
-        assert_eq!(dir_snapshot(&target_dir), before, "失败后目录必须与操作前一致");
+        assert_eq!(
+            dir_snapshot(&target_dir),
+            before,
+            "失败后目录必须与操作前一致"
+        );
     }
 
     /// design §6.1 步 6：基线提交失败 → 恢复索引并删除本次新增的消息文件。
@@ -2075,13 +2083,8 @@ mod tests {
 
         // 第二个新增记录的落点被目录占住：第一个记录会先写入成功，第二个失败 → 必须回滚。
         let source_digests = digests(&fixture.src_conv_dir(), CONV_SRC);
-        let blocked = vscode_session_link::derive_message_id(
-            DST_UID,
-            &target_conv,
-            3,
-            &source_digests[3],
-            0,
-        );
+        let blocked =
+            vscode_session_link::derive_message_id(DST_UID, &target_conv, 3, &source_digests[3], 0);
         let target_dir = fixture.dst_conv_dir(&target_conv);
         std::fs::create_dir_all(target_dir.join(format!("messages/{blocked}.json"))).unwrap();
 
@@ -2454,7 +2457,11 @@ mod tests {
             "基线仍是旧的 2 条，但判定与它无关"
         );
         // 无需任何修复动作：预览是只读的，不会去「补」那条落后的基线。
-        assert_eq!(dir_snapshot(&fixture.store), store_state, "预览不得改动关联存储");
+        assert_eq!(
+            dir_snapshot(&fixture.store),
+            store_state,
+            "预览不得改动关联存储"
+        );
         assert_eq!(records(&target_dir).len(), 4);
         assert_eq!(
             digests(&target_dir, &target_conv),
@@ -2526,7 +2533,10 @@ mod tests {
         let missing_backup = fixture.base.join("missing-backup");
 
         let error = restore_dir(&missing_backup, &target_dir).unwrap_err();
-        assert!(error.contains("未恢复"), "文案必须明说副本目录未恢复：{error}");
+        assert!(
+            error.contains("未恢复"),
+            "文案必须明说副本目录未恢复：{error}"
+        );
         assert!(
             error.contains(&missing_backup.to_string_lossy().to_string()),
             "文案必须给出可手工恢复的备份路径：{error}"

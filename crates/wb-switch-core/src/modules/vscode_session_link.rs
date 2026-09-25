@@ -71,13 +71,17 @@ pub fn read_session_content(conv_dir: &Path, conversation_id: &str) -> ContentSt
 
     for message in messages {
         let Some(id) = message_id(message) else {
-            return ContentState::Unavailable("会话索引中的消息缺少 id，内容可能不完整".to_string());
+            return ContentState::Unavailable(
+                "会话索引中的消息缺少 id，内容可能不完整".to_string(),
+            );
         };
         let file = conv_dir.join("messages").join(format!("{id}.json"));
         let bytes = match std::fs::read(&file) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return ContentState::Unavailable(format!("消息 {id} 的文件不存在，内容可能不完整"));
+                return ContentState::Unavailable(format!(
+                    "消息 {id} 的文件不存在，内容可能不完整"
+                ));
             }
             Err(error) => {
                 return ContentState::Unavailable(format!("消息 {id} 的文件无法读取：{error}"));
@@ -145,7 +149,8 @@ fn placeholder_map(index: &Value, conversation_id: &str) -> BTreeMap<String, Str
             else {
                 continue;
             };
-            map.entry(id.to_string()).or_insert_with(|| format!("r{index}"));
+            map.entry(id.to_string())
+                .or_insert_with(|| format!("r{index}"));
         }
     }
     let own_id = conversation_id.trim();
@@ -168,7 +173,10 @@ fn normalize_message(value: &Value, placeholders: &BTreeMap<String, String>) -> 
             }
         }
         if let Some(extra) = object.get("extra").cloned() {
-            object.insert("extra".to_string(), replace_ids_in_extra(&extra, placeholders));
+            object.insert(
+                "extra".to_string(),
+                replace_ids_in_extra(&extra, placeholders),
+            );
         }
     }
     out
@@ -271,10 +279,7 @@ pub fn positional_translation(
 }
 
 /// 按翻译表重写会话索引里的一条消息条目（只换 id，其余字段原样）。
-pub fn translate_message_entry(
-    entry: &Value,
-    translation: &BTreeMap<String, String>,
-) -> Value {
+pub fn translate_message_entry(entry: &Value, translation: &BTreeMap<String, String>) -> Value {
     let mut out = entry.clone();
     if let Some(object) = out.as_object_mut() {
         if let Some(id) = object.get("id").and_then(Value::as_str).map(str::to_string) {
@@ -287,10 +292,7 @@ pub fn translate_message_entry(
 }
 
 /// 按翻译表重写会话索引里的一条请求条目：`id` 与 `messages[]` 引用。
-pub fn translate_request_entry(
-    request: &Value,
-    translation: &BTreeMap<String, String>,
-) -> Value {
+pub fn translate_request_entry(request: &Value, translation: &BTreeMap<String, String>) -> Value {
     let mut out = request.clone();
     let Some(object) = out.as_object_mut() else {
         return out;
@@ -338,7 +340,10 @@ pub fn translate_message(value: &Value, translation: &BTreeMap<String, String>) 
             }
         }
         if let Some(extra) = object.get("extra").cloned() {
-            object.insert("extra".to_string(), replace_ids_in_extra(&extra, translation));
+            object.insert(
+                "extra".to_string(),
+                replace_ids_in_extra(&extra, translation),
+            );
         }
     }
     out
@@ -577,7 +582,10 @@ mod tests {
                 ..Seed::default()
             },
         );
-        let after = digest_of(&read_session_content(&dir, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        let after = digest_of(&read_session_content(
+            &dir,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ));
         assert_eq!(before[0], after[0]);
         assert_ne!(before[1], after[1]);
         let _ = std::fs::remove_dir_all(&root);
@@ -624,7 +632,10 @@ mod tests {
         // 换目标会话 / 换 salt / 换内容摘要都会换 id。
         assert_ne!(first, derive_message_id(DST_UID, "conv-c", 7, &digest, 0));
         assert_ne!(first, derive_message_id(DST_UID, "conv-b", 7, &digest, 1));
-        assert_ne!(first, derive_message_id(DST_UID, "conv-b", 7, &"e".repeat(64), 0));
+        assert_ne!(
+            first,
+            derive_message_id(DST_UID, "conv-b", 7, &"e".repeat(64), 0)
+        );
         assert_ne!(first, derive_message_id(SRC_UID, "conv-b", 7, &digest, 0));
         // 请求 id 与消息 id 在同一序号上不撞。
         let request = derive_request_id(DST_UID, "conv-b", 7, &digest, 0);
@@ -673,13 +684,20 @@ mod tests {
                 "aaaa2222222222222222222222222222".to_string()
             ]
         );
-        let request = translated.get("requests").and_then(Value::as_array).unwrap()[0].clone();
+        let request = translated
+            .get("requests")
+            .and_then(Value::as_array)
+            .unwrap()[0]
+            .clone();
         assert_eq!(
             request.get("id").and_then(Value::as_str),
             Some("aaaa3333333333333333333333333333")
         );
         assert_eq!(
-            request.get("messages").and_then(Value::as_array).map(Vec::len),
+            request
+                .get("messages")
+                .and_then(Value::as_array)
+                .map(Vec::len),
             Some(2)
         );
         assert_eq!(

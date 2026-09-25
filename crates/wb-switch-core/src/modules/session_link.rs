@@ -517,11 +517,15 @@ pub fn decide_sync(
 ) -> SyncDecision {
     let (source, target) = match (source, target) {
         (ContentState::Ready(source), ContentState::Ready(target)) => (source, target),
-        (ContentState::Missing, _) => return SyncDecision::unknown("当前账号的内容不存在，无法确认"),
+        (ContentState::Missing, _) => {
+            return SyncDecision::unknown("当前账号的内容不存在，无法确认")
+        }
         (ContentState::Unavailable(reason), _) => {
             return SyncDecision::unknown(format!("当前账号的内容无法确认：{reason}"))
         }
-        (_, ContentState::Missing) => return SyncDecision::unknown("目标账号的内容不存在，无法确认"),
+        (_, ContentState::Missing) => {
+            return SyncDecision::unknown("目标账号的内容不存在，无法确认")
+        }
         (_, ContentState::Unavailable(reason)) => {
             return SyncDecision::unknown(format!("目标账号的内容无法确认：{reason}"))
         }
@@ -950,13 +954,19 @@ pub fn validate_store(store: &LinkStore) -> Result<(), String> {
                 return Err(format!("会话 {} 同时属于多个同步组", member.session_id));
             }
             if member.state == MemberState::Active && !active_by_uid.insert(member.uid.as_str()) {
-                return Err(format!("账号 {} 在同一组内出现多条有效成员记录", member.uid));
+                return Err(format!(
+                    "账号 {} 在同一组内出现多条有效成员记录",
+                    member.uid
+                ));
             }
         }
         let mut pairs = std::collections::HashSet::new();
         for pair in &group.pair_bases {
             if !pairs.insert(pair_key(&pair.member_ids[0], &pair.member_ids[1])) {
-                return Err(format!("同一对成员重复保存了同步记录：{}", pair.baseline_ref));
+                return Err(format!(
+                    "同一对成员重复保存了同步记录：{}",
+                    pair.baseline_ref
+                ));
             }
             for member_id in pair.member_ids.iter() {
                 if !member_ids.contains(member_id.as_str()) {
@@ -2366,7 +2376,11 @@ mod tests {
             assert_eq!(decision.verdict, SyncVerdict::Identical);
             assert!(!decision.default_checked);
             assert!(decision.verdict.available_modes().is_empty());
-            assert!(decision.reason.contains("不需要同步"), "{}", decision.reason);
+            assert!(
+                decision.reason.contains("不需要同步"),
+                "{}",
+                decision.reason
+            );
         }
     }
 
@@ -2390,11 +2404,7 @@ mod tests {
             decision.verdict.available_modes(),
             vec![SyncMode::FastForward]
         );
-        assert!(
-            decision.reason.contains("新增 3 条"),
-            "{}",
-            decision.reason
-        );
+        assert!(decision.reason.contains("新增 3 条"), "{}", decision.reason);
     }
 
     /// 祖先快进不依赖基线：无基线 / 基线不可验证时，B 是 A 的严格有序前缀照样可快进。

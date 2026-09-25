@@ -592,9 +592,11 @@ fn update_menu_spec(snapshot: &UpdateSnapshot) -> (UpdateMenuAction, String, boo
             },
             false,
         ),
-        UpdatePhase::ReadyToRestart => {
-            (UpdateMenuAction::Restart, "重启以完成升级".to_string(), true)
-        }
+        UpdatePhase::ReadyToRestart => (
+            UpdateMenuAction::Restart,
+            "重启以完成升级".to_string(),
+            true,
+        ),
         UpdatePhase::Error => {
             if snapshot.latest.is_some() {
                 (
@@ -650,8 +652,8 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         LIGHTWEIGHT_MODE.load(Ordering::Acquire),
         None::<&str>,
     )?;
-    let companion_enabled = !crate::is_screenshot_demo()
-        && agent_studio_desktop::is_enabled(app.app_handle());
+    let companion_enabled =
+        !crate::is_screenshot_demo() && agent_studio_desktop::is_enabled(app.app_handle());
     let companion_toggle = MenuItem::with_id(
         app,
         "companion-toggle",
@@ -1202,15 +1204,14 @@ mod tests {
     fn update_menu_spec_maps_each_phase_to_its_entry() {
         use super::{update_menu_spec, UpdateMenuAction, UpdatePhase, UpdateSnapshot};
 
-        let snapshot = |phase: UpdatePhase, latest: Option<&str>, percent: Option<u8>| {
-            UpdateSnapshot {
+        let snapshot =
+            |phase: UpdatePhase, latest: Option<&str>, percent: Option<u8>| UpdateSnapshot {
                 phase,
                 latest: latest.map(str::to_string),
                 percent,
                 message: None,
                 checked_at: None,
-            }
-        };
+            };
 
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::Idle, None, None)),
@@ -1234,7 +1235,11 @@ mod tests {
             )
         );
         assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::Downloading, Some("0.1.48"), Some(42))),
+            update_menu_spec(&snapshot(
+                UpdatePhase::Downloading,
+                Some("0.1.48"),
+                Some(42)
+            )),
             (
                 UpdateMenuAction::Download,
                 "正在下载更新 42%".to_string(),

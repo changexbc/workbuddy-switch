@@ -290,7 +290,7 @@ fn error_message(response: &Value) -> String {
         .filter(|message| !message.is_empty())
         .map(|message| message.chars().take(160).collect::<String>());
     match response_code(response) {
-        Some(code) if code == -1 => "官方请求失败（网络或服务不可达）".to_string(),
+        Some(-1) => "官方请求失败（网络或服务不可达）".to_string(),
         Some(code) => upstream_message
             .map(|message| format!("官方请求失败（code={code}）：{message}"))
             .unwrap_or_else(|| format!("官方请求失败（code={code}）")),
@@ -649,10 +649,8 @@ pub async fn collect_official_usage(accounts: &[Value], at_ms: i64) -> Value {
     let mut daily_totals: HashMap<NaiveDate, f64> = HashMap::new();
     let mut daily_models: HashMap<NaiveDate, HashMap<String, (usize, f64)>> = HashMap::new();
     let mut account_daily_totals: HashMap<String, HashMap<NaiveDate, f64>> = HashMap::new();
-    let mut account_daily_models: HashMap<
-        String,
-        HashMap<NaiveDate, HashMap<String, (usize, f64)>>,
-    > = HashMap::new();
+    type AccountDailyModels = HashMap<String, HashMap<NaiveDate, HashMap<String, (usize, f64)>>>;
+    let mut account_daily_models: AccountDailyModels = HashMap::new();
     let mut total_today = 0.0;
     let mut total_week = 0.0;
     let mut total_month = 0.0;

@@ -847,9 +847,7 @@ fn ide_workspace_meta(conv_index: &Path, conv_id: &str) -> (Option<String>, Stri
 
 fn ide_request_usage(request: &Value) -> Option<Usage> {
     let object = request.get("usage")?.as_object()?;
-    if field(object, &["inputTokens", "input_tokens", "prompt_tokens"]).is_none() {
-        return None;
-    }
+    field(object, &["inputTokens", "input_tokens", "prompt_tokens"])?;
     Some(Usage {
         input: field(object, &["inputTokens", "input_tokens", "prompt_tokens"]).unwrap_or(0),
         output: field(

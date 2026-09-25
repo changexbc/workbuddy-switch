@@ -40,13 +40,13 @@ pub async fn get_status(variant: Option<String>) -> Result<AppStatus, String> {
 
 fn build_app_status(variant: WbVariant) -> AppStatus {
     let auth = auth_file::read_auth_file(variant);
-    let current = auth.as_ref().and_then(|a| {
+    let current = auth.as_ref().map(|a| {
         let acct = a.get("account").cloned().unwrap_or_else(|| json!({}));
-        Some(json!({
+        json!({
             "uid": account::display_value(&acct, "uid"),
             "nickname": account::display_value(&acct, "nickname"),
             "email": account::display_value(&acct, "email"),
-        }))
+        })
     });
     AppStatus {
         running: process::is_workbuddy_running(variant),
@@ -277,7 +277,6 @@ pub async fn detect_codebuddy_ide_account() -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())?
 }
-
 
 /// DELETE /api/delete —— 删除账号。
 #[tauri::command]
@@ -837,10 +836,9 @@ pub fn get_launch_at_login_enabled(_app: tauri::AppHandle) -> Result<bool, Strin
     #[cfg(desktop)]
     {
         use tauri_plugin_autostart::ManagerExt;
-        return _app
-            .autolaunch()
+        _app.autolaunch()
             .is_enabled()
-            .map_err(|e| format!("查询开机自启状态失败：{e}"));
+            .map_err(|e| format!("查询开机自启状态失败：{e}"))
     }
     #[cfg(not(desktop))]
     {

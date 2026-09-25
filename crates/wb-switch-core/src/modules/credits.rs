@@ -1335,7 +1335,7 @@ mod tests {
     #[test]
     fn sums_only_resources_that_are_expiring_soon() {
         let now = 1_800_000_000_000_i64;
-        let resources = vec![
+        let resources = [
             resource_summary(
                 &json!({
                     "CycleCapacityRemainPrecise": 80,

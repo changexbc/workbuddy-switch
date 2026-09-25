@@ -442,8 +442,13 @@ pub fn copy_sessions_in(
             continue;
         };
         let target_dir = target_history.join(workspace_hash);
-        match copy_one_conversation(&source_dir, &target_dir, workspace_hash, conversation_id, state)
-        {
+        match copy_one_conversation(
+            &source_dir,
+            &target_dir,
+            workspace_hash,
+            conversation_id,
+            state,
+        ) {
             Ok(outcome) => copied.push(outcome),
             Err(error) => errors.push(json!({
                 "workspaceHash": workspace_hash,
@@ -485,8 +490,8 @@ pub fn switch_vscode_ext_with_copy(
     if items.is_empty() && sync_selections.is_empty() {
         return vscode_ext::switch_account(account_id, restart);
     }
-    let acc = account::find_account(account_id)
-        .ok_or_else(|| format!("账号不存在: {account_id}"))?;
+    let acc =
+        account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
     let target_uid = get_str(&acc, "uid")
         .ok_or_else(|| "账号缺少 uid，无法定位 VS Code CodeBuddy 插件数据目录".to_string())?;
 
@@ -532,14 +537,16 @@ pub fn switch_vscode_ext_with_copy(
         None
     } else {
         // 同步失败不阻断切换：报告形状与成功路径一致，错误挂在 `errors` 里（与 WorkBuddy 同口径）。
-        Some(match vscode_session_sync::sync_selected(&acc, sync_selections) {
-            Ok(report) => report,
-            Err(error) => json!({
-                "synced": [],
-                "skipped": [],
-                "errors": [{ "error": error }],
-            }),
-        })
+        Some(
+            match vscode_session_sync::sync_selected(&acc, sync_selections) {
+                Ok(report) => report,
+                Err(error) => json!({
+                    "synced": [],
+                    "skipped": [],
+                    "errors": [{ "error": error }],
+                }),
+            },
+        )
     };
 
     let copied = copy_report
@@ -763,11 +770,7 @@ fn merge_message_first(
 }
 
 /// 为一个旧 id 生成并登记新 id（空串或已登记则跳过）。
-fn insert_new_id(
-    map: &mut BTreeMap<String, String>,
-    used: &mut BTreeSet<String>,
-    old_id: &str,
-) {
+fn insert_new_id(map: &mut BTreeMap<String, String>, used: &mut BTreeSet<String>, old_id: &str) {
     if old_id.is_empty() || map.contains_key(old_id) {
         return;
     }
@@ -920,7 +923,11 @@ fn remap_session_index(source_index: &Value, plan: &RemapPlan) -> Value {
     let mut out = source_index.clone();
     if let Some(messages) = out.get_mut("messages").and_then(Value::as_array_mut) {
         for message in messages.iter_mut() {
-            if let Some(id) = message.get("id").and_then(Value::as_str).map(str::to_string) {
+            if let Some(id) = message
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            {
                 if let Some(new_id) = plan.message_ids.get(&id) {
                     if let Some(object) = message.as_object_mut() {
                         object.insert("id".to_string(), json!(new_id));
@@ -1250,9 +1257,18 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
         assert_eq!(session.get("id").and_then(Value::as_str), Some(CONV_OLD));
-        assert_eq!(session.get("workspaceHash").and_then(Value::as_str), Some(WS));
-        assert_eq!(session.get("title").and_then(Value::as_str), Some("测试会话"));
-        assert_eq!(session.get("hasHistory").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            session.get("workspaceHash").and_then(Value::as_str),
+            Some(WS)
+        );
+        assert_eq!(
+            session.get("title").and_then(Value::as_str),
+            Some("测试会话")
+        );
+        assert_eq!(
+            session.get("hasHistory").and_then(Value::as_bool),
+            Some(true)
+        );
         assert!(session.get("updatedAt").and_then(Value::as_i64).unwrap() > 0);
         // F3：响应带上解析到的数据根目录（找不到根时为 null，由 list_vscode_sessions 兜底）。
         let expected_root = fixture.root.to_string_lossy().to_string();
@@ -1396,41 +1412,71 @@ mod tests {
         let copied = report.get("copied").and_then(Value::as_array).unwrap();
         assert_eq!(copied.len(), 1);
         assert!(report.get("errors").is_none());
-        let new_conv = copied[0].get("newId").and_then(Value::as_str).unwrap().to_string();
+        let new_conv = copied[0]
+            .get("newId")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
         assert_ne!(new_conv, CONV_OLD);
         assert!(is_hex32(&new_conv), "new conversation id not lower hex");
-        assert_eq!(copied[0].get("oldId").and_then(Value::as_str), Some(CONV_OLD));
+        assert_eq!(
+            copied[0].get("oldId").and_then(Value::as_str),
+            Some(CONV_OLD)
+        );
         assert_eq!(copied[0].get("messages").and_then(Value::as_u64), Some(2));
 
         // 目标工作区索引：已合并新会话且 `current` 保持不变。
         let dst_index = read_json(&fixture.dst_ws_dir().join("index.json")).unwrap();
-        let conversations = dst_index.get("conversations").and_then(Value::as_array).unwrap();
+        let conversations = dst_index
+            .get("conversations")
+            .and_then(Value::as_array)
+            .unwrap();
         assert_eq!(conversations.len(), 2);
-        assert_eq!(dst_index.get("current").and_then(Value::as_str), Some(CONV_EXISTING));
+        assert_eq!(
+            dst_index.get("current").and_then(Value::as_str),
+            Some(CONV_EXISTING)
+        );
         let merged = conversations
             .iter()
             .find(|entry| entry.get("id").and_then(Value::as_str) == Some(new_conv.as_str()))
             .expect("merged entry");
         assert_eq!(merged.get("name").and_then(Value::as_str), Some("测试会话"));
-        assert_eq!(merged.get("chatMode").and_then(Value::as_str), Some("craft"));
+        assert_eq!(
+            merged.get("chatMode").and_then(Value::as_str),
+            Some("craft")
+        );
 
         // 会话索引：消息 / 请求 id 全部重映射，requests[].messages[] 与磁盘文件名一致。
         let new_conv_dir = fixture.dst_ws_dir().join(&new_conv);
         let conv_index = read_json(&new_conv_dir.join("index.json")).unwrap();
-        let messages = conv_index.get("messages").and_then(Value::as_array).unwrap();
+        let messages = conv_index
+            .get("messages")
+            .and_then(Value::as_array)
+            .unwrap();
         assert_eq!(messages.len(), 2);
         let mut message_ids: Vec<String> = Vec::new();
         for message in messages {
-            let id = message.get("id").and_then(Value::as_str).unwrap().to_string();
+            let id = message
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_string();
             assert!(is_hex32(&id));
             assert_ne!(id, MSG_1);
             assert_ne!(id, MSG_2);
             assert!(new_conv_dir.join(format!("messages/{id}.json")).is_file());
             message_ids.push(id);
         }
-        let requests = conv_index.get("requests").and_then(Value::as_array).unwrap();
+        let requests = conv_index
+            .get("requests")
+            .and_then(Value::as_array)
+            .unwrap();
         assert_eq!(requests.len(), 1);
-        let new_req = requests[0].get("id").and_then(Value::as_str).unwrap().to_string();
+        let new_req = requests[0]
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
         assert!(is_hex32(&new_req));
         assert_ne!(new_req, REQ_1);
         let req_messages: Vec<String> = requests[0]
@@ -1448,7 +1494,10 @@ mod tests {
             assert_eq!(message.get("id").and_then(Value::as_str), Some(id.as_str()));
             let extra_text = message.get("extra").and_then(Value::as_str).unwrap();
             let extra: Value = serde_json::from_str(extra_text).unwrap();
-            assert_eq!(extra.get("requestId").and_then(Value::as_str), Some(new_req.as_str()));
+            assert_eq!(
+                extra.get("requestId").and_then(Value::as_str),
+                Some(new_req.as_str())
+            );
         }
 
         // 附件按原名复制。
@@ -1458,9 +1507,16 @@ mod tests {
 
         // 源目录保持不变。
         assert!(fixture.src_ws_dir().join(CONV_OLD).is_dir());
-        assert!(fixture.src_ws_dir().join(CONV_OLD).join(format!("messages/{MSG_1}.json")).is_file());
+        assert!(fixture
+            .src_ws_dir()
+            .join(CONV_OLD)
+            .join(format!("messages/{MSG_1}.json"))
+            .is_file());
         let src_index = read_json(&fixture.src_ws_dir().join("index.json")).unwrap();
-        assert_eq!(src_index.get("current").and_then(Value::as_str), Some(CONV_OLD));
+        assert_eq!(
+            src_index.get("current").and_then(Value::as_str),
+            Some(CONV_OLD)
+        );
     }
 
     #[test]
@@ -1490,19 +1546,23 @@ mod tests {
         let original = std::fs::read(fixture.dst_ws_dir().join("index.json")).unwrap();
 
         let missing = "99999999999999999999999999999999";
-        let items = vec![
-            CopyItem {
-                workspace_hash: WS.to_string(),
-                conversation_id: missing.to_string(),
-            },
-        ];
+        let items = vec![CopyItem {
+            workspace_hash: WS.to_string(),
+            conversation_id: missing.to_string(),
+        }];
         let report = copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, DST_UID, &items)
             .expect("returns report");
 
-        assert_eq!(report.get("copied").and_then(Value::as_array).map(Vec::len), Some(0));
+        assert_eq!(
+            report.get("copied").and_then(Value::as_array).map(Vec::len),
+            Some(0)
+        );
         let errors = report.get("errors").and_then(Value::as_array).unwrap();
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].get("conversationId").and_then(Value::as_str), Some(missing));
+        assert_eq!(
+            errors[0].get("conversationId").and_then(Value::as_str),
+            Some(missing)
+        );
 
         // 目标索引未改动、无残留临时目录、源目录不变。
         let after = std::fs::read(fixture.dst_ws_dir().join("index.json")).unwrap();
@@ -1530,14 +1590,23 @@ mod tests {
                 conversation_id: "99999999999999999999999999999999".to_string(),
             },
         ];
-        let report = copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, DST_UID, &items)
-            .unwrap();
-        assert_eq!(report.get("copied").and_then(Value::as_array).map(Vec::len), Some(1));
-        assert_eq!(report.get("errors").and_then(Value::as_array).map(Vec::len), Some(1));
+        let report =
+            copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, DST_UID, &items).unwrap();
+        assert_eq!(
+            report.get("copied").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            report.get("errors").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
 
         let dst_index = read_json(&fixture.dst_ws_dir().join("index.json")).unwrap();
         assert_eq!(
-            dst_index.get("conversations").and_then(Value::as_array).map(Vec::len),
+            dst_index
+                .get("conversations")
+                .and_then(Value::as_array)
+                .map(Vec::len),
             Some(2)
         );
         assert_eq!(
@@ -1553,8 +1622,8 @@ mod tests {
             workspace_hash: WS.to_string(),
             conversation_id: CONV_OLD.to_string(),
         }];
-        let error = copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, SRC_UID, &items)
-            .unwrap_err();
+        let error =
+            copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, SRC_UID, &items).unwrap_err();
         assert!(error.contains("相同"));
     }
 
@@ -1565,8 +1634,12 @@ mod tests {
             workspace_hash: WS.to_string(),
             conversation_id: CONV_OLD.to_string(),
         }];
-        assert!(copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, "default", &items).is_err());
-        assert!(copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, "Public", &items).is_err());
+        assert!(
+            copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, "default", &items).is_err()
+        );
+        assert!(
+            copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, "Public", &items).is_err()
+        );
     }
 
     /// D1 回归：复制后目标目录「零旧 id 残留」。
@@ -1585,7 +1658,10 @@ mod tests {
         }];
         let report = copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, DST_UID, &items)
             .expect("copy ok");
-        assert_eq!(report.get("copied").and_then(Value::as_array).map(Vec::len), Some(1));
+        assert_eq!(
+            report.get("copied").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
 
         // 核心断言：目标工作区目录下，旧 conversationId / messageId / requestId 零残留。
         assert_no_legacy_ids(&fixture.dst_ws_dir(), &[CONV_OLD, MSG_1, MSG_2, REQ_1]);
@@ -1598,9 +1674,12 @@ mod tests {
             .to_string();
         let new_conv_dir = fixture.dst_ws_dir().join(&new_conv);
         let mut new_message_ids: Vec<String> = Vec::new();
-        for entry in std::fs::read_dir(new_conv_dir.join("messages")).unwrap().flatten() {
-            let value: Value = serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap())
-                .unwrap();
+        for entry in std::fs::read_dir(new_conv_dir.join("messages"))
+            .unwrap()
+            .flatten()
+        {
+            let value: Value =
+                serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
             let id = value.get("id").and_then(Value::as_str).unwrap().to_string();
             assert!(is_hex32(&id) && id != MSG_1 && id != MSG_2);
             let extra: Value =
@@ -1634,8 +1713,14 @@ mod tests {
         ];
         let report = copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, DST_UID, &items)
             .expect("returns report");
-        assert_eq!(report.get("copied").and_then(Value::as_array).map(Vec::len), Some(0));
-        assert_eq!(report.get("errors").and_then(Value::as_array).map(Vec::len), Some(2));
+        assert_eq!(
+            report.get("copied").and_then(Value::as_array).map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            report.get("errors").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
 
         assert!(
             !fixture.dst_ws_dir().exists(),
@@ -1653,11 +1738,7 @@ mod tests {
                 continue; // 二进制附件：跳过
             };
             for id in legacy {
-                assert!(
-                    !text.contains(id),
-                    "旧 id {id} 残留在 {}",
-                    path.display()
-                );
+                assert!(!text.contains(id), "旧 id {id} 残留在 {}", path.display());
             }
         }
     }

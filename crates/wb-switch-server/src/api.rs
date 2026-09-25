@@ -189,13 +189,13 @@ fn body_variant(body: &Value) -> WbVariant {
 async fn api_status(RawQuery(query): RawQuery) -> Response {
     let variant = query_variant(query.as_deref());
     let auth = auth_file::read_auth_file(variant);
-    let current = auth.as_ref().and_then(|a| {
+    let current = auth.as_ref().map(|a| {
         let acct = a.get("account").cloned().unwrap_or_else(|| json!({}));
-        Some(json!({
+        json!({
             "uid": account::display_value(&acct, "uid"),
             "nickname": account::display_value(&acct, "nickname"),
             "email": account::display_value(&acct, "email"),
-        }))
+        })
     });
     json_ok(json!({
         "running": cached_workbuddy_running(variant),
@@ -294,7 +294,10 @@ async fn api_vscode_ext_switch(Json(body): Json<Value>) -> Response {
         .unwrap_or("");
     // 默认重启（= 自动关闭并重开）：VS Code 运行时由后端先优雅退出再写入。
     // 显式传 restart=false 时退回「请先完全退出 VS Code」的手动模式。
-    let restart = body.get("restart").and_then(|v| v.as_bool()).unwrap_or(true);
+    let restart = body
+        .get("restart")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     // 可选：切换前把勾选会话复制到目标账号（与 /api/vscode-ext/* 命名风格一致）。
     // 任一条目非法即整包拒绝（与 Tauri 侧 `Option<Vec<CopyItem>>` 的 serde 整包报错同形），
     // 避免「部分成功 + 静默丢弃」让用户误以为全部复制成功。
@@ -399,8 +402,6 @@ async fn api_codebuddy_ide_detect() -> Response {
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
     }
 }
-
-
 
 async fn api_delete(Json(body): Json<Value>) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
@@ -994,6 +995,37 @@ async fn static_handler(uri: Uri) -> Response {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 通知存档（toast 事后可查）
+// ---------------------------------------------------------------------------
+
+/// GET /api/notifications —— 最近的应用内提示（新的在前，最多 100 条）。
+async fn api_notifications() -> Response {
+    match notifications::list() {
+        Ok(items) => json_ok(json!({ "items": items })),
+        Err(error) => json_err(error, StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// POST /api/notifications/record —— 记录一条提示（前端 toast 同步写一份）。
+async fn api_record_notification(Json(body): Json<Value>) -> Response {
+    let level = body.get("level").and_then(|v| v.as_str()).unwrap_or("info");
+    let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let description = body.get("description").and_then(|v| v.as_str());
+    match notifications::record(level, title, description) {
+        Ok(()) => json_ok(json!({ "recorded": true })),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
+}
+
+/// POST /api/notifications/clear —— 清空通知存档。
+async fn api_clear_notifications() -> Response {
+    match notifications::clear() {
+        Ok(()) => json_ok(json!({ "cleared": true })),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{body_variant, checkin_status_item, query_variant};
@@ -1072,36 +1104,5 @@ mod tests {
 
         assert_eq!(item["variant"], "ai");
         assert_eq!(item["statusUnsupported"], true);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 通知存档（toast 事后可查）
-// ---------------------------------------------------------------------------
-
-/// GET /api/notifications —— 最近的应用内提示（新的在前，最多 100 条）。
-async fn api_notifications() -> Response {
-    match notifications::list() {
-        Ok(items) => json_ok(json!({ "items": items })),
-        Err(error) => json_err(error, StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-/// POST /api/notifications/record —— 记录一条提示（前端 toast 同步写一份）。
-async fn api_record_notification(Json(body): Json<Value>) -> Response {
-    let level = body.get("level").and_then(|v| v.as_str()).unwrap_or("info");
-    let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
-    let description = body.get("description").and_then(|v| v.as_str());
-    match notifications::record(level, title, description) {
-        Ok(()) => json_ok(json!({ "recorded": true })),
-        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
-    }
-}
-
-/// POST /api/notifications/clear —— 清空通知存档。
-async fn api_clear_notifications() -> Response {
-    match notifications::clear() {
-        Ok(()) => json_ok(json!({ "cleared": true })),
-        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
     }
 }
