@@ -1128,7 +1128,7 @@ pub fn close_workbuddy(variant: WbVariant, timeout_secs: i64) -> Result<(), Stri
         if wait_process_gone(variant, timeout_secs as f64) {
             return Ok(());
         }
-        return Err("WorkBuddy 进程无法关闭，请手动结束 workbuddy 进程".to_string());
+        Err("WorkBuddy 进程无法关闭，请手动结束 workbuddy 进程".to_string())
     }
 }
 

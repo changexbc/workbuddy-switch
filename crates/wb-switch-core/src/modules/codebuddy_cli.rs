@@ -405,7 +405,7 @@ fn list_codebuddy_cli_pids() -> Vec<u32> {
                 pids.push(pid);
             }
         }
-        return pids;
+        pids
     }
 }
 

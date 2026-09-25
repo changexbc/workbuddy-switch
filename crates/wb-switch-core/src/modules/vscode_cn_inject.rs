@@ -601,7 +601,7 @@ fn encrypt_secret_payload(
                 .ok_or_else(|| linux_v11_key_error(target))?;
             return encrypt_cbc_prefixed(V11_PREFIX, &key, plaintext);
         }
-        return encrypt_cbc_prefixed(V10_PREFIX, &LINUX_V10_KEY, plaintext);
+        encrypt_cbc_prefixed(V10_PREFIX, &LINUX_V10_KEY, plaintext)
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
