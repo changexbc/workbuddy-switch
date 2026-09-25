@@ -30,7 +30,7 @@ type Values = RailPreferencesState & { enabled: Record<SourceId, boolean> };
 
 // Placeholder values stay hidden until the first read has settled.
 const initialEnabled = allEnabled();
-const initialValues: Values = {...defaultPreferences(), animation: false, autostart: false, autostartSupported: true, enabled: initialEnabled};
+const initialValues: Values = {...defaultPreferences(), animation: false, autostart: false, autostartSupported: true, autostartManaged: true, enabled: initialEnabled};
 
 /**
  * Reproduces the old `.styles button` rules, including the 1px inset that the
@@ -226,7 +226,7 @@ export function SettingsForm() {
           {/* 入口暂未开放（见文件头说明）：如需临时启用，恢复下面一行。
           {ready && <section><CustomIntegrationManager disabled={busy || saveState.pending} acquire={autosave.acquire} release={autosave.release} /></section>}
           */}
-          <section>
+          {values.autostartManaged && <section>
             <h2>启动</h2>
             <div className="settings-group">
             <ToggleRow
@@ -239,7 +239,7 @@ export function SettingsForm() {
               onChange={autostart => edit({autostart})}
             />
             </div>
-          </section>
+          </section>}
         </fieldset>
       </form>
       {/* 独立版的应用更新；嵌入宿主、浏览器与旧版独立应用不渲染这一块。 */}

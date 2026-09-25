@@ -10,7 +10,7 @@ try {
   await page.route('**/qa-host.html',route=>route.fulfill({contentType:'text/html',body:'<html><body></body></html>'}));
   await page.goto(`${server.resolvedUrls.local[0]}qa-host.html`);
   await page.evaluate(settings=>{
-    window.qa={settings,prefs:{avatarStyle:'animal',visibleCount:8,animation:true,autostart:false,autostartSupported:true},calls:[],hold:false,fail:false};
+    window.qa={settings,prefs:{avatarStyle:'animal',visibleCount:8,animation:true,autostart:false,autostartSupported:true,autostartManaged:true},calls:[],hold:false,fail:false};
     const sources=['codex','workbuddy','codebuddy-ide','codeg'].map(source=>({source,kind:source==='codeg'?'webhook':'hooks',status:'installed',message:'已配置',locations:[],automatic:true,lastEventAt:null}));
     window.__AGENT_STUDIO_EMBED_HOST__={desktop:true,listen:async()=>()=>{},enableNotifications:async()=>'granted',invoke:async(command,args)=>{
       const q=window.qa;q.calls.push({command,args});
@@ -18,7 +18,7 @@ try {
       if(command.endsWith('|rail_settings_set')){
         if(q.hold)await new Promise(resolve=>q.release=resolve);
         if(q.fail)throw Error('preferences write failed');
-        q.prefs={...args.preferences,autostart:args.autostart,autostartSupported:true};return structuredClone(q.prefs);
+        q.prefs={...args.preferences,autostart:args.autostart,autostartSupported:true,autostartManaged:true};return structuredClone(q.prefs);
       }
       if(command.endsWith('|collector_request')){
         if(args.command==='settings_get')return structuredClone(q.settings);

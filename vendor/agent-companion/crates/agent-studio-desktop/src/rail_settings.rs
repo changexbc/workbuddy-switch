@@ -36,8 +36,11 @@ fn launch_command() -> Result<(Vec<String>, Option<String>), String> {
     if !root.join("package.json").is_file() { return Err("找不到桌面启动项目".into()); }
     Ok((vec![npm.to_string_lossy().into_owned(), "--prefix".into(), root.to_string_lossy().into_owned(), "run".into(), "desktop:dev".into()], Some(path)))
 }
+fn managed(app: &tauri::AppHandle) -> bool {
+    app.state::<std::sync::Arc<super::Service>>().config.manage_autostart
+}
 fn supported(app: &tauri::AppHandle) -> bool {
-    cfg!(target_os = "macos") && app.state::<std::sync::Arc<super::Service>>().config.manage_autostart && launch_command().is_ok()
+    cfg!(target_os = "macos") && managed(app) && launch_command().is_ok()
 }
 fn launch_plist(label: &str, args: &[String], path: Option<&str>) -> String {
     let arguments = args.iter().map(|a| format!("<string>{}</string>", xml(a))).collect::<String>();
@@ -47,6 +50,8 @@ fn launch_plist(label: &str, args: &[String], path: Option<&str>) -> String {
 fn response(app: &tauri::AppHandle, preferences: Preferences) -> Result<Value, String> {
     let mut value = serde_json::to_value(preferences).map_err(|e| e.to_string())?;
     value["autostartSupported"] = json!(supported(app));
+    // Embedded hosts own their own login item, so the settings page hides the row.
+    value["autostartManaged"] = json!(managed(app));
     value["autostart"] = json!(login_path(app)?.exists());
     Ok(value)
 }

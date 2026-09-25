@@ -16,7 +16,7 @@ export function validatePreferences(value: RailPreferences): RailPreferences {
   return { avatarStyle: value.avatarStyle, visibleCount: value.visibleCount, animation: value.animation, size };
 }
 
-const browserFallback = (preferences: RailPreferences): RailPreferencesState => ({ ...preferences, autostart: false, autostartSupported: false });
+const browserFallback = (preferences: RailPreferences): RailPreferencesState => ({ ...preferences, autostart: false, autostartSupported: false, autostartManaged: true });
 
 export async function loadPreferences(): Promise<RailPreferencesState> {
   if (isDesktop()) return desktopCommand('rail_settings_get');

@@ -38,6 +38,7 @@ const DEMO_PREFERENCES: RailPreferencesState = {
   size: 'standard',
   autostart: false,
   autostartSupported: false,
+  autostartManaged: true,
 };
 
 export function createDemoRailOptions(): RailControllerOptions {

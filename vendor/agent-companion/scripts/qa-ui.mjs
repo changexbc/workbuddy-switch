@@ -552,7 +552,7 @@ async function railDesktopPath(){
       invoke:async(command,args)=>{
         window.__hostCalls.push({command,args});
         if(command==='plugin:agent-studio|monitor_state')return{snapshot:window.__state.snapshot,connected:window.__state.connected};
-        if(command==='plugin:agent-studio|rail_settings_get')return{avatarStyle:'animal',visibleCount:8,animation:true,autostart:false,autostartSupported:false};
+        if(command==='plugin:agent-studio|rail_settings_get')return{avatarStyle:'animal',visibleCount:8,animation:true,autostart:false,autostartSupported:false,autostartManaged:true};
         return null;
       },
       enableNotifications:async()=>'granted',

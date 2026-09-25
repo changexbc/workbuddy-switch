@@ -88,5 +88,7 @@ export interface RailPreferences {
 
 export interface RailPreferencesState extends RailPreferences {
   autostartSupported: boolean;
+  /** False when the embedding host owns the login item; the settings page hides the row. */
+  autostartManaged: boolean;
   autostart: boolean;
 }

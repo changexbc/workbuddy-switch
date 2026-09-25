@@ -17,7 +17,7 @@ try {
       listen:async(event,handler)=>{const list=window.__listeners.get(event)||[];list.push(handler);window.__listeners.set(event,list);return()=>window.__listeners.set(event,(window.__listeners.get(event)||[]).filter(item=>item!==handler));},
       invoke:async(command,args)=>{
         if(command==='plugin:agent-studio|monitor_state')return{snapshot:null,connected:true};
-        if(command==='plugin:agent-studio|rail_settings_get')return{avatarStyle:'animal',visibleCount:8,animation:true,autostart:false,autostartSupported:false};
+        if(command==='plugin:agent-studio|rail_settings_get')return{avatarStyle:'animal',visibleCount:8,animation:true,autostart:false,autostartSupported:false,autostartManaged:true};
         if(command==='plugin:agent-studio|open_session_url'){window.__opened.push(args.url);if(window.__failOpen)throw Error('open failed');}
         return null;
       },enableNotifications:async()=>'granted'};
