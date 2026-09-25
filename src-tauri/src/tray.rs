@@ -918,10 +918,17 @@ mod tests {
     fn tray_icon_has_transparency_and_antialiasing() {
         let icon = tray_icon();
         assert_eq!((icon.width(), icon.height()), (36, 36));
-        assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] == 0));
         assert!(icon
             .rgba()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] == 0));
+        assert!(icon
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| (1..=254).contains(&pixel[3])));
     }
 
@@ -963,7 +970,12 @@ mod tests {
         ));
         for (name, bytes) in [("黑猫", black), ("白猫", white)] {
             assert_eq!(bytes.len(), 32 * 32 * 4, "{name}素材尺寸应为 32×32");
-            let px: Vec<&[u8]> = bytes.chunks_exact(4).collect();
+            let px: Vec<&[u8]> = bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p.as_slice())
+                .collect();
             assert!(px.iter().any(|p| p[3] == 0), "{name}背景必须透明");
             assert!(px.iter().any(|p| p[3] == 255), "{name}应存在不透明像素");
             let inks: std::collections::HashSet<&[u8]> =
@@ -975,7 +987,13 @@ mod tests {
             );
         }
         let ink = |bytes: &[u8]| {
-            let p = bytes.chunks_exact(4).find(|p| p[3] == 255).unwrap();
+            let p = bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .find(|p| p[3] == 255)
+                .unwrap()
+                .as_slice();
             p[0] as u32 + p[1] as u32 + p[2] as u32
         };
         assert!(ink(black) < ink(white), "黑猫必须比白猫暗");

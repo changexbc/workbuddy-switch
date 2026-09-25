@@ -53,9 +53,12 @@ jobs:
         run: cargo test -p wb-switch-core
 
       # linux 专属 cfg 分支只在 ubuntu 上展开（macOS 侧由 lint job 覆盖）。
+      # rust-embed 要求 #[folder] 目录存在，先建 dist 占位（前端产物由 build.yml 产出）。
       - name: Clippy (linux cfg)
         if: runner.os == 'Linux'
-        run: cargo clippy -p wb-switch-core -p wb-switch-server --all-targets --no-deps -- -D warnings
+        run: |
+          mkdir -p dist
+          cargo clippy -p wb-switch-core -p wb-switch-server --all-targets --no-deps -- -D warnings
 
   # 前端类型、格式与 lint 门禁。跑在 macOS 上：clippy 按宿主平台展开 cfg 分支，
   # 与开发者本机一致，本地全绿即 CI 全绿。linux 专属分支由 rust-tests 的 ubuntu
