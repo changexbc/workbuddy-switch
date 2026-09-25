@@ -538,7 +538,18 @@ fn insert_session_copy(
         match col.as_str() {
             "id" => vals.push(rusqlite::types::Value::Text(new_cid.to_string())),
             "user_id" => vals.push(rusqlite::types::Value::Text(target_uid.to_string())),
-            "created_at" | "updated_at" => vals.push(rusqlite::types::Value::Integer(now_ms())),
+            // 继承源会话的时间戳，而不是落成复制时刻：
+            // 客户端会话列表按 created_at/updated_at 降序排列，写当前时间会把批量复制的
+            // 历史会话顶到列表最上方，把用户正在进行的对话挤下去。源值为空（脏数据）时
+            // 才回退到当前时刻，保证排序列始终可比较。
+            "created_at" | "updated_at" => {
+                let inherited = matches!(&v, rusqlite::types::Value::Integer(ts) if *ts > 0);
+                vals.push(if inherited {
+                    v
+                } else {
+                    rusqlite::types::Value::Integer(now_ms())
+                });
+            }
             "deleted_at" => vals.push(rusqlite::types::Value::Null),
             _ => vals.push(v),
         }
@@ -5134,6 +5145,71 @@ mod tests {
         assert_eq!(title, "旧标题"); // 普通列原样保留
         assert_eq!(deleted_at, None);
         assert_eq!(is_playground, 0);
+    }
+
+    /// 回归 #103：副本若落成复制时刻的时间戳，批量复制的历史会话会被顶到列表最上方，
+    /// 把用户正在进行的对话挤下去，看起来像原有对话被覆盖或丢失。
+    #[test]
+    fn insert_session_copy_inherits_source_timestamps() {
+        let env = ready_env("insert-timestamps");
+        let conn = Connection::open(env.paths.workbuddy_db()).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, cwd, created_at, updated_at, deleted_at, is_playground)
+             VALUES ('src-1', 'uid-a', '旧标题', '/ws', 1000, 2000, NULL, 0)",
+            [],
+        )
+        .unwrap();
+        // 源行时间戳为空（脏数据）：排序列不能落空，回退到复制时刻
+        conn.execute(
+            "INSERT INTO sessions (id, user_id, title, cwd, created_at, updated_at, deleted_at, is_playground)
+             VALUES ('src-null', 'uid-a', '空时间戳', '/ws', NULL, NULL, NULL, 0)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(
+            insert_session_copy(&env.paths(), "new-1", "src-1", "uid-a", "uid-b").unwrap(),
+            DbCopyOutcome::Inserted
+        );
+        let before = now_ms();
+        assert_eq!(
+            insert_session_copy(&env.paths(), "new-2", "src-null", "uid-a", "uid-b").unwrap(),
+            DbCopyOutcome::Inserted
+        );
+        let after = now_ms();
+
+        let conn = Connection::open(env.paths.workbuddy_db()).unwrap();
+        let inherited: (i64, i64) = conn
+            .query_row(
+                "SELECT created_at, updated_at FROM sessions WHERE id = 'new-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            inherited,
+            (1000, 2000),
+            "副本必须继承源会话的时间戳，而不是写成复制时刻"
+        );
+
+        let fallback: (i64, i64) = conn
+            .query_row(
+                "SELECT created_at, updated_at FROM sessions WHERE id = 'new-2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(
+            fallback.0 >= before && fallback.0 <= after,
+            "源时间戳为空时回退到复制时刻，实际 {}",
+            fallback.0
+        );
+        assert!(
+            fallback.1 >= before && fallback.1 <= after,
+            "源时间戳为空时回退到复制时刻，实际 {}",
+            fallback.1
+        );
     }
 
     #[test]
