@@ -25,6 +25,12 @@ npm/bin/wb-switch-*
 accounts.json
 backups/
 
+# 本地素材与浏览器调试残留
+video/
+.playwright-cli/
+.playwright-mcp/
+.pnpm-store/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
