@@ -52,8 +52,14 @@ jobs:
       - name: Run tests
         run: cargo test -p wb-switch-core
 
+      # linux 专属 cfg 分支只在 ubuntu 上展开（macOS 侧由 lint job 覆盖）。
+      - name: Clippy (linux cfg)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p wb-switch-core -p wb-switch-server --all-targets --no-deps -- -D warnings
+
   # 前端类型、格式与 lint 门禁。跑在 macOS 上：clippy 按宿主平台展开 cfg 分支，
-  # 与开发者本机一致，本地全绿即 CI 全绿（linux/windows 专属分支不在此 job 覆盖）。
+  # 与开发者本机一致，本地全绿即 CI 全绿。linux 专属分支由 rust-tests 的 ubuntu
+  # job 覆盖，windows 分支暂未纳入。
   # clippy 必须带 --no-deps：vendor/agent-companion 是 path 依赖快照，其告警不归本仓库。
   lint:
     name: lint (tsc + fmt + clippy + server tests)
@@ -87,6 +93,13 @@ jobs:
       # tsc 顺带产出 dist：clippy 检查 src-tauri 时 tauri-build 要求 frontendDist 存在。
       - name: Type-check and build frontend
         run: npm run build
+
+      # tauri-build 还要求 externalBin 存在。这里只放占位文件让编译检查通过；
+      # 真实 runtime 由 build.yml（发版）与 scripts/prepare-agent-companion.mjs 产出。
+      - name: Stub companion runtime binary
+        run: |
+          mkdir -p src-tauri/binaries
+          touch "src-tauri/binaries/agent-studio-runtime-$(rustc -vV | sed -n "s/^host: //p")"
 
       - name: Check formatting
         run: cargo fmt --check -p wb-switch-core -p wb-switch-server -p wb-switch-rust
