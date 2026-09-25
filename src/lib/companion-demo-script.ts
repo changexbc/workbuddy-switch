@@ -148,6 +148,17 @@ export const COMPANION_DEMO_ROUND: { phase: CompanionDemoStatus; holdMs: number 
   { phase: "error", holdMs: 4000 },
 ];
 
+/**
+ * How long the very first `running` frame is held.
+ *
+ * The frame URL carries `?welcome`, which makes the rail play its opening
+ * animation: a line-drawn kitten traces out of the rail for ~7s. The rail
+ * aborts that animation the moment a session turns urgent (`wait`), so the
+ * first frame has to outlast it — roughly 0.4s of preference loading plus the
+ * animation itself. Later rounds keep their normal pacing.
+ */
+export const COMPANION_DEMO_INTRO_HOLD_MS = 8500;
+
 function runningFrames(): Record<string, CompanionDemoFrame> {
   const frames: Record<string, CompanionDemoFrame> = {};
   for (const member of COMPANION_DEMO_CAST) frames[member.id] = { status: "running" };

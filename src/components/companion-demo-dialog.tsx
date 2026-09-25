@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   COMPANION_DEMO_CHANNEL,
+  COMPANION_DEMO_INTRO_HOLD_MS,
   COMPANION_DEMO_ROUND,
   buildCompanionDemoSnapshot,
   postCompanionDemoSnapshot,
@@ -19,8 +20,13 @@ interface CompanionDemoFrameMessage {
 const BLOCKED_FALLBACK = "该操作仅在桌面版可用";
 const ACTIVATE_CLIENT_NOTICE = "演示不会打开真实会话";
 
-/** The upstream demo build of the rail; `BASE_URL` keeps it valid under any hosting prefix. */
-const RAIL_SRC = `${import.meta.env.BASE_URL}companion-demo/desktop.html`;
+/**
+ * The upstream demo build of the rail; `BASE_URL` keeps it valid under any
+ * hosting prefix. `?welcome` is the rail's own switch for its opening kitten
+ * animation — the demo build has no desktop host, so without it the animation
+ * is skipped.
+ */
+const RAIL_SRC = `${import.meta.env.BASE_URL}companion-demo/desktop.html?welcome`;
 
 interface CompanionDemoDialogProps {
   open: boolean;
@@ -61,6 +67,9 @@ export function CompanionDemoDialog({ open, onOpenChange }: CompanionDemoDialogP
       if (generationRef.current !== generation) return;
       const step = COMPANION_DEMO_ROUND[index];
       postCompanionDemoSnapshot(frameRef.current, buildCompanionDemoSnapshot(step.phase, `demo-round-${cycle + 1}`));
+      // The opening round waits out the rail's welcome animation (see
+      // `COMPANION_DEMO_INTRO_HOLD_MS`); an urgent session would abort it.
+      const holdMs = cycle === 0 && index === 0 ? COMPANION_DEMO_INTRO_HOLD_MS : step.holdMs;
       timerRef.current = window.setTimeout(() => {
         index += 1;
         if (index >= COMPANION_DEMO_ROUND.length) {
@@ -68,7 +77,7 @@ export function CompanionDemoDialog({ open, onOpenChange }: CompanionDemoDialogP
           cycle += 1;
         }
         play();
-      }, step.holdMs);
+      }, holdMs);
     };
     play();
   }, []);
