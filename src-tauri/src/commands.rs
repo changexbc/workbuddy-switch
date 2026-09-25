@@ -9,9 +9,9 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide, credit_usage,
-    credits, error_log, export_import, limits, notifications, oauth, process, rate_limit_events,
-    rate_limit_hook, refresh, rotate, session, switch, token_stats, travel, update,
-    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
+    credits, error_log, export_import, jetbrains, limits, notifications, oauth, process,
+    rate_limit_events, rate_limit_hook, refresh, rotate, session, switch, token_stats, travel,
+    update, variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
 
 #[derive(Serialize)]
@@ -244,6 +244,48 @@ pub async fn get_codebuddy_ide_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codebuddy_ide::status)
         .await
         .map_err(|error| format!("查询 CodeBuddy IDE 状态失败: {error}"))
+}
+
+/// GET /api/jetbrains/status —— JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件状态。
+///
+/// async + spawn_blocking：状态检测会跑 CIM / tasklist 等子进程，账号页每次挂载
+/// 都会刷新，若在主线程执行会造成页面卡顿/闪窗。
+#[tauri::command]
+pub async fn get_jetbrains_status() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(jetbrains::status)
+        .await
+        .map_err(|error| format!("查询 JetBrains IDE 状态失败: {error}"))
+}
+
+/// POST /api/jetbrains/switch —— 注入凭证到 JetBrains IDE 的 CodeBuddy 插件。
+///
+/// `restart` 缺省 true：IDE 正在运行时由后端「优雅退出 → 写入 → 重新打开」，
+/// 传 false 则退回「请先完全退出 IDE」的手动模式。
+///
+/// async + spawn_blocking：等待 IDE 退出 + 读写 secret-storage.xml 都可能阻塞。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn switch_jetbrains_account(
+    account_id: String,
+    restart: Option<bool>,
+) -> Result<Value, String> {
+    if account_id.trim().is_empty() {
+        return Err("缺少 accountId".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        jetbrains::switch_account(&account_id, restart.unwrap_or(true))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// POST /api/jetbrains/detect —— 读取本机 JetBrains IDE 插件当前登录并尝试匹配账号库。
+///
+/// async + spawn_blocking：会读多份 secret-storage.xml，避免阻塞主线程。
+#[tauri::command]
+pub async fn detect_jetbrains_account() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(jetbrains::detect_current_account)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]

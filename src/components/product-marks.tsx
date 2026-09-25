@@ -169,6 +169,38 @@ export function CodeBuddyAiIdeMark({ size = 32, className }: MarkProps) {
   );
 }
 
+/**
+ * JetBrains IDE（IntelliJ IDEA / PyCharm）标记：官方 2021 品牌字块的简化版。
+ *
+ * 黑色圆角方块 + 右下角品牌渐变斜条（粉→黄→绿），不用真实 logo 资产，
+ * 与相邻的深色 CodeBuddy / VS Code 字块视觉密度一致。
+ */
+export function JetbrainsMark({ size = 32, className }: MarkProps) {
+  const id = `jb-gradient-${size}`;
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[22%] border border-white/10 bg-zinc-950 shadow-sm",
+        className,
+      )}
+      style={{ width: size, height: size }}
+    >
+      <svg viewBox="0 0 24 24" className="size-[72%]" fill="none">
+        <defs>
+          <linearGradient id={id} x1="12" y1="20" x2="20" y2="12" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="#EE318C" />
+            <stop offset="0.5" stopColor="#FDB60D" />
+            <stop offset="1" stopColor="#21D789" />
+          </linearGradient>
+        </defs>
+        <rect x="12" y="12" width="10" height="10" fill={`url(#${id})`} />
+        <rect x="2" y="2" width="7" height="3" fill="#EEEDFF" />
+      </svg>
+    </span>
+  );
+}
+
 export function StatusDot({ on, className }: { on: boolean; className?: string }) {
   return (
     <span

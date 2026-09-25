@@ -20,6 +20,7 @@ import {
   CodeBuddyAiIdeMark,
   CodeBuddyCnIdeMark,
   CodeBuddyMark,
+  JetbrainsMark,
   VscodeExtMark,
   WorkBuddyAiMark,
   WorkBuddyMark,
@@ -56,7 +57,7 @@ import {
   variantSupportsTravel,
   variantUsesIntlCodebuddyIde,
 } from "@/lib/variant";
-import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, RateLimitEntry, TravelConfig, TravelStatus, VscodeExtStatus } from "@/lib/types";
+import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, JetbrainsStatus, RateLimitEntry, TravelConfig, TravelStatus, VscodeExtStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -203,6 +204,8 @@ export default function AccountsPage() {
   const [vscodeExt, setVscodeExt] = useState<VscodeExtStatus | null>(null);
   /** VS Code 扩展切换弹窗目标（null=关闭）；切换与可选会话复制在弹窗内完成。 */
   const [vscodeSwitchAccount, setVscodeSwitchAccount] = useState<AccountMeta | null>(null);
+  const [jetbrains, setJetbrains] = useState<JetbrainsStatus | null>(null);
+  const [jetbrainsSwitchingId, setJetbrainsSwitchingId] = useState<string | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
   /** 刷新按钮触发的批量签到进行中 */
   const [checkinAllRunning, setCheckinAllRunning] = useState(false);
@@ -324,6 +327,14 @@ export default function AccountsPage() {
     }
   }
 
+  async function refreshJetbrainsStatus() {
+    try {
+      setJetbrains(await api.getJetbrainsStatus());
+    } catch {
+      setJetbrains(null);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     void refreshCodebuddyCliStatus();
@@ -344,10 +355,16 @@ export default function AccountsPage() {
         } catch {
           /* VS Code 未登录或 Safe Storage 不可用时静默 */
         }
+        try {
+          await api.detectJetbrainsAccount();
+        } catch {
+          /* JetBrains 插件未登录时静默 */
+        }
       }
       if (!cancelled) {
         await refreshCodebuddyCnIdeStatus();
         await refreshVscodeExtStatus();
+        await refreshJetbrainsStatus();
       }
     })();
     return () => {
@@ -686,6 +703,29 @@ export default function AccountsPage() {
     }
   }
 
+  async function onSwitchJetbrains(account: AccountMeta) {
+    if (jetbrainsSwitchingId !== null) return;
+    setJetbrainsSwitchingId(account.id);
+    const toastId = toast.loading("正在切换 JetBrains IDE…", {
+      description: "将注入凭证，运行中的 IDEA / PyCharm 会先退出再自动重开",
+    });
+    try {
+      const result = await api.switchJetbrainsAccount(account.id, true);
+      await refreshJetbrainsStatus();
+      toast.success("JetBrains IDE 已切换", {
+        id: toastId,
+        description: result.message || result.account,
+      });
+    } catch (error) {
+      toast.error("JetBrains IDE 切换失败", {
+        id: toastId,
+        description: api.asError(error),
+      });
+    } finally {
+      setJetbrainsSwitchingId(null);
+    }
+  }
+
   async function onInstallCodebuddyCli() {
     // 桌面 App（Tauri WebView）不支持 window.confirm，改用 Dialog 确认
     setInstallConfirmOpen(true);
@@ -749,6 +789,10 @@ export default function AccountsPage() {
   const vscodeExtCurrentAccountId = vscodeExt?.activeAccountId;
   const vscodeExtCurrentName = vscodeExt?.installed
     ? vscodeExt.activeAccountName || "未检测到"
+    : "未接入";
+  const jetbrainsCurrentAccountId = jetbrains?.activeAccountId;
+  const jetbrainsCurrentName = jetbrains?.installed
+    ? jetbrains.activeAccountName || "未检测到"
     : "未接入";
   const codebuddyUsesSettingsEnv = codebuddyCli?.authMode === "settings-env";
   return (
@@ -817,6 +861,20 @@ export default function AccountsPage() {
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
                   VS Code CodeBuddy 插件：{!vscodeExt?.installed ? "未检测到 VS Code" : !vscodeExt.extensionInstalled ? "未安装插件" : vscodeExt.running ? "运行中" : "已接入"} · 当前账号：{vscodeExtCurrentName}
+                </span>
+              </span>
+              <span className="group relative inline-flex cursor-default">
+                <span
+                  className={
+                    jetbrains?.installed && jetbrains?.pluginInstalled
+                      ? "inline-flex rounded-[22%] bg-primary p-[2px] shadow-sm shadow-primary/40"
+                      : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
+                  }
+                >
+                  <JetbrainsMark size={28} />
+                </span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
+                  JetBrains IDE 插件：{!jetbrains?.installed ? "未检测到 JetBrains IDE" : !jetbrains.pluginInstalled ? "未安装插件" : jetbrains.running ? "运行中" : "已接入"} · 当前账号：{jetbrainsCurrentName}
                 </span>
               </span>
               <span className="group relative inline-flex cursor-default">
@@ -1038,6 +1096,13 @@ export default function AccountsPage() {
                 vscodeExtActive={a.id === vscodeExtCurrentAccountId}
                 vscodeExtBusy={vscodeSwitchAccount !== null}
                 onSwitchVscodeExt={setVscodeSwitchAccount}
+                jetbrainsInstalled={Boolean(jetbrains?.installed)}
+                jetbrainsPluginInstalled={Boolean(jetbrains?.pluginInstalled)}
+                jetbrainsAvailable={Boolean(jetbrains?.installed && jetbrains?.pluginInstalled)}
+                jetbrainsActive={a.id === jetbrainsCurrentAccountId}
+                jetbrainsBusy={jetbrainsSwitchingId !== null}
+                jetbrainsLoading={jetbrainsSwitchingId === a.id}
+                onSwitchJetbrains={onSwitchJetbrains}
                 featuresDisabled={false}
               />
             ))}

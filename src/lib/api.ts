@@ -38,6 +38,8 @@ import type {
   UpdateSnapshot,
   VscodeExtStatus,
   VscodeExtSwitchResult,
+  JetbrainsStatus,
+  JetbrainsSwitchResult,
   VscodeSessionList,
   VscodeSessionRef,
   WbVariant,
@@ -53,7 +55,7 @@ import { screenshotDemoResponse } from "./screenshot-demo";
 const API_BASE = "http://127.0.0.1:57890";
 
 const DEMO_READ_COMMANDS = new Set([
-  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_codebuddy_ide_status", "get_vscode_ext_status", "list_vscode_sessions", "get_checkin_status",
+  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_codebuddy_ide_status", "get_vscode_ext_status", "get_jetbrains_status", "list_vscode_sessions", "get_checkin_status",
   "get_credit_expiry", "get_credit_statistics", "get_auto_checkin_config",
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
@@ -104,6 +106,9 @@ const ROUTES: Record<string, Route> = {
   switch_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/switch" },
   detect_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/detect" },
   get_vscode_ext_status: { method: "GET", path: "/api/vscode-ext/status" },
+  get_jetbrains_status: { method: "GET", path: "/api/jetbrains/status" },
+  switch_jetbrains_account: { method: "POST", path: "/api/jetbrains/switch" },
+  detect_jetbrains_account: { method: "POST", path: "/api/jetbrains/detect" },
   list_vscode_sessions: { method: "GET", path: "/api/vscode-ext/sessions" },
   switch_vscode_ext_account: { method: "POST", path: "/api/vscode-ext/switch" },
   vscode_session_links_preview: { method: "POST", path: "/api/vscode-ext/session-links" },
@@ -325,6 +330,30 @@ export function detectVscodeExtAccount(): Promise<{
   message?: string;
 }> {
   return call("detect_vscode_ext_account");
+}
+
+export function getJetbrainsStatus(): Promise<JetbrainsStatus> {
+  return call("get_jetbrains_status");
+}
+
+/**
+ * 切换 JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件账号。
+ *
+ * `restart` 默认 true：IDE 运行时由后端先优雅退出、写入后再重新打开；
+ * 传 false 退回「请先完全退出 IDE」的手动模式（不在 IDE 中自动操作）。
+ */
+export function switchJetbrainsAccount(accountId: string, restart = true): Promise<JetbrainsSwitchResult> {
+  return call("switch_jetbrains_account", { accountId, restart });
+}
+
+export function detectJetbrainsAccount(): Promise<{
+  ok: boolean;
+  found: boolean;
+  matched?: boolean;
+  accountId?: string;
+  message?: string;
+}> {
+  return call("detect_jetbrains_account");
 }
 
 export function getCodebuddyIdeStatus(): Promise<CodeBuddyCnIdeStatus> {
