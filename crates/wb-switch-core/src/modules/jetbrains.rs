@@ -247,18 +247,25 @@ fn parse_secret_entries(content: &str) -> Vec<(String, String)> {
     entries
 }
 
-/// 序列化 Entry 列表为 JDOM 兼容的 secret-storage.xml 内容。
+/// 序列化 Entry 列表为 JetBrains 平台持久化格式。
+///
+/// **必须与平台真实写盘格式一致**（实测样本）：`<application><component
+/// name="SecretStorage"><Scores>…`。SecretStorage 的 `getState()` 返回的
+/// `MapStorage` 根会被平台展平——组件文件里没有这一层；若照反编译代码写成
+/// 裸 `<MapStorage>` 顶层，平台读回时整体丢弃（表现为写入的 key 消失、
+/// 插件显示未登录）。
 fn serialize_secret_entries(entries: &[(String, String)]) -> String {
-    let mut out =
-        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<MapStorage>\n  <Scores>\n");
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<application>\n  <component name=\"SecretStorage\">\n    <Scores>\n",
+    );
     for (key, value) in entries {
         out.push_str(&format!(
-            "    <Entry key=\"{}\" value=\"{}\" />\n",
+            "      <Entry key=\"{}\" value=\"{}\" />\n",
             xml_escape_attr(key),
             xml_escape_attr(value)
         ));
     }
-    out.push_str("  </Scores>\n</MapStorage>\n");
+    out.push_str("    </Scores>\n  </component>\n</application>\n");
     out
 }
 
@@ -1103,13 +1110,39 @@ mod tests {
             ("other.key".to_string(), "plain & <value>".to_string()),
             (SECRET_KEY.to_string(), value.to_string()),
         ]);
+        // 必须是平台真实写盘格式（application + component 包装，见 serialize 文档）。
         assert!(content.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+        assert!(content.contains("<application>"));
+        assert!(content.contains("<component name=\"SecretStorage\">"));
         let entries = parse_secret_entries(&content);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, "other.key");
         assert_eq!(entries[0].1, "plain & <value>");
         assert_eq!(entries[1].0, SECRET_KEY);
         assert_eq!(entries[1].1, value);
+    }
+
+    /// 平台真实落盘样本（实机登录产生，脱敏）必须可解析——防写入端与平台
+    /// 格式脱节导致读回失败（写入的 key 被整体丢弃、插件显示未登录）。
+    #[test]
+    fn secret_entries_parse_real_platform_sample() {
+        let sample = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n\
+<application>\n  \
+<component name=\"SecretStorage\">\n    \
+<Scores>\n      \
+<Entry key=\"CodeBuddy-Product-Cache\" value=\"1790363102226\" />\n      \
+<Entry key=\"Tencent-Cloud.coding-copilot.new.accessToken\" value=\"{&quot;a&quot;:[1,2],&quot;b&quot;:&quot;x&amp;y&quot;}\" />\n    \
+</Scores>\n  \
+</component>\n\
+</application>\n";
+        let entries = parse_secret_entries(sample);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].0, SECRET_KEY);
+        assert_eq!(entries[1].1, r#"{"a":[1,2],"b":"x&y"}"#);
+        // 反序列化后仍是平台格式（可被 IDE 读回）
+        let rewritten = serialize_secret_entries(&entries);
+        assert!(rewritten.contains("<component name=\"SecretStorage\">"));
+        assert_eq!(parse_secret_entries(&rewritten), entries);
     }
 
     #[test]
