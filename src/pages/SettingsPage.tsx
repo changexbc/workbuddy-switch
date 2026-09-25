@@ -49,6 +49,7 @@ import type {
 } from "@/lib/types";
 import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
 import { useUpdateState } from "@/lib/use-update-state";
+import { changeCompanionEnabled, reloadCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { cn } from "@/lib/utils";
 import { accountVariant, variantSupportsCheckin, variantSupportsTravel } from "@/lib/variant";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
@@ -1534,46 +1535,14 @@ function StartupCard() {
 
 /** 桌面版 Agent Companion：状态以宿主后端的持久化结果为准。 */
 function CompanionCard() {
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
-
-  async function load() {
-    setLoadFailed(false);
-    try {
-      setEnabled(await api.getCompanionEnabled());
-    } catch (error) {
-      setLoadFailed(true);
-      toast.error("悬浮窗状态读取失败", { description: api.asError(error) });
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    void api.getCompanionEnabled()
-      .then((value) => {
-        if (!cancelled) setEnabled(value);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setLoadFailed(true);
-          toast.error("悬浮窗状态读取失败", { description: api.asError(error) });
-        }
-      });
-    return () => { cancelled = true; };
-  }, []);
+  const { enabled, busy, error } = useCompanionEnabled();
 
   async function onToggle(next: boolean) {
-    if (busy || enabled === null) return;
-    setBusy(true);
     try {
-      const confirmed = await api.setCompanionEnabled(next);
-      setEnabled(confirmed);
+      const confirmed = await changeCompanionEnabled(next);
       toast.success(confirmed ? "已启用 Agent Companion 悬浮窗" : "已关闭 Agent Companion 悬浮窗");
-    } catch (error) {
-      toast.error("悬浮窗设置失败", { description: api.asError(error) });
-    } finally {
-      setBusy(false);
+    } catch (cause) {
+      toast.error("悬浮窗设置失败", { description: api.asError(cause) });
     }
   }
 
@@ -1595,8 +1564,8 @@ function CompanionCard() {
           htmlFor="companion-enabled"
         >
           <div className="flex items-center gap-2">
-            {loadFailed && enabled === null ? (
-              <Button size="sm" variant="outline" onClick={() => void load()}>重试</Button>
+            {error && enabled === null ? (
+              <Button size="sm" variant="outline" onClick={() => void reloadCompanionEnabled()}>重试</Button>
             ) : null}
             {enabled ? (
               <Button size="sm" variant="outline" onClick={() => void openSettings()}>悬浮窗设置</Button>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { ArrowUp, Loader2, MessagesSquare, Settings, Sparkles, User } from "lucide-react";
 
@@ -11,20 +12,89 @@ import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import companionTrayIcon from "@/assets/agent-companion-tray.png";
 import { demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
+import { changeCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useRotateDeferredNotice } from "@/lib/use-rotate-deferred-notice";
 import { useUpdateState } from "@/lib/use-update-state";
 import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
 import { useAccountsStore } from "@/stores/accounts";
 
+function CompanionFooter() {
+  const { enabled, busy } = useCompanionEnabled();
+
+  async function onToggle() {
+    if (enabled === null) return;
+    try {
+      const confirmed = await changeCompanionEnabled(!enabled);
+      toast.success(confirmed ? "已启用 Agent Companion 悬浮窗" : "已关闭 Agent Companion 悬浮窗");
+    } catch (cause) {
+      toast.error("悬浮窗设置失败", { description: api.asError(cause) });
+    }
+  }
+
+  async function openSettings() {
+    try {
+      await api.openCompanionSettings();
+    } catch (cause) {
+      toast.error("打开悬浮窗设置失败", { description: api.asError(cause) });
+    }
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-1 text-sidebar-foreground">
+      <AlertDialog>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <AlertDialogTrigger asChild>
+              <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗" disabled={enabled === null || busy}>
+                <img src={companionTrayIcon} alt="" className={cn("size-6 object-contain transition-all", !enabled && "grayscale opacity-55")} />
+              </Button>
+            </AlertDialogTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="top">会话悬浮窗</TooltipContent>
+        </Tooltip>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{enabled ? "关闭会话悬浮窗？" : "开启会话悬浮窗？"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {enabled
+                ? "关闭后悬浮栏将隐藏，并停止 wb-switch 中的会话监听。"
+                : "开启后会显示悬浮栏，并开始监听会话状态。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void onToggle()}>{enabled ? "确认关闭" : "确认开启"}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="悬浮窗设置" disabled={!enabled} onClick={() => void openSettings()}>
+            <Settings className="size-4" aria-hidden="true" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">悬浮窗设置</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 function UpdateCenter({ running }: { running: boolean | undefined }) {
   const version = useAccountsStore((s) => s.status?.version);
   const snapshot = useUpdateState();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const showCompanion = api.isDesktop() && !demoModeEnabled;
 
   // 阶段由 Rust 更新服务经 `update-state` 推送（托盘同源），前端不再轮询检查。
   // 已知目标版本时，检查中 / 失败也要保留入口，与托盘「升级到 vX / 点击重试」对齐。
@@ -51,9 +121,13 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
     <>
       <section className="mt-auto border-t border-sidebar-border px-2 pt-3 text-xs">
         <div className="flex items-center gap-2 text-[13px] text-sidebar-foreground">
-          <StatusDot on={Boolean(running)} />
-          <span className="min-w-0 flex-1 truncate">WorkBuddy</span>
-          <div className="flex shrink-0 items-center gap-1.5">
+          {showCompanion ? <CompanionFooter /> : (
+            <>
+              <StatusDot on={Boolean(running)} />
+              <span className="min-w-0 flex-1 truncate">WorkBuddy</span>
+            </>
+          )}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <span className="text-sidebar-foreground/50">v{version || "?"}</span>
             {hasUpdate && (
               <Tooltip>
