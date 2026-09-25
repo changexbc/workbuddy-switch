@@ -409,7 +409,7 @@ fn running_ides() -> Vec<RunningIde> {
         .collect();
         let mut rows = Vec::new();
         for (pid, args) in process::macos_rows_by_patterns(&patterns) {
-            let bundle = process::extract_app_bundle_from_args(&args).map(PathBuf::from);
+            let bundle = process::extract_app_bundle_from_args(&args);
             let config_dir_name = bundle
                 .as_deref()
                 .and_then(|b| data_dir_name_for_install_root(&b.join("Contents/Resources")));
@@ -508,13 +508,13 @@ mod win_close {
 
     #[link(name = "user32")]
     extern "system" {
-        fn EnumWindows(lpEnumFunc: WNDENUMPROC, lParam: isize) -> i32;
+        fn EnumWindows(lpEnumFunc: WndEnumProc, lParam: isize) -> i32;
         fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
         fn IsWindowVisible(hwnd: isize) -> i32;
         fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
         fn SetForegroundWindow(hwnd: isize) -> i32;
     }
-    type WNDENUMPROC = Option<unsafe extern "system" fn(isize, isize) -> i32>;
+    type WndEnumProc = Option<unsafe extern "system" fn(isize, isize) -> i32>;
 
     const WM_SYSCOMMAND: u32 = 0x0112;
     const SC_CLOSE: usize = 0xF060;
@@ -552,16 +552,14 @@ mod win_close {
 
     /// 对目标 PID 发出 `SC_CLOSE`；返回是否命中了至少一个窗口。
     fn post_sc_close(windows: &[WindowRow], pid: u32) -> bool {
-        let mut sent = false;
-        for w in windows.iter().filter(|w| w.pid == pid) {
-            unsafe {
-                PostMessageW(w.hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
-            }
-            sent = true;
-            // 一个实例发一次就够：确认框由 IDE 自己弹，多发可能叠加多个对话框。
-            break;
+        let Some(w) = windows.iter().find(|w| w.pid == pid) else {
+            return false;
+        };
+        unsafe {
+            PostMessageW(w.hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
         }
-        sent
+        // 一个实例发一次就够：确认框由 IDE 自己弹，多发可能叠加多个对话框。
+        true
     }
 
     /// 向确认对话框发送 Enter（默认按钮 = 退出）。焦点切换是 best-effort，
