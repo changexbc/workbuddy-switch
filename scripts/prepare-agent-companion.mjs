@@ -17,6 +17,9 @@ if (!/^[0-9a-f]{40}$/.test(version.revision) || version.interfaceVersion !== 1) 
 }
 console.log(`Agent Companion source: ${version.revision}, host interface: ${version.interfaceVersion}`);
 
+// Windows 上 npm 是 .cmd，execFileSync 不会像 shell 那样解析 PATHEXT。
+const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+
 const target = process.env.AGENT_COMPANION_TARGET
   || execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: (.+)$/m)?.[1];
 if (!target) throw new Error('Could not determine Rust target; set AGENT_COMPANION_TARGET');
@@ -25,8 +28,8 @@ const suffix = target.includes('windows') ? '.exe' : '';
 if (mode !== 'copy') {
   // The archived source carries its own lockfiles, keeping the plugin, UI and
   // runtime on one revision. A clean checkout has no installed dependencies.
-  execFileSync('npm', ['ci'], { cwd: companion, stdio: 'inherit' });
-  execFileSync('npm', ['run', 'build:embed'], { cwd: companion, stdio: 'inherit' });
+  execFileSync(npm, ['ci'], { cwd: companion, stdio: 'inherit' });
+  execFileSync(npm, ['run', 'build:embed'], { cwd: companion, stdio: 'inherit' });
   execFileSync('cargo', [
     'build', '--release', '--locked', '--manifest-path', path.join(companion, 'Cargo.toml'),
     '-p', 'agent-studio-runtime', '--target', target,

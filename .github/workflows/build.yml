@@ -113,6 +113,10 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+          # 该 action 默认给 RUSTFLAGS 加 -D warnings，会把 vendor/agent-companion
+          # 快照在 linux cfg 下的 dead_code 告警升级成错误。发版构建不需要这层门禁
+          # （自有代码的告警由 test.yml 的 lint job 把关）。
+          rustflags: ""
 
       # cargo 缓存：依赖 + 编译产物，增量编译大幅提速（Cargo.lock 不变时命中）
       - name: Cache cargo
