@@ -1,1 +1,17 @@
-<!doctype html><html lang="zh-CN"><meta charset="UTF-8"><meta http-equiv="refresh" content="0;url=desktop.html"><title>Agent Companion</title><a href="desktop.html">打开会话栏</a></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Agent Companion</title>
+  <noscript><meta http-equiv="refresh" content="0;url=desktop.html"></noscript>
+</head>
+<body>
+  <script type="module">
+    // The demo build (published at the GitHub Pages root) opens the web demo;
+    // every other build and the dev server keep the previous destination — the
+    // rail itself.
+    location.replace(import.meta.env.VITE_DEMO_MODE === '1' ? './demo.html' : './desktop.html');
+  </script>
+  <noscript><p><a href="desktop.html">打开会话栏</a></p></noscript>
+</body>
+</html>

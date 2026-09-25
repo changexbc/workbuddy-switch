@@ -17,6 +17,8 @@ agent-studio-desktop = { package = "tauri-plugin-agent-studio", path = "../crate
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
+# The standalone binary owns application updates; embedded hosts keep their own.
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "time"] }

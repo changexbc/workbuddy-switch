@@ -58,6 +58,9 @@ async function fixture(t) {
     const frame=JSON.parse(data);assert.equal(frame.action,'attach');
     state.attaches??=[];state.attaches.push(frame);
     state.send=payload=>ws.send(JSON.stringify({subscription_id:frame.subscription_id,connection_id:frame.connection_id,...payload}));
+    // `send` targets the most recent attach; this targets one conversation.
+    state.sendTo??={};
+    state.sendTo[frame.connection_id]=payload=>ws.send(JSON.stringify({subscription_id:frame.subscription_id,connection_id:frame.connection_id,...payload}));
     if(state.replay&&frame.since_seq!==null)state.send({type:'replay',high_water_seq:state.seq,events:state.replay});
     else state.send({type:'snapshot',event_seq:state.seq??0,snapshot:state.snapshot});
    });
@@ -67,21 +70,22 @@ async function fixture(t) {
  t.after(()=>new Promise(resolve=>{for(const socket of sockets)socket.terminate();wss.close();server.closeAllConnections();server.close(resolve);}));
  const dir=path.join(home,'Library/Application Support/app.codeg');await fs.mkdir(dir,{recursive:true});
  const dbPath=path.join(dir,'codeg.db'),db=new DatabaseSync(dbPath);
- db.exec('CREATE TABLE app_metadata(key TEXT,value TEXT); CREATE TABLE conversation(id INTEGER,title TEXT,agent_type TEXT,external_id TEXT,folder_id INTEGER,status TEXT); CREATE TABLE folder(id INTEGER,path TEXT);');
+ db.exec("CREATE TABLE app_metadata(key TEXT,value TEXT); CREATE TABLE conversation(id INTEGER,title TEXT,agent_type TEXT,external_id TEXT,folder_id INTEGER,status TEXT,parent_id INTEGER,kind TEXT DEFAULT 'regular'); CREATE TABLE folder(id INTEGER,path TEXT);");
  db.prepare('INSERT INTO app_metadata VALUES (?,?)').run('web_service_port',String(server.address().port));
  db.prepare('INSERT INTO app_metadata VALUES (?,?)').run('web_service_token','secret-test-token');
- db.exec("INSERT INTO conversation VALUES(214,'Build feature','codex','thr-native',1,'in_progress'); INSERT INTO folder VALUES(1,'/project/test');");db.close();
+ db.exec("INSERT INTO conversation VALUES(214,'Build feature','codex','thr-native',1,'in_progress',NULL,'regular'); INSERT INTO folder VALUES(1,'/project/test');");db.close();
  const settings=defaultSettings();for(const [id,s]of Object.entries(settings.sources))s.enabled=id==='codeg';
  await fs.mkdir(path.join(home,'.agent-studio'),{recursive:true});await fs.writeFile(path.join(home,'.agent-studio/settings.json'),JSON.stringify(settings));
  return {home,dbPath,state,settings};
 }
-function addChild(dbPath,{parent=214,kind='delegate'}={}) {
+function addChild(dbPath,{id=215,parent=214,kind='delegate',title='Child task',externalId='thr-child'}={}) {
  const db=new DatabaseSync(dbPath);
  try {
-  db.exec("ALTER TABLE conversation ADD COLUMN parent_id INTEGER; ALTER TABLE conversation ADD COLUMN kind TEXT DEFAULT 'regular';");
-  db.prepare('INSERT INTO conversation(id,title,agent_type,external_id,folder_id,status,parent_id,kind) VALUES(?,?,?,?,?,?,?,?)').run(215,'Child task','codex','thr-child',1,'in_progress',parent,kind);
+  db.prepare('INSERT INTO conversation(id,title,agent_type,external_id,folder_id,status,parent_id,kind) VALUES(?,?,?,?,?,?,?,?)').run(id,title,'codex',externalId,1,'in_progress',parent,kind);
  } finally {db.close();}
 }
+/** The snapshot a waiting child reports: its conversation, still prompting, with one permission request. */
+const childSnapshot=(id='p1',{conversation_id=215,extra={}}={})=>({conversation_id,status:'prompting',pending_permission:{request_id:id,tool_call:{title:'Allow shell?'},options:[{name:'允许',kind:'allow_once'}]},...extra});
 const event=(name,extra={})=>({source:'codeg',connection_id:'connection-1',event:name,body:'Task',...extra});
 
 test('merge preserves third-party hooks, rejects malformed config, replaces only owned addresses',()=>{
@@ -163,27 +167,167 @@ test('missing snapshot retains webhook text and cannot invent a conversation dee
 });
 
 for(const marker of [{parent:214,kind:'delegate'},{parent:214,kind:'regular'},{parent:null,kind:'delegate'}]) {
- test(`child events are ignored using metadata ${JSON.stringify(marker)}`,async t=>{
+ test(`child requests surface a temporary card until answered using metadata ${JSON.stringify(marker)}`,async t=>{
   const f=await fixture(t);addChild(f.dbPath,marker);
-  const hub=new Hub(),h=new CodegHooks(hub,f);
+  f.state.streaming=true;f.state.seq=5;
+  f.state.snapshots={'connection-1':f.state.snapshot,child:{conversation_id:215,status:'prompting',event_seq:5}};
+  const hub=new Hub(),h=new CodegHooks(hub,f);t.after(()=>h.disable());
   await h.ingestHook(event('user_prompt_sent'));
+  assert.equal(h.isChildCodexSession('thr-native'),false);
+  assert.equal(h.isChildCodexSession('thr-child'),true);
   const parent=structuredClone(hub.sessions.get('codeg:214'));
-  f.state.snapshot=null;
+  // A child that merely runs never reaches the rail, not even provisionally.
   await h.ingestHook(event('user_prompt_sent',{connection_id:'child'}));
-  assert.ok(hub.sessions.has('codeg:connection:child'));
-  f.state.snapshot={conversation_id:215};
-  for(const name of CODEG_EVENTS)assert.equal(await h.ingestHook(event(name,{connection_id:'child'})),true);
-  assert.equal(hub.sessions.size,1);
-  assert.deepEqual(hub.sessions.get('codeg:214'),parent,'child never changes parent state');
-  const calls=f.state.calls.length;f.state.fail=true;
-  await h.ingestHook(event('permission_request',{connection_id:'child'}));
+  assert.equal(hub.sessions.has('codeg:215'),false);
+  assert.equal(hub.sessions.has('codeg:connection:child'),false);
+  let calls=f.state.calls.length;f.state.fail=true;
+  await h.ingestHook(event('user_prompt_sent',{connection_id:'child'}));
   assert.equal(f.state.calls.length,calls,'known child does not query API again');
-  assert.equal(hub.sessions.size,1,'API failure never resurrects a known child');
-  f.state.fail=false;f.state.snapshot={conversation_id:214};
-  await h.ingestHook(event('turn_complete'));
-  assert.equal(hub.sessions.get('codeg:214').status,'done');
+  f.state.fail=false;
+  // The request surfaces one temporary card, its parent title and its stream.
+  f.state.snapshots.child=childSnapshot('p1',{extra:{event_seq:5}});
+  await h.ingestHook(event('permission_request',{connection_id:'child'}));
+  const child=hub.sessions.get('codeg:215');
+  assert.equal(child.status,'wait');assert.equal(child.subagent,true);
+  assert.equal(child.parentTitle,marker.parent==null?undefined:'Build feature');
+  assert.equal(child.pending[0].id,'p1');assert.equal(child.pending[0].text,'Allow shell?');
+  assert.ok(hub.snapshot().sessions.some(s=>s.id==='codeg:215'));
+  assert.equal(codegAppLink(child),'codeg://session/215');
+  assert.deepEqual(hub.sessions.get('codeg:214'),parent,'child never changes parent state');
+  await until(()=>f.state.attaches?.some(a=>a.connection_id==='child')&&f.state.sendTo?.child);
+  assert.equal(f.state.attaches.find(a=>a.connection_id==='child').since_seq,5,'the wait subscribes the child stream');
+  // The authoritative answer releases the card and its stream, then the parent stays intact.
+  f.state.sendTo.child({type:'event',envelope:{seq:6,type:'permission_resolved',connection_id:'child',request_id:'p1'}});
+  await until(()=>!hub.sessions.has('codeg:215'));
+  await until(()=>!h.streams.has('child'));
+  assert.deepEqual(hub.sessions.get('codeg:214'),parent);
+  // A late duplicate of the answered request never revives the card.
+  await h.ingestHook(event('permission_request',{connection_id:'child'}));
+  assert.equal(hub.sessions.has('codeg:215'),false);
+  assert.equal(h.streams.has('child'),false);
+  // A request whose snapshot cannot be read names no request id: nothing is shown.
+  f.state.fail=true;
+  await h.ingestHook(event('permission_request',{connection_id:'child'}));
+  assert.equal(hub.sessions.has('codeg:215'),false,'an unreadable snapshot is never shown');
+  assert.equal(h.streams.has('child'),false);
+  f.state.fail=false;
+  // A new request from the same child surfaces again.
+  f.state.snapshots.child=childSnapshot('p2');
+  await h.ingestHook(event('permission_request',{connection_id:'child'}));
+  assert.equal(hub.sessions.get('codeg:215').pending[0].id,'p2');
+  assert.ok(h.streams.has('child'));
  });
 }
+
+test('child turn completion releases the card',async t=>{
+ const f=await fixture(t);addChild(f.dbPath);
+ f.state.snapshots={'connection-1':f.state.snapshot,child:childSnapshot('p1')};
+ const hub=new Hub(),h=new CodegHooks(hub,f);t.after(()=>h.disable());
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ assert.ok(hub.sessions.has('codeg:215'));
+ await h.ingestHook(event('turn_complete',{connection_id:'child'}));
+ assert.equal(hub.sessions.has('codeg:215'),false,'a child never keeps a done card');
+ assert.equal(h.streams.size,0);
+ // The finished request cannot come back through a delayed webhook.
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ assert.equal(hub.sessions.has('codeg:215'),false);
+});
+
+test('child card released by an idle stream snapshot',async t=>{
+ const f=await fixture(t);addChild(f.dbPath);
+ f.state.streaming=true;f.state.seq=5;
+ f.state.snapshots={'connection-1':f.state.snapshot,child:childSnapshot('p1')};
+ const hub=new Hub(),h=new CodegHooks(hub,f);t.after(()=>h.disable());
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ await until(()=>f.state.sendTo?.child);
+ // An answer that lands while the webhook was in flight never leaves a running card.
+ f.state.sendTo.child({type:'snapshot',event_seq:7,snapshot:{conversation_id:215,status:'prompting'}});
+ await until(()=>!hub.sessions.has('codeg:215'));
+ await until(()=>h.streams.size===0);
+ // A snapshot for another conversation releases nothing.
+ f.state.snapshots.child=childSnapshot('p2');
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ await until(()=>h.streams.has('child'));
+ f.state.sendTo.child({type:'snapshot',event_seq:8,snapshot:{conversation_id:999,status:'prompting'}});
+ await wait(60);assert.ok(hub.sessions.has('codeg:215'));
+});
+
+test('child cards expire without an answer',async t=>{
+ const f=await fixture(t);addChild(f.dbPath);
+ let clock=Date.now();
+ f.state.snapshots={'connection-1':f.state.snapshot,child:childSnapshot('p1')};
+ const hub=new Hub(),h=new CodegHooks(hub,{...f,now:()=>clock});t.after(()=>h.disable());
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ assert.equal(hub.sessions.get('codeg:215').status,'wait');assert.equal(h.streams.size,1);
+ // A cancelled child emits no signal at all, so the card has a time bound.
+ clock+=60*60*1000+1;
+ await h.poll();
+ assert.equal(hub.sessions.has('codeg:215'),false);
+ assert.equal(h.streams.size,0);
+ assert.ok(h.children.has('child'),'the known child stays known');
+ f.state.snapshots.child=childSnapshot('p2');
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ assert.equal(hub.sessions.get('codeg:215').pending[0].id,'p2');
+});
+
+test('child cards are released when the source is disabled',async t=>{
+ const f=await fixture(t);addChild(f.dbPath);
+ f.state.snapshots={'connection-1':f.state.snapshot,child:childSnapshot('p1')};
+ const hub=new Hub(),h=new CodegHooks(hub,f);t.after(()=>h.disable());
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ assert.ok(hub.sessions.has('codeg:215'));
+ await h.disable();
+ assert.equal(hub.sessions.has('codeg:215'),false);
+ assert.equal(h.streams.size,0);
+ assert.equal(h.children.size,0);
+});
+
+test('silent child completion never seeds a session',async t=>{
+ const f=await fixture(t);f.state.snapshot=null;
+ const hub=new Hub(),h=new CodegHooks(hub,f);t.after(()=>h.disable());
+ await h.ingestHook(event('turn_complete'));
+ assert.equal(hub.sessions.size,0,'a silently finished child leaves no done ghost');
+ assert.deepEqual(hub.snapshot().sessions,[]);
+ // An existing provisional session still ends on its own completion.
+ await h.ingestHook(event('user_prompt_sent',{connection_id:'gone'}));
+ assert.equal(hub.sessions.get('codeg:connection:gone').status,'running');
+ await h.ingestHook(event('turn_complete',{connection_id:'gone'}));
+ assert.equal(hub.sessions.get('codeg:connection:gone').status,'done');
+});
+
+test('child metadata covers every delegation shape',async t=>{
+ const f=await fixture(t);
+ addChild(f.dbPath,{id:215,parent:214,kind:'delegate',title:'Child task\n<recommended_plugins> Here'});
+ addChild(f.dbPath,{id:217,parent:214,kind:'regular'});
+ addChild(f.dbPath,{id:218,parent:null,kind:'delegate'});
+ addChild(f.dbPath,{id:219,parent:214,kind:'delegate',title:'word '.repeat(30).trim(),externalId:'thr-long'});
+ const hub=new Hub(),h=new CodegHooks(hub,f);t.after(()=>h.disable());
+ for(const sid of [215,217,218,219])assert.equal(h.metadata(sid).isSubagent,true,`conversation ${sid}`);
+ assert.equal(h.metadata(214).isSubagent,false);
+ assert.equal(h.metadata(215).parentTitle,'Build feature');
+ assert.equal(h.metadata(214).parentTitle,undefined);
+ assert.equal(h.metadata(218).parentTitle,undefined,'a parentless delegate carries no parent title');
+ // A raw prompt fragment is one collapsed line before the rail sees it.
+ f.state.snapshots={long:childSnapshot('p1',{conversation_id:219})};
+ assert.equal(hub.sessions.size,0);
+ await h.ingestHook(event('permission_request',{connection_id:'long'}));
+ assert.match(hub.sessions.get('codeg:219').title,/^word word/);
+ assert.equal(hub.sessions.get('codeg:219').title.length,80);
+});
+
+test('a child permission ask reads the same on both parsers',async t=>{
+ const f=await fixture(t);addChild(f.dbPath);
+ // A tool call that carries only a `name`, and an option that carries only a
+ // `label`: the snapshot parser and the stream parser are one function in Node,
+ // so the Rust twin may not read them differently.
+ f.state.snapshots={child:{conversation_id:215,status:'prompting',pending_permission:{request_id:'p1',tool_call:{name:'Bash'},options:[{label:'允许',kind:'allow_once'}]}}};
+ const hub=new Hub(),h=new CodegHooks(hub,f);t.after(()=>h.disable());
+ await h.ingestHook(event('permission_request',{connection_id:'child'}));
+ const card=hub.sessions.get('codeg:215');
+ assert.equal(card.status,'wait');
+ assert.equal(card.pending[0].text,'Bash');
+ assert.equal(card.pending[0].questions[0].options[0].label,'允许');
+});
 
 // Exercise the shipped native HTTP receiver against the same fake Codeg API.
 // Run after cargo build -p agent-studio-runtime with CODEG_RUNTIME_BINARY set.
@@ -197,29 +341,43 @@ test('native runtime registers, receives callbacks, rejects forged requests and 
  const target=await until(()=>f.state.hooks.find(w=>w.url.startsWith('http://127.0.0.1'))?.url);
  const snapshot=async()=> (await rpc('poll',{client:'test'})).value.snapshot;
  assert.equal((await snapshot()).sessions.length,0,stderr);
- const n=f.state.calls.length;await wait(2200);assert.equal(f.state.calls.length,n);
+ // Registration ends with the one-shot startup alignment; only then is the
+ // runtime idle, so the no-polling window must start after that call.
+ await until(()=>f.state.calls.some(c=>c.method==='acp_list_connections'));
+ const n=f.state.calls.length;await wait(2200);assert.equal(f.state.calls.length,n,'idle timer never calls Codeg');
  assert.equal((await fetch(target,{method:'POST',body:JSON.stringify(event('user_prompt_sent'))})).status,204);
  const s=await until(async()=> (await snapshot()).sessions.find(s=>s.id==='codeg:214'));
  assert.equal(s.status,'running');assert.equal(s.cwd,'/project/test');
- addChild(f.dbPath);
- f.state.snapshot=null;
- await fetch(target,{method:'POST',body:JSON.stringify(event('user_prompt_sent',{connection_id:'child'}))});
- await until(async()=> (await snapshot()).sessions.some(s=>s.id==='codeg:connection:child'));
- f.state.snapshot={conversation_id:215};
- for(const name of CODEG_EVENTS) {
-  assert.equal((await fetch(target,{method:'POST',body:JSON.stringify(event(name,{connection_id:'child'}))})).status,204);
-  await until(async()=> (await snapshot()).sessions.length===1);
- }
- f.state.fail=true;
- await fetch(target,{method:'POST',body:JSON.stringify(event('permission_request',{connection_id:'child'}))});
- const afterChild=await snapshot();
- assert.equal(afterChild.sessions.length,1);assert.equal(afterChild.sessions[0].status,'running');
- f.state.fail=false;f.state.snapshot={conversation_id:214};
+ // The parent's own confirmation lifecycle is unchanged by a delegated child.
+ f.state.snapshot={conversation_id:214};
  f.state.snapshot.pending_question={question_id:'q1',questions:[{question:'Pick',options:[{label:'A'}]}]};
  await fetch(target,{method:'POST',body:JSON.stringify(event('question_request'))});
  await until(async()=> (await snapshot()).sessions.some(s=>s.status==='wait'));
  await fetch(target,{method:'POST',body:JSON.stringify(event('turn_complete'))});
  await until(async()=> (await snapshot()).sessions.some(s=>s.status==='done'));
+ // A running child stays invisible; a blocked child surfaces a temporary card.
+ addChild(f.dbPath);
+ f.state.streaming=true;f.state.seq=6;
+ f.state.snapshots={child:childSnapshot('p1',{extra:{event_seq:6}})};
+ await fetch(target,{method:'POST',body:JSON.stringify(event('user_prompt_sent',{connection_id:'child'}))});
+ await wait(120);
+ assert.equal((await snapshot()).sessions.length,1,'a running child never reaches the rail');
+ assert.equal((await fetch(target,{method:'POST',body:JSON.stringify(event('permission_request',{connection_id:'child'}))})).status,204);
+ const childSession=await until(async()=> (await snapshot()).sessions.find(s=>s.id==='codeg:215'));
+ assert.equal(childSession.status,'wait');assert.equal(childSession.subagent,true);
+ assert.equal(childSession.parentTitle,'Build feature');
+ assert.equal(childSession.pending[0].id,'p1');assert.equal(childSession.pending[0].text,'Allow shell?');
+ // The runtime subscribes the child's stream while it waits and clears the card
+ // when Codeg reports the answer there.
+ const toChild=await until(()=>f.state.sendTo?.child);
+ toChild({type:'event',envelope:{seq:7,type:'permission_resolved',connection_id:'child',request_id:'p1'}});
+ await until(async()=>!(await snapshot()).sessions.some(s=>s.id==='codeg:215'));
+ // A failing Codeg API cannot invent a card for a late request either.
+ f.state.fail=true;
+ await fetch(target,{method:'POST',body:JSON.stringify(event('permission_request',{connection_id:'child'}))});
+ await wait(120);
+ assert.ok(!(await snapshot()).sessions.some(s=>s.id==='codeg:215'));
+ f.state.fail=false;
  assert.equal((await fetch(target.replace(/[^/]+$/,'wrong'),{method:'POST',body:'{}'})).status,403);
  assert.equal((await fetch(target,{method:'POST',headers:{Origin:'http://evil.test'},body:'{}'})).status,403);
  assert.equal((await fetch(target,{method:'POST',body:'x'.repeat(65537)})).status,413);

@@ -8,12 +8,17 @@ pub fn terminal(s: &str) -> bool {
 #[derive(Default)]
 pub struct Hub {
     pub sessions: BTreeMap<String, Value>,
+    pub hidden_codeg_codex_ids: HashSet<String>,
     pub events: VecDeque<Value>,
     pub sources: BTreeMap<String, Value>,
     pub ready: bool,
     pub started: i64,
 }
 impl Hub {
+    pub fn hide_codeg_child_codex(&mut self, external_id: &str) {
+        let id = external_id.strip_prefix("thr_").unwrap_or(external_id);
+        if !id.is_empty() { self.hidden_codeg_codex_ids.insert(id.to_owned()); }
+    }
     pub fn new() -> Self {
         Self {
             started: now(),
@@ -46,12 +51,16 @@ impl Hub {
             "webPort",
             "hostKind",
             "sourceLabel",
+            "parentTitle",
+            "subagent",
         ] {
             if !ev[key].is_null() && !text(&ev[key]).is_empty() {
                 s[key] = if key == "title" {
                     json!(text(&ev[key]).chars().take(240).collect::<String>())
                 } else if key == "sourceLabel" {
                     json!(text(&ev[key]).chars().take(60).collect::<String>())
+                } else if key == "parentTitle" {
+                    json!(text(&ev[key]).chars().take(80).collect::<String>())
                 } else {
                     ev[key].clone()
                 };
@@ -92,6 +101,7 @@ impl Hub {
             s["steps"] = json!([]);
             s["status"] = json!("running");
             s["tokens"] = Value::Null;
+            if source == "codex" { s.as_object_mut().unwrap().remove("recovered"); }
             if let Some(o) = s.as_object_mut() {
                 o.remove("endedBy");
             }
@@ -144,11 +154,13 @@ impl Hub {
             "permission_check" if !terminal(&text(&s["status"])) => {
                 if !s["permissionChecks"].is_array() { s["permissionChecks"] = json!([]); }
                 let checks = s["permissionChecks"].as_array_mut().unwrap();
-                if !checks.contains(&ev["callId"]) { checks.push(ev["callId"].clone()); }
+                if !checks.iter().any(|check| check["id"] == ev["callId"]) {
+                    checks.push(json!({"id":ev["callId"],"ts":ts}));
+                }
             }
             "permission_resolve" => {
                 if !s["permissionChecks"].is_array() { s["permissionChecks"] = json!([]); }
-                s["permissionChecks"].as_array_mut().unwrap().retain(|id| *id != ev["callId"]);
+                s["permissionChecks"].as_array_mut().unwrap().retain(|check| check["id"] != ev["callId"]);
             }
             "end" => {
                 s["status"] = ev["status"].clone();
@@ -189,7 +201,8 @@ impl Hub {
             .values()
             .filter(|s| {
                 !(s["source"] == "codex"
-                    && hosted.contains(text(&s["sessionId"]).trim_start_matches("thr_")))
+                    && (hosted.contains(text(&s["sessionId"]).trim_start_matches("thr_"))
+                        || self.hidden_codeg_codex_ids.contains(text(&s["sessionId"]).trim_start_matches("thr_"))))
             })
             .cloned()
             .map(|mut s| {
@@ -216,7 +229,15 @@ impl Hub {
             })
             .collect();
         sessions.sort_by_key(|s| std::cmp::Reverse(s["updatedAt"].as_i64().unwrap_or(0)));
-        let mut events: Vec<_> = self.events.iter().cloned().collect();
+        let mut events: Vec<_> = self.events.iter().filter(|e| {
+            let id = text(&e["sessionId"]);
+            if let Some(s) = self.sessions.get(&id) {
+                let sid = text(&s["sessionId"]);
+                s["source"] != "codex" || !(self.hidden_codeg_codex_ids.contains(sid.trim_start_matches("thr_")) || hosted.contains(sid.trim_start_matches("thr_")))
+            } else {
+                !self.hidden_codeg_codex_ids.contains(id.strip_prefix("codex:").unwrap_or(&id).trim_start_matches("thr_"))
+            }
+        }).cloned().collect();
         for s in &sessions {
             for p in s["pending"].as_array().into_iter().flatten() {
                 let id = json!([s["id"], s["roundId"], "wait", p["id"]]).to_string();

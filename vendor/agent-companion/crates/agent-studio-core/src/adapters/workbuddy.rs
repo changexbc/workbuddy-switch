@@ -176,6 +176,13 @@ impl Collector {
         {
             return false;
         }
+        let key = format!("workbuddy:{sid}");
+        if self.closed_monitor_sessions.contains(&key) {
+            if matches!(event.as_str(), "Stop" | "SessionEnd" | "Interrupt") { return false; }
+            if matches!(event.as_str(), "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PermissionRequest") {
+                self.closed_monitor_sessions.remove(&key);
+            }
+        }
         let ts = p["timestamp"]
             .as_i64()
             .filter(|n| *n > 0)

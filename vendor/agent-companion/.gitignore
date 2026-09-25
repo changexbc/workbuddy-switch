@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-demo/
 dist-embed/
 target/
 src-tauri/binaries/
@@ -11,6 +12,10 @@ __pycache__/
 .env.*
 !.env.example
 *.log
+
+# 本地构建缓存与设计稿
+.vite/
+docs/design/
 
 # 个人开发工作流（trellis）
 .trellis/

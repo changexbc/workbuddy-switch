@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { sessionPresentation } from '../../monitor/presentation.js';
-import { openDesktopView } from '../host.js';
 import type { AvatarStyle } from '../avatar.js';
 import type { ConnectionState } from '../../types/snapshot.js';
 import type { RailItem } from '../rail-model.js';
@@ -33,16 +32,19 @@ export function RailApp({controller, container}: {controller: RailController; co
   React.useEffect(() => {
     const onFocusOut = (event: FocusEvent) => { if (!container.contains(event.relatedTarget as Node | null)) controller.leaveAvatar(); };
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') controller.escape(); };
+    const onContextMenu = (event: MouseEvent) => event.preventDefault();
     const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 2 && event.target instanceof Element && !event.target.closest('.desktop-context-menu')) controller.closeMenu();
+      if (!(event.target as Element | null)?.closest('.desktop-context-menu')) controller.closeContextMenu();
     };
     container.addEventListener('focusout', onFocusOut);
     container.addEventListener('keydown', onKeyDown);
-    document.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('contextmenu', onContextMenu);
+    document.addEventListener('pointerdown', onPointerDown, true);
     return () => {
       container.removeEventListener('focusout', onFocusOut);
       container.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('pointerdown', onPointerDown);
+      container.removeEventListener('contextmenu', onContextMenu);
+      document.removeEventListener('pointerdown', onPointerDown, true);
     };
   }, [container, controller]);
 
@@ -54,11 +56,9 @@ export function RailApp({controller, container}: {controller: RailController; co
         className={`desktop-strip${state.stripEmpty ? ' desktop-strip-empty' : ''}`}
         data-connection={state.connection}
         ref={element => controller.attach.strip(element)}
-        onContextMenu={event => { event.preventDefault(); controller.openMenu(event.clientY); }}
       >
         <div
           className="desktop-grip"
-          title="拖动会话栏"
           data-tauri-drag-region=""
           ref={element => controller.hitRegions.register('grip', 'control', element, 'grab')}
         >
@@ -104,55 +104,42 @@ export function RailApp({controller, container}: {controller: RailController; co
           aria-label="会话信息"
           ref={element => controller.attach.card(element)}
           onPointerEnter={() => controller.holdCard()}
-          onPointerLeave={() => controller.leaveAvatar()}
-          onContextMenu={event => { event.preventDefault(); controller.openMenu(event.clientY); }}
+          onPointerLeave={() => controller.leaveCard()}
         >
           {(() => {
             const row = rows.find(candidate => candidate.item.id === state.card!.id);
             return row && (
-              <SessionCard item={row.item} connection={row.item.offline ? 'offline' : state.connection} avatarStyle={state.avatarStyle} surfaceKey="card" controller={controller} />
+              <SessionCard item={row.item} connection={row.item.offline ? 'offline' : state.connection} surfaceKey="card" controller={controller} />
             );
           })()}
         </section>
       )}
 
+      {state.contextMenu && (
+        <>
+          <div className="desktop-context-backdrop" aria-hidden="true" ref={element => controller.attach.contextBackdrop(element)} />
+          <div
+            className="desktop-context-menu"
+            role="menu"
+            aria-label="任务监听操作"
+            style={{left: state.contextMenu.x, top: state.contextMenu.y}}
+            ref={element => controller.attach.contextMenu(element)}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={state.contextMenu.busy}
+              onClick={() => void controller.closeMonitoring()}
+            >
+              {state.contextMenu.busy ? '正在关闭…' : '关闭本次监听'}
+            </button>
+          </div>
+        </>
+      )}
+
       {state.notice && (
         <p className="desktop-notice" role="status" ref={element => controller.attach.notice(element)}>{state.notice.text}</p>
       )}
-
-      <div
-        className="desktop-context-menu"
-        role="menu"
-        hidden={!state.menuOpen}
-        ref={element => controller.attach.menu(element)}
-        onKeyDown={event => {
-          if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-          event.preventDefault();
-          const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')];
-          const index = options.indexOf(document.activeElement as HTMLButtonElement);
-          options[(index + (event.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length].focus();
-        }}
-      >
-        <button
-          type="button"
-          role="menuitem"
-          className="desktop-menu-item"
-          ref={element => controller.hitRegions.register('menu:settings', 'control', element)}
-          onClick={() => { controller.closeMenu(); void openDesktopView('settings').catch(error => controller.reportError(error)); }}
-        >
-          悬浮窗设置
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          className="desktop-menu-item"
-          disabled={state.replayDisabled}
-          ref={element => controller.hitRegions.register('menu:replay', 'control', element)}
-          onClick={() => { controller.closeMenu(); controller.replayWelcome(); }}
-        >
-          重播小猫欢迎动画
-        </button>
-      </div>
 
       {state.automaticIds.map(id => {
         const row = rows.find(candidate => candidate.item.id === id);
@@ -162,7 +149,6 @@ export function RailApp({controller, container}: {controller: RailController; co
             key={id}
             item={row.item}
             connection={state.connection}
-            avatarStyle={state.avatarStyle}
             controller={controller}
           />
         );
@@ -179,10 +165,9 @@ export function RailApp({controller, container}: {controller: RailController; co
   );
 }
 
-function AutomaticCard({item, connection, avatarStyle, controller}: {
+function AutomaticCard({item, connection, controller}: {
   item: RailItem;
   connection: ConnectionState;
-  avatarStyle: AvatarStyle;
   controller: RailController;
 }) {
   // An inline ref detaches on every commit, erasing the visibility baseline
@@ -195,9 +180,8 @@ function AutomaticCard({item, connection, avatarStyle, controller}: {
       className="desktop-card desktop-automatic-card"
       aria-label="任务提醒"
       ref={attach}
-      onContextMenu={event => { event.preventDefault(); controller.openMenu(event.clientY); }}
     >
-      <SessionCard item={item} connection={connection} avatarStyle={avatarStyle} surfaceKey={`automatic:${item.id}`} controller={controller} />
+      <SessionCard item={item} connection={connection} surfaceKey={`automatic:${item.id}`} controller={controller} />
     </section>
   );
 }
@@ -236,7 +220,7 @@ function Ghost({ghost, connection, avatarStyle, controller}: {
   }
   return (
     <section ref={node} className="desktop-card desktop-automatic-card desktop-departing" aria-label="任务提醒" aria-hidden="true" inert style={style}>
-      <SessionCard item={ghost.item} connection={connection} avatarStyle={avatarStyle} surfaceKey={`ghost:${ghost.key}`} controller={controller} />
+      <SessionCard item={ghost.item} connection={connection} surfaceKey={`ghost:${ghost.key}`} controller={controller} />
     </section>
   );
 }

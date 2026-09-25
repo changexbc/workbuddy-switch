@@ -38,4 +38,6 @@
 - `crates/agent-studio-core/`：监控与状态归一化。
 - `crates/agent-studio-runtime/`：本地共享监控服务及客户端。
 - `crates/agent-studio-desktop/`：Tauri 桌面集成，仅提供会话栏和设置窗口。
-- `src-tauri/`：Agent Companion 独立应用壳。
+- `src-tauri/`：Agent Companion 独立应用壳。应用内更新（`update_service.rs`、托盘更新项、更新命令）只属于这一层：插件被嵌入其他宿主时由宿主负责自身升级，所以共享插件不包含更新器。设置页的更新区读 `src/types/update.ts` 的契约，并在没有独立版命令时整块隐藏。
+
+本地 `npm run desktop:build` 通过 `--config` 关闭 `bundle.createUpdaterArtifacts`：没有签名密钥也能打包试装，开发构建不会误报可更新。发布构建由 CI 注入公钥并签名，见 [构建与发布](ci-build.md)。

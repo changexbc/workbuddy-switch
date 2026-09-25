@@ -11,14 +11,18 @@
 .companion-lids{transform-origin:50px 51px;animation:companion-blink var(--blink-time,6s) ease-in-out var(--motion-delay,0s) infinite}
 .companion-lids path{fill:none;stroke:#263c31;stroke-width:5.5;stroke-linecap:round;transition:d .25s ease}
 /* Random gaze targets share one transition; blinking remains on the parent.
-   Scale each eye around itself so widening never changes the eye spacing. */
+   Rotate and scale each eye around itself so the gaze can lean either way
+   without widening the space between the eyes. */
 .companion-avatar[data-state=running]:not(.companion-attentive) .companion-look{animation:none;transform:translate(var(--gaze-x,0px),var(--gaze-y,0px));transition:transform var(--gaze-transition,.8s) ease-in-out}
-.companion-avatar[data-state=running]:not(.companion-attentive) .companion-lids path{transform-box:fill-box;transform-origin:center;transform:scale(var(--gaze-scale-x,1),var(--gaze-scale-y,1));transition:d .25s ease,transform var(--gaze-transition,.8s) ease-in-out}
+.companion-avatar[data-state=running]:not(.companion-attentive) .companion-body{transform:translateY(var(--gaze-head-y,0px)) scaleY(var(--gaze-head-scale-y,1));transition:transform var(--gaze-transition,.8s) ease-in-out}
+.companion-avatar[data-state=running]:not(.companion-attentive) .companion-lids path{transform-box:fill-box;transform-origin:center;transform:rotate(var(--gaze-tilt,0deg)) scale(var(--gaze-scale-x,1),var(--gaze-scale-y,1));transition:d .25s ease,transform var(--gaze-transition,.8s) ease-in-out}
 .desktop-avatar:hover .companion-avatar[data-state=running] .companion-look,
 .desktop-avatar:hover .companion-avatar[data-state=running] .companion-lids path,
+.desktop-avatar:hover .companion-avatar[data-state=running] .companion-body,
 .companion-motion-paused .companion-avatar[data-state=running] .companion-look,
-.companion-motion-paused .companion-avatar[data-state=running] .companion-lids path{transform:none}
-@media(prefers-reduced-motion:reduce){.companion-avatar[data-state=running] .companion-look,.companion-avatar[data-state=running] .companion-lids path{transform:none}}
+.companion-motion-paused .companion-avatar[data-state=running] .companion-lids path,
+.companion-motion-paused .companion-avatar[data-state=running] .companion-body{transform:none}
+@media(prefers-reduced-motion:reduce){.companion-avatar[data-state=running] .companion-look,.companion-avatar[data-state=running] .companion-lids path,.companion-avatar[data-state=running] .companion-body{transform:none}}
 /* Most of the waiting cycle is still; gaze leads the head and ear. */
 .companion-avatar[data-state=wait] .companion-body{animation:companion-wait-head var(--wait-time,10s) ease-in-out infinite}
 .companion-avatar[data-state=wait] .companion-look{animation:companion-wait-gaze var(--wait-time,10s) ease-in-out infinite}
@@ -48,6 +52,7 @@
 .companion-avatar[data-character=rabbit] .companion-ear-right{--ear-flick:10deg;--ear-rebound:-3deg;--ear-lag:10deg}
 .companion-avatar[data-state=wait] .companion-ear-tip{animation:none}
 .companion-avatar[data-state=wait] .companion-ear-left .companion-ear-settle{animation:companion-wait-ear var(--wait-time,10s) ease-in-out infinite}
+.companion-avatar[data-state=wait] .companion-ear-right .companion-ear-settle{animation:companion-wait-ear-right var(--wait-time,10s) ease-in-out infinite}
 .companion-avatar[data-state=done] .companion-ear-settle{animation:companion-ear-settle .9s .12s ease-out both}
 .companion-attention{transform-origin:50px 57px;transition:transform .55s cubic-bezier(.22,.85,.3,1.15) .08s}
 .companion-avatar:not([data-character=other]):not([data-state=offline]).companion-attentive .companion-attention{transform:translateY(-1.5px) rotate(2deg)}
@@ -61,9 +66,10 @@
 @keyframes companion-ear-settle{0%{transform:rotate(0deg)}22%{transform:rotate(var(--ear-lag))}58%{transform:rotate(-3deg)}80%{transform:rotate(1.5deg)}100%{transform:rotate(0deg)}}
 @media(prefers-reduced-motion:reduce){.companion-attention,.companion-ear{transform:none!important}}
 
-@keyframes companion-wait-head{0%,2%,22%,100%{transform:translateY(0) rotate(0deg)}7%,11%{transform:translateY(-1px) rotate(-6deg)}17%{transform:translateY(0) rotate(.7deg)}}
-@keyframes companion-wait-gaze{0%,20%,100%{transform:translate(0,0)}2%,11%{transform:translate(0,-3px)}}
-@keyframes companion-wait-ear{0%,4%,24%,100%{transform:rotate(0deg)}9%,12%{transform:rotate(7deg)}18%{transform:rotate(-2deg)}}
+@keyframes companion-wait-head{0%,2%,21%,48%,69%,100%{transform:translateY(0) rotate(0deg)}7%,11%{transform:translateY(-.8px) rotate(-3deg)}16%{transform:rotate(.5deg)}54%,58%{transform:translateY(-.4px) rotate(2.5deg)}64%{transform:rotate(-.3deg)}}
+@keyframes companion-wait-gaze{0%,20%,48%,70%,100%{transform:translate(0,0)}3%,11%{transform:translate(-2px,-2.5px)}54%,60%{transform:translate(2px,-1.5px)}}
+@keyframes companion-wait-ear{0%,4%,22%,100%{transform:rotate(0deg)}9%,12%{transform:rotate(5deg)}18%{transform:rotate(-1deg)}}
+@keyframes companion-wait-ear-right{0%,49%,70%,100%{transform:rotate(0deg)}55%,59%{transform:rotate(-4deg)}65%{transform:rotate(1deg)}}
 @keyframes companion-acknowledge{0%,100%{transform:translateY(0) scaleY(1)}42%{transform:translateY(2.5px) scaleY(.97)}74%{transform:translateY(-.6px) scaleY(1)}}
 /* Focus takes priority over the waiting gesture, including native pointer input. */
 .companion-avatar[data-state=wait].companion-attentive .companion-body,

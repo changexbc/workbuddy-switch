@@ -3,7 +3,7 @@ import type { RailPreferences, RailPreferencesState } from '../types/settings.js
 
 const key = 'astra.desktop.preferences.v1';
 
-export const defaultPreferences = (): RailPreferences => ({ avatarStyle: 'animal', visibleCount: 8, animation: true });
+export const defaultPreferences = (): RailPreferences => ({ avatarStyle: 'animal', visibleCount: 8, animation: true, size: 'standard' });
 
 /**
  * Runtime guard for values arriving from storage, the native command or a form.
@@ -11,8 +11,9 @@ export const defaultPreferences = (): RailPreferences => ({ avatarStyle: 'animal
  * checks stay.
  */
 export function validatePreferences(value: RailPreferences): RailPreferences {
-  if (!['animal', 'bot'].includes(value.avatarStyle) || !Number.isInteger(value.visibleCount) || value.visibleCount < 3 || value.visibleCount > 16 || typeof value.animation !== 'boolean') throw Error('悬浮窗设置无效');
-  return { avatarStyle: value.avatarStyle, visibleCount: value.visibleCount, animation: value.animation };
+  const size = value.size ?? 'standard'; // Existing saved settings predate the size option.
+  if (!['animal', 'bot'].includes(value.avatarStyle) || !Number.isInteger(value.visibleCount) || value.visibleCount < 3 || value.visibleCount > 16 || typeof value.animation !== 'boolean' || !['small', 'medium', 'standard'].includes(size)) throw Error('悬浮窗设置无效');
+  return { avatarStyle: value.avatarStyle, visibleCount: value.visibleCount, animation: value.animation, size };
 }
 
 const browserFallback = (preferences: RailPreferences): RailPreferencesState => ({ ...preferences, autostart: false, autostartSupported: false });

@@ -10,12 +10,18 @@ export interface LinkableSession {
   hostKind?: string;
   /** Display name an imported custom source carries on every event. */
   sourceLabel?: string;
+  /** Set on a Codeg session delegated by another one; drives the 子任务 badge. */
+  subagent?: boolean;
+  /** Title of the session a subagent was delegated from; absent when unreadable. */
+  parentTitle?: string;
 }
 
 export interface SessionBadge {
   host: string;
   id: string;
   label: string;
+  /** Longer explanation a caller may show instead of `label` (a tooltip). */
+  detail?: string;
   /** The single icon the rail avatar wears; defaults to `host`. */
   avatar?: string;
 }
@@ -70,6 +76,9 @@ export function sessionBadge(session?: LinkableSession | null): SessionBadge | n
   if(isCodeBuddyVSCodeHost(session))return {host:'codebuddy-ide',id:'codebuddy-vscode',label:'VS Code',avatar:'codebuddy-vscode'};
   if(session.source==='codeg'){
     const nested=nestedAgentId(session.agentType);
+    // A delegated child only appears while it waits for the user; the badge
+    // names what it is and whose task it belongs to.
+    if(session.subagent)return {host:'codeg',id:nested||'codeg',label:'子任务',detail:session.parentTitle?`父会话：${session.parentTitle}`:undefined};
     if(nested)return {host:'codeg',id:nested,label:sourceLabel(nested)==='未绑定'?String(session.agentType):sourceLabel(nested)};
   }
   if (session.source==='workbuddy') {

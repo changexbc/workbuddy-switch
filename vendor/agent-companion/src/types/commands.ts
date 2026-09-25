@@ -15,7 +15,11 @@ export type DesktopView = 'rail' | 'settings';
 export type CollectorRequestCommand =
   | 'settings_get' | 'settings_set' | 'settings_check'
   | 'integrations_get' | 'integrations_set'
-  | 'custom_integrations_get' | 'custom_integrations_set' | 'custom_preview';
+  | 'custom_integrations_get' | 'custom_integrations_set' | 'custom_preview'
+  | 'session_monitor_close';
+
+export interface SessionMonitorCloseRequest { source: string; sessionId: string; roundId: string }
+export interface SessionMonitorCloseResult { closed: boolean }
 
 /**
  * A clickable region in logical window points, origin at the window's top-left.
@@ -37,8 +41,8 @@ export interface DesktopCommandMap {
     result: { snapshot: Snapshot | null; connected: boolean };
   };
   collector_request: {
-    args: { command: CollectorRequestCommand; payload: Settings | IntegrationAction | CustomAction | CustomPreviewRequest | null };
-    result: Settings | Integrations | CustomIntegrations | CustomPreview;
+    args: { command: CollectorRequestCommand; payload: Settings | IntegrationAction | CustomAction | CustomPreviewRequest | SessionMonitorCloseRequest | null };
+    result: Settings | Integrations | CustomIntegrations | CustomPreview | SessionMonitorCloseResult;
   };
   set_hit_regions: {
     args: { regions: HitRegion[] };

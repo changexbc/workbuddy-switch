@@ -31,8 +31,7 @@ export function mergeCodexHooks(file, scriptPath) {
     // The native runtime owns registration after migration. Never restore Python hooks.
     if (nativeInstalled) continue;
     const handler = { type: 'command', command, timeout: 3, statusMessage: 'Astra office' };
-    // SessionEnd always runs synchronously; Codex warns if async is set.
-    if (event !== 'SessionEnd') handler.async = true;
+    // Codex CLI skips async hook handlers, including lifecycle events.
     doc.hooks[event].push({ hooks: [handler] });
   }
   return doc;

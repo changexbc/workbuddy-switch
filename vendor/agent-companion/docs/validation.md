@@ -69,6 +69,10 @@
 
 拖动 grip、点击穿透、非激活悬停、右键菜单四项已在真实 app 中跑完，4/4 通过，原始数据在 `after/native-interaction.json`（用隔离的 `AGENT_STUDIO_HOME` 与会话 fixture，未触碰真实数据）。要点：窗口按拖动增量移动且尺寸不变（−300/+60）；失焦状态下移动真实鼠标出头像卡片、光标变手型；透明区穿透到后面的 Finder，而同排的区域点被消费，被消费的范围与绘制范围 + 10px 外扩吻合；点「悬浮窗设置」打开设置窗口。
 
+以上是当时版本的验证记录。当前版本已移除悬浮窗右键菜单，设置由系统托盘打开。
+
+2026-09-24 更新：完成态现与待确认态一样自动显示悬浮卡。浏览器回归验证了完成卡可见、重复快照不产生重复卡、关闭后不再弹出，并检查了 `artifacts/ui/done.png` 的实际渲染。`npm test`、类型检查、lint、构建和 `npm run test:ui` 均通过。
+
 ## 仍待人工确认
 
 - **用户对迁移后外观的确认**：逐张看 `artifacts/ui/*.png` 与 `artifacts/frontend-migration/rail-shots-built/*-after*.png`。

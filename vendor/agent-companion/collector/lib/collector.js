@@ -27,7 +27,7 @@ export function createCollector({ home=os.homedir(),intervalMs=2000,monitorUrl=`
   if(id==='codeg')return new CodegHooks(hub,{home,dbPaths:custom?[p]:defaultCodegDbPaths(home)});
   return new CodeBuddyIdePoller(hub,{home,monitorUrl,dataDir:custom && !String(c.sources[id].path).endsWith('.vscdb')?p:null});
  }
- function clear(id){for(const [key,s]of hub.sessions)if(s.source===id)hub.sessions.delete(key);for(const [key,e]of hub.events)if(e.sessionId.startsWith(id+':'))hub.events.delete(key);}
+ function clear(id){for(const [key,s]of hub.sessions)if(s.source===id)hub.sessions.delete(key);for(const [key,e]of hub.events)if(e.sessionId.startsWith(id+':'))hub.events.delete(key);if(id==='codeg')hub.hiddenCodegCodexIds.clear();}
  function pushCustomDiagnostic(value){while(customDiagnostics.length>=CUSTOM_LIMITS.diagnosticsMax)customDiagnostics.shift();customDiagnostics.push(value);}
  function customReject(id,reason,detail){
   pushCustomDiagnostic({at:Date.now(),source:isCustomId(id)?customSource(id):CUSTOM_SOURCE_PREFIX,event:null,outcome:'rejected',reason,detail});
@@ -140,7 +140,7 @@ export function createCollector({ home=os.homedir(),intervalMs=2000,monitorUrl=`
   setMonitorUrl(value){monitorUrl=value;},
   codegWebhookPath:()=>pollers.codeg?.url?new URL(pollers.codeg.url).pathname:null,
   ingestCodegHook:payload=>serial(async()=>{await ensure();return pollers.codeg?.ingestHook(payload);}),
-  ingestCodexHook:payload=>serial(async()=>{await ensure();return pollers.codex?.ingestHook(payload);}),
+  ingestCodexHook:payload=>serial(async()=>{await ensure();const sid=payload?.session_id||payload?.sessionId,event=payload?.hook_event_name||payload?.hookEventName;if(['SessionStart','UserPromptSubmit'].includes(event)&&pollers.codeg?.isChildCodexSession(sid))hub.hideCodegChildCodex(sid);return pollers.codex?.ingestHook(payload);}),
   ingestCodebuddyIdeHook:payload=>serial(async()=>{await ensure();return pollers['codebuddy-ide']?.ingestHook(payload);}),
   ingestWorkbuddyHook:payload=>serial(async()=>{await ensure();return pollers.workbuddy?.ingestHook(payload);}),
   ingestCustomHook:payload=>serial(async()=>{await ensure();return ingestCustomHook(payload);}),

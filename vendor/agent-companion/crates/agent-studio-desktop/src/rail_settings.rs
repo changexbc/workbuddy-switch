@@ -4,13 +4,14 @@ use tauri::{Emitter, Manager};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Preferences { pub avatar_style: String, pub visible_count: u8, pub animation: bool }
+pub struct Preferences { pub avatar_style: String, pub visible_count: u8, pub animation: bool, #[serde(default = "default_size")] pub size: String }
+fn default_size() -> String { "standard".into() }
 impl Default for Preferences {
-    fn default() -> Self { Self { avatar_style: "animal".into(), visible_count: 8, animation: true } }
+    fn default() -> Self { Self { avatar_style: "animal".into(), visible_count: 8, animation: true, size: default_size() } }
 }
 impl Preferences {
     fn validate(&self) -> Result<(), String> {
-        if !matches!(self.avatar_style.as_str(), "animal" | "bot") || !(3..=16).contains(&self.visible_count) { return Err("悬浮窗设置无效".into()); }
+        if !matches!(self.avatar_style.as_str(), "animal" | "bot") || !(3..=16).contains(&self.visible_count) || !matches!(self.size.as_str(), "small" | "medium" | "standard") { return Err("悬浮窗设置无效".into()); }
         Ok(())
     }
 }
@@ -86,6 +87,12 @@ pub fn rail_settings_set(app: tauri::AppHandle, preferences: Preferences, autost
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_preferences_keep_the_existing_size() {
+        let preferences: Preferences = serde_json::from_value(json!({"avatarStyle":"animal","visibleCount":8,"animation":true})).unwrap();
+        assert_eq!(preferences.size, "standard");
+        assert!(preferences.validate().is_ok());
+    }
     #[test]
     fn login_plist_keeps_arguments_separate_and_escapes_paths() {
         let args = vec!["/opt/node tools/npm".into(), "--prefix".into(), "/Users/A & B/project".into(), "run".into(), "desktop:dev".into()];

@@ -110,6 +110,7 @@ async fn collector_request(
         command.as_str(),
         "settings_get" | "settings_set" | "settings_check" | "integrations_get" | "integrations_set"
             | "custom_integrations_get" | "custom_integrations_set" | "custom_preview"
+            | "session_monitor_close"
     ) {
         return Err("不支持的命令".into());
     }

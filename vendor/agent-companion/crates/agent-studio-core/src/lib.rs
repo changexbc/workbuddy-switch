@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod codex_recovery;
 pub mod codex_read_state;
 pub mod custom;
 pub mod host_process;

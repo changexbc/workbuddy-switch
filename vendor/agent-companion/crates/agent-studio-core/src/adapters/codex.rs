@@ -12,14 +12,54 @@ fn internal_prompt(prompt: &str) -> bool {
 }
 
 impl Collector {
+    pub(crate) fn restore_codex_recovery(&mut self) {
+        for record in crate::codex_recovery::load(&self.home, &self.settings, &self.integrations) {
+            let session = &record["session"];
+            let sid = text(&session["sessionId"]);
+            if sid.is_empty() || session["id"] != format!("codex:{sid}") { continue; }
+            let id = format!("codex:{sid}");
+            let newer = self.hub.sessions.get(&id).is_some_and(|current|
+                current["roundId"] != session["roundId"] && current["updatedAt"].as_i64().unwrap_or(0) > session["updatedAt"].as_i64().unwrap_or(0));
+            if newer { continue; }
+            let replace = self.hub.sessions.get(&id).is_none_or(|current|
+                current["roundId"] == session["roundId"] &&
+                (session["updatedAt"].as_i64().unwrap_or(0) > current["updatedAt"].as_i64().unwrap_or(0)
+                    || session["updatedAt"] == current["updatedAt"]
+                        && crate::hub::terminal(&text(&session["status"]))
+                        && !crate::hub::terminal(&text(&current["status"]))));
+            if replace {
+                let mut restored = session.clone();
+                restored["recovered"] = json!(true);
+                self.hub.sessions.insert(id, restored);
+                self.live.insert(sid, record["live"].clone());
+            }
+        }
+    }
+
+    pub(crate) fn save_codex_recovery(&mut self, sid: &str) {
+        if self.hub.hidden_codeg_codex_ids.contains(sid.trim_start_matches("thr_")) { return; }
+        let id = format!("codex:{sid}");
+        if let (Some(session), Some(live)) = (self.hub.sessions.get(&id), self.live.get(sid)) {
+            if let Ok(record) = crate::codex_recovery::save(&self.home, &self.settings, &self.integrations, sid, session, live) {
+                if record["session"]["updatedAt"].as_i64().unwrap_or(0) > session["updatedAt"].as_i64().unwrap_or(0)
+                    || record["session"]["updatedAt"] == session["updatedAt"]
+                        && crate::hub::terminal(&text(&record["session"]["status"]))
+                        && !crate::hub::terminal(&text(&session["status"])) {
+                    self.restore_codex_recovery();
+                }
+            }
+        }
+    }
+
     pub fn ingest_codex_hook(&mut self, p: &Value) -> bool {
+        self.restore_codex_recovery();
         if self.settings["sources"]["codex"]["enabled"] != true {
             return false;
         }
         let get = |a: &str, b: &str| p[a].as_str().or(p[b].as_str()).unwrap_or("").to_owned();
         let sid = get("session_id", "sessionId");
         let event = get("hook_event_name", "hookEventName");
-        if sid.is_empty()
+        if sid.is_empty() || sid.len() > 200
             || !matches!(
                 event.as_str(),
                 "SessionStart"
@@ -41,6 +81,7 @@ impl Collector {
         if internal {
             self.live.insert(sid.clone(), json!({"internal":true}));
             self.hub.sessions.remove(&format!("codex:{sid}"));
+            crate::codex_recovery::remove(&self.home, &self.settings, &self.integrations, &sid);
             return false;
         }
         let ts = p["timestamp"]
@@ -48,10 +89,14 @@ impl Collector {
             .filter(|n| *n > 0)
             .unwrap_or_else(now);
         let previous = self.live.get(&sid).cloned();
+        if previous.is_none() && matches!(event.as_str(), "Stop" | "Interrupt" | "SessionEnd") {
+            return false;
+        }
         let mut state = previous
             .clone()
             .unwrap_or(json!({"roundId":"","cwd":"","calls":{},"permissions":[]}));
         let turn = get("turn_id", "turnId");
+        if turn.len() > 200 { return false; }
         let begins = matches!(event.as_str(), "SessionStart" | "UserPromptSubmit");
         let round = if !turn.is_empty() {
             turn
@@ -64,13 +109,20 @@ impl Collector {
                 .map(str::to_owned)
                 .unwrap_or(format!("turn:{ts}"))
         };
+        if begins && previous.is_some() && state["roundId"] != round {
+            let current_ts = self.hub.sessions.get(&format!("codex:{sid}"))
+                .and_then(|s| s["updatedAt"].as_i64()).unwrap_or(0);
+            if ts <= current_ts { return false; }
+        }
         // Tool callbacks from an older turn cannot mutate the current one.
         if previous.is_some() && state["roundId"] != round && !begins {
             return false;
         }
+        if state["ended"] == true && state["roundId"] == round { return false; }
         if previous.is_none() || state["roundId"] != round {
             state["calls"] = json!({});
             state["permissions"] = json!([]);
+            state["ended"] = json!(false);
         }
         state["roundId"] = json!(round);
         if let Some(cwd) = p["cwd"].as_str().filter(|s| !s.is_empty()) {
@@ -178,6 +230,7 @@ impl Collector {
                     json!({"type":"end","status":if event=="Interrupt" {"aborted"} else {"done"}}),
                 );
                 state["permissions"] = json!([]);
+                state["ended"] = json!(true);
             }
             _ => {}
         }
@@ -197,19 +250,21 @@ impl Collector {
                 break;
             }
         }
-        self.live.insert(sid, state);
+        self.live.insert(sid.clone(), state);
+        self.save_codex_recovery(&sid);
         self.hook_count += 1;
         self.poll_codex().ok();
         true
     }
 
     pub fn poll_codex(&mut self) -> Result<(), String> {
-        // This is an in-memory health update only. Never discover or restore sessions.
+        // Reconcile an end hook written by the hook process while RPC was unavailable.
+        self.restore_codex_recovery();
         self.hub.health(
             "codex",
             "ok",
             if self.hook_count == 0 {
-                "等待新的 Codex Hook；不恢复历史会话"
+                "等待新的 Codex Hook；仅恢复本应用已跟踪的会话"
             } else {
                 "已连接 Codex Hook（不读取会话文件）"
             },

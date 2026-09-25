@@ -1,0 +1,58 @@
+name: Publish web demo
+
+# The public demo is a static, fictional-data build of the rail (see README).
+# It is published to GitHub Pages with the least permissions the job needs.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build the demo entries
+        run: npm run build:demo
+
+      # The demo build owns its own outputs: the Pages root, the stage page and
+      # the rail frame are all present, and nothing else is expected.
+      - name: Check the demo entries
+        run: |
+          test -f dist-demo/index.html
+          test -f dist-demo/demo.html
+          test -f dist-demo/desktop.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-demo
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

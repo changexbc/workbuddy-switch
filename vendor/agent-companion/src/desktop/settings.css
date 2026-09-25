@@ -135,3 +135,30 @@ fieldset:disabled button,fieldset:disabled select,fieldset:disabled input{cursor
 .settings-dialog p{font-size:12px;color:#75877b;line-height:1.8;margin:0}
 .settings-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}
 .settings-dialog-actions button{font-size:11px;padding:8px 12px}
+
+/* Standalone application updates. Only rendered when the host owns the updater. */
+.update-section{margin-top:23px}
+.update-panel{padding:0 12px 12px}
+.update-panel .row{padding:12px 0}
+.update-version button{flex-shrink:0;font-size:11px}
+.update-proxy{padding:12px 0;border-bottom:1px solid #e0e8e1}
+.update-proxy strong{display:block;font-size:12px;font-weight:500}
+.update-proxy small{display:block;font-size:10px;color:#8a978e;margin-top:6px}
+.update-proxy input{width:100%;font-size:11px;line-height:1.6;color:#294239;background:#fbfdfb;border:1px solid #dbe5dd;border-radius:6px;padding:7px 9px}
+.update-proxy input:disabled{color:#8a978e;background:#f1f6f2}
+.update-proxy-row{display:flex;align-items:center;gap:10px;margin-top:10px}
+.update-proxy-row button{flex-shrink:0;font-size:11px}
+.update-status{padding:12px 0 0}
+.update-status p{font-size:11px;line-height:1.7;color:#587363;margin:0;overflow-wrap:anywhere}
+.update-status[data-phase=error] p{color:#9a6438}
+.update-status[data-phase=available] p,.update-status[data-phase=readyToRestart] p{color:#355c48;font-weight:500}
+.update-status[data-error=true] p{color:#9a6438}
+.update-progress{height:6px;margin-top:10px;border-radius:4px;background:#e0e8e1;overflow:hidden}
+.update-progress span{display:block;height:100%;background:#719c82;transition:width 200ms ease}
+.update-progress[data-indeterminate=true] span{width:35%;animation:update-indeterminate 1.2s ease-in-out infinite}
+@keyframes update-indeterminate{0%{margin-left:0}100%{margin-left:65%}}
+@media(prefers-reduced-motion:reduce){.update-progress span{transition:none}.update-progress[data-indeterminate=true] span{animation:none}}
+.update-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.update-actions button{font-size:11px;padding:6px 10px;min-height:30px}
+.update-notice{font-size:10px;line-height:1.7;color:#718478;margin:12px 0 0;overflow-wrap:anywhere}
+.update-notice[data-error=true]{color:#9a6438}

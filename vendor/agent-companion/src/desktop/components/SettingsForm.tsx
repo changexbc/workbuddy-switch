@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { IntegrationManager } from './IntegrationManager.js';
+import { UpdateSettings } from './UpdateSettings.js';
 import { BOT_AVATAR_COUNT, createAvatar } from '../avatar.js';
 import { desktopCommand, isDesktop } from '../host.js';
 import { agents, loadListening, saveListening } from '../listening.js';
@@ -173,6 +174,20 @@ export function SettingsForm() {
           <section aria-labelledby="display">
             <h2 id="display">显示</h2>
             <div className="settings-group">
+            <div className="row">
+              <Label htmlFor="rail-size">
+                <strong>悬浮窗尺寸</strong>
+                <small>头像和提示卡片一起调整</small>
+              </Label>
+              <Select value={values.size} onValueChange={size => edit({size: size as RailPreferencesState['size']})}>
+                <SelectTrigger id="rail-size" data-field="size" aria-label="悬浮窗尺寸"><SelectValue /></SelectTrigger>
+                <SelectContent onEscapeKeyDown={event => event.stopPropagation()}>
+                  <SelectItem value="small">小号</SelectItem>
+                  <SelectItem value="medium">中号</SelectItem>
+                  <SelectItem value="standard">标准</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <ToggleRow
               field="animation"
               title="头像动画"
@@ -227,6 +242,8 @@ export function SettingsForm() {
           </section>
         </fieldset>
       </form>
+      {/* 独立版的应用更新；嵌入宿主、浏览器与旧版独立应用不渲染这一块。 */}
+      <UpdateSettings />
       <div className="settings-save-feedback" data-error={!!saveState.error}>
         <p role="status" id="save-status">{!ready ? status : saveState.error ? `部分更改可能已生效，请重试：${errorMessage(saveState.error)}` : busy || saveState.pending ? '正在应用…' : '更改实时生效，保存在本机'}</p>
         {!!saveState.error && <Button type="button" variant="outline" data-action="retry-save" onClick={autosave.retry}>重试保存</Button>}

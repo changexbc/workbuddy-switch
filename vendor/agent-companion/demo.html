@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Agent Companion · 网页悬浮窗交互演示</title>
+  <meta name="description" content="在浏览器里体验 Agent Companion 桌面悬浮栏的交互：拖动悬浮栏、悬停或键盘聚焦查看会话、体验客户端任务进展、选择确认与完成提醒。页面内全部为虚构数据。" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./favicon.png" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <style>
+    body { margin: 0; background: #f8fcfa; }
+    .demo-shell[inert] { visibility: hidden; }
+    #demo-loading { position: fixed; inset: 0; z-index: 10; display: grid; place-content: center; justify-items: center; gap: 16px; background: radial-gradient(ellipse at top left, #e1f7ed, transparent 55%), radial-gradient(ellipse at bottom right, #e2efff, transparent 55%), #fafcfb; color: #61768b; font: 13px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+    #demo-loading[hidden], #demo-loading-retry[hidden] { display: none; }
+    .demo-loading-ring { width: 26px; height: 26px; border: 2px solid #dcebe5; border-top-color: #74bd9c; border-radius: 50%; animation: demo-loading-spin .9s linear infinite; }
+    #demo-loading p { margin: 0; }
+    #demo-loading-retry { color: #476f85; text-underline-offset: 4px; }
+    @keyframes demo-loading-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .demo-loading-ring { animation: none; } }
+  </style>
+</head>
+<body>
+  <div id="demo-loading" role="status" aria-live="polite">
+    <span class="demo-loading-ring" aria-hidden="true"></span>
+    <p id="demo-loading-text">正在加载…</p>
+    <a id="demo-loading-retry" href="" hidden>重新加载</a>
+    <noscript>请启用 JavaScript 后重新加载。</noscript>
+  </div>
+  <script>
+    // This fallback must work even if the application module never loads.
+    setTimeout(() => {
+      if (!document.getElementById('demo-loading').hidden) {
+        document.getElementById('demo-loading-text').textContent = '加载时间较长，请检查网络或重试';
+        document.getElementById('demo-loading-retry').hidden = false;
+      }
+    }, 15000);
+  </script>
+  <div class="demo-shell" inert aria-busy="true">
+    <main class="demo-main" aria-label="悬浮栏交互演示">
+      <h1 class="sr-only">网页悬浮窗交互演示</h1>
+      <p class="sr-only demo-fictional">所有会话均为虚构数据，仅用于交互演示。</p>
+      <button type="button" class="demo-replay" data-action="reset" aria-label="重播演示" title="重播演示"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></button>
+      <div class="demo-desktop" id="demo-desktop" aria-label="悬浮栏演示区域">
+        <div class="demo-scene" data-active-client="workbuddy" role="group" aria-label="模拟客户端">
+          <div class="client-window client-workbuddy is-active" data-client="workbuddy">
+            <button type="button" class="client-titlebar" data-activate-client="workbuddy" aria-label="显示 WorkBuddy 演示窗口" aria-pressed="true"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><img src="./icons/agents/workbuddy.png" alt="" /><span>WorkBuddy</span><span class="window-ellipsis" aria-hidden="true">···</span></button>
+            <div class="client-body">
+              <div class="client-sidebar" aria-hidden="true"><div class="client-nav active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="15" rx="4"/><path d="m8 19-2 3M8 9h8m-8 4h5"/></svg></div><div class="client-nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3h6v2M9 11h6m-6 4h4"/></svg></div><div class="sidebar-lines"><i></i><i></i><i></i></div><div class="sidebar-footer"><span></span><i></i></div></div>
+              <div class="client-conversation" data-story="workbuddy">
+                <div class="story-message story-request"><i></i><i></i></div>
+                <div class="story-message story-response" data-reveal="1"><img src="./icons/agents/workbuddy.png" alt="" /><span class="story-lines"><i></i><i></i></span><span class="story-dots" aria-hidden="true">•••</span></div>
+                <div class="story-stream" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                <div class="story-checklist" data-reveal="2"><div data-step="2"><span>✓</span><i></i></div><div data-step="3"><span>✓</span><i></i></div></div>
+                <div class="story-result" role="status" hidden><span class="story-check" aria-hidden="true">!</span><span data-result>运行错误</span></div>
+                
+                <div class="story-choice" role="group" aria-labelledby="story-question" hidden><p id="story-question">选择版本<span aria-hidden="true">1/1</span></p><div class="story-options"><button type="button" data-choice="1"><kbd>1</kbd><span>精简版</span><span class="option-arrow" aria-hidden="true">→</span></button><button type="button" data-choice="2"><kbd>2</kbd><span>标准版</span><span class="option-arrow" aria-hidden="true">→</span></button><button type="button" data-choice="3"><kbd>3</kbd><span>详细版</span><span class="option-arrow" aria-hidden="true">→</span></button><button type="button" data-choice="4"><kbd>4</kbd><span>双语版</span><span class="option-arrow" aria-hidden="true">→</span></button></div></div><div class="story-selection" hidden></div>
+                <div class="client-composer" aria-hidden="true"><span>＋</span><i></i></div>
+              </div>
+            </div>
+          </div>
+          <div class="client-window client-codex" data-client="codex">
+            <button type="button" class="client-titlebar" data-activate-client="codex" aria-label="显示 Codex 演示窗口" aria-pressed="false"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><img src="./icons/agents/codex.png" alt="" /><span>Codex</span><span class="window-ellipsis" aria-hidden="true">···</span></button>
+            <div class="client-body">
+              <div class="client-sidebar" aria-hidden="true"><div class="client-nav active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="15" rx="4"/><path d="m8 19-2 3M8 9h8m-8 4h5"/></svg></div><div class="client-nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3h6v2M9 11h6m-6 4h4"/></svg></div><div class="sidebar-lines"><i></i><i></i><i></i></div><div class="sidebar-footer"><span></span><i></i></div></div>
+              <div class="client-conversation" data-story="codex">
+                <div class="story-message story-request"><i></i><i></i></div>
+                <div class="story-message story-response" data-reveal="1"><img src="./icons/agents/codex.png" alt="" /><span class="story-lines"><i></i><i></i></span><span class="story-dots" aria-hidden="true">•••</span></div>
+                <div class="story-stream" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                <div class="story-checklist" data-reveal="2"><div data-step="2"><span>✓</span><i></i></div><div data-step="3"><span>✓</span><i></i></div></div>
+                <div class="story-result" role="status" hidden><span class="story-check" aria-hidden="true">✓</span><span data-result>已完成</span></div>
+
+                <div class="story-choice" role="group" aria-labelledby="codex-story-question" hidden><p id="codex-story-question">选择版本<span aria-hidden="true">1/1</span></p><div class="story-options"><button type="button" data-choice="1"><kbd>1</kbd><span>精简版</span><span class="option-arrow" aria-hidden="true">→</span></button><button type="button" data-choice="2"><kbd>2</kbd><span>标准版</span><span class="option-arrow" aria-hidden="true">→</span></button><button type="button" data-choice="3"><kbd>3</kbd><span>详细版</span><span class="option-arrow" aria-hidden="true">→</span></button><button type="button" data-choice="4"><kbd>4</kbd><span>双语版</span><span class="option-arrow" aria-hidden="true">→</span></button></div></div><div class="story-selection" hidden></div>
+                <div class="client-composer" aria-hidden="true"><span>＋</span><i></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="demo-window" id="demo-window">
+          <iframe class="demo-frame" id="demo-frame" title="Agent Companion 悬浮栏（虚构数据演示）"></iframe>
+        </div>
+      </div>
+      <p class="sr-only" id="demo-status" role="status" aria-live="polite">正在准备演示…</p>
+      <p class="sr-only" id="demo-feedback" role="status" aria-live="polite"></p>
+    </main>
+  </div>
+  <script type="module" src="/src/demo/demo-page.ts"></script>
+</body>
+</html>

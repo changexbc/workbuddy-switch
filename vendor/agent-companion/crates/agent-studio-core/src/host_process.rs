@@ -236,6 +236,8 @@ mod tests {
         ));
     }
 
+    // 这批用例验证的是探测行为，而探测本身只在 macOS/Linux 上启用，故仅在有探测能力的平台上运行。
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn host_presences_are_independent_per_kind() {
         let mut ide = HostPresence::with_runner(
@@ -259,6 +261,7 @@ mod tests {
         assert_eq!(vscode.observe(), Presence::Alive);
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn requires_two_misses_and_never_infers_without_a_sighting() {
         let mut quiet = HostPresence::with_runner(
@@ -281,6 +284,7 @@ mod tests {
         assert_eq!(gone.observe(), Presence::Gone);
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn caches_within_ttl_and_recovers_after_a_hook() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -307,6 +311,30 @@ mod tests {
         );
         errored.note_hook();
         assert_eq!(errored.observe(), Presence::Unknown);
+    }
+
+    // 不支持的平台必须返回 Unknown 而不是猜——探测不跑，也不能假装看过。
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[test]
+    fn unsupported_platforms_report_unknown_and_never_run_the_probe() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let mut presence = HostPresence::with_runner(
+            "workbuddy",
+            Duration::ZERO,
+            1,
+            Box::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(PS_ALIVE.into())
+            }),
+        );
+        presence.note_hook();
+        assert_eq!(presence.observe(), Presence::Unknown);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "unsupported platforms must not shell out"
+        );
     }
 
     #[test]

@@ -8,6 +8,20 @@ let DatabaseSync;
 try { ({ DatabaseSync } = await import('node:sqlite')); } catch {}
 export const SOURCE = 'codeg';
 export const CODEG_EVENTS = ['user_prompt_sent','question_request','permission_request','turn_complete','error'];
+// A delegated child never keeps its temporary card longer than this without an
+// answer; a cancelled child emits no signal at all, so this is the floor.
+const CHILD_TTL = 60*60*1000;
+const CHILD_ANSWERED = 8;
+const CHILD_TITLE = 80;
+/** The request id an event or snapshot carries, or null. */
+function requestId(value) {
+  const id=value?.question_id||value?.request_id||value?.approval_id;
+  return typeof id==='string'&&id?id:null;
+}
+/** Child titles are raw prompt fragments: one collapsed, capped line. */
+function childTitle(value) {
+  return [...String(value||'').trim().split(/\s+/).join(' ')].slice(0,CHILD_TITLE).join('');
+}
 export function defaultCodegDbPaths(home) {
   return [path.join(home,'Library/Application Support/app.codeg/codeg.db'),path.join(home,'Library/Application Support/codeg/codeg.db'),path.join(home,'.local/share/codeg/codeg.db')];
 }
@@ -26,7 +40,7 @@ export function askFromSnapshot(snap) {
 export class CodegHooks {
   constructor(hub,{home,dbPaths=defaultCodegDbPaths(home),fetchImpl=globalThis.fetch,now=Date.now,WebSocketImpl=globalThis.WebSocket}={}) {
     Object.assign(this,{hub,home,dbPaths,fetchImpl,now,WebSocketImpl});
-    this.url='';this.auth=null;this.registered=false;this.reconciled=false;this.nextAttempt=0;this.enabled=true;this.sequence=0;this.connections=new Map();this.ignoredConnections=new Set();
+    this.url='';this.auth=null;this.registered=false;this.reconciled=false;this.nextAttempt=0;this.enabled=true;this.sequence=0;this.connections=new Map();this.children=new Map();
     this.streams=new Map();
     this.stateFile=path.join(home,'.agent-studio/codeg-webhook-node.json');
   }
@@ -50,6 +64,9 @@ export class CodegHooks {
   }
   async install(base) {this.url=`${base}/api/codeg-webhook/${randomUUID()}`;this.registered=false;this.reconciled=false;this.nextAttempt=0;await this.poll();}
   async poll() {
+    // A child card never outlives its request: released on disable, swept by TTL.
+    if(this.enabled)this.releaseChildren(CHILD_TTL);
+    else {for(const stream of this.streams.values())stream.close();this.streams.clear();this.releaseChildren(null);}
     // Only failed configuration is retried. No timer reads session state.
     if(!this.url){this.hub.health(SOURCE,'partial','Webhook 接收入口尚未启动');return;}
     if(this.registered || this.now()<this.nextAttempt)return;
@@ -97,26 +114,61 @@ export class CodegHooks {
       const row=db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(sid)||{};
       let cwd=row.origin_cwd||row.cwd||row.workspace||'';
       if(!cwd&&row.folder_id&&tables.includes('folder'))cwd=db.prepare('SELECT path FROM folder WHERE id=?').get(row.folder_id)?.path||'';
-      return {title:row.title||'',cwd,agentType:row.agent_type||row.agent||'',externalId:row.external_id||'',folderId:row.folder_id,isSubagent:row.parent_id!=null||row.kind==='delegate'};
+      const meta={title:row.title||'',cwd,agentType:row.agent_type||row.agent||'',externalId:row.external_id||'',folderId:row.folder_id,isSubagent:row.parent_id!=null||row.kind==='delegate'};
+      // One extra keyed lookup: the badge names the session the child came from.
+      if(meta.isSubagent&&row.parent_id!=null){
+        const parent=db.prepare(`SELECT title FROM ${table} WHERE id=?`).get(row.parent_id);
+        if(parent?.title&&String(parent.title).trim())meta.parentTitle=childTitle(parent.title);
+      }
+      return meta;
     } finally{db.close();}
+  }
+  isChildCodexSession(externalId) {
+    if(!this.enabled||!externalId)return false;
+    try {
+      const db=this.open();try{
+        const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r=>r.name);
+        const table=tables.includes('conversation')?'conversation':'conversations';
+        const id=String(externalId).replace(/^thr_/, '');
+        const row=db.prepare(`SELECT * FROM ${table} WHERE external_id IN (?, ?) LIMIT 1`).get(id,`thr_${id}`);
+        return !!row && String(row.agent_type||row.agent||'').toLowerCase()==='codex' && (row.parent_id!=null||row.kind==='delegate');
+      }finally{db.close();}
+    }catch{return false;}
   }
   async ingestHook(p) {
     if(!this.enabled||p?.source!=='codeg'||!CODEG_EVENTS.includes(p.event)||typeof p.connection_id!=='string'||!p.connection_id.trim()||p.connection_id.length>256)return false;
-    if(this.ignoredConnections.has(p.connection_id))return true;
+    const request=['question_request','permission_request'].includes(p.event);
+    const known=this.children.get(p.connection_id);
+    // A known child costs nothing until it waits for the user: no snapshot, no
+    // metadata, no session. Only the end of its turn releases the card.
+    if(known&&!request) {
+      if(known.open&&(p.event==='turn_complete'||p.event==='error'))this.releaseChild(p.connection_id);
+      return true;
+    }
     let snap=null;
     try {this.auth??=this.credentials();snap=await this.post('acp_get_session_snapshot',{connectionId:p.connection_id});}catch{}
     if(!this.enabled)return false;
-    const sid=String(snap?.conversation_id??this.connections.get(p.connection_id)??`connection:${p.connection_id}`);
-    const provisional=`codeg:connection:${p.connection_id}`;
-    if(!sid.startsWith('connection:')){this.connections.set(p.connection_id,sid);this.hub.sessions.delete(provisional);}
+    const provisional=`connection:${p.connection_id}`;
+    const sid=snap?.conversation_id!=null?String(snap.conversation_id):known?known.sid:this.connections.get(p.connection_id)??provisional;
+    // A silently finished child keeps no conversation id; seeding a session here
+    // would leave a `done` ghost for a task that never needed a user.
+    if(sid===provisional&&(p.event==='turn_complete'||p.event==='error')&&!this.hub.sessions.has(`codeg:${sid}`))return true;
+    if(sid!==provisional){this.connections.set(p.connection_id,sid);this.hub.sessions.delete(`codeg:${provisional}`);}
     if(this.connections.size>512)this.connections.delete(this.connections.keys().next().value);
-    let meta={};if(!sid.startsWith('connection:'))try{meta=this.metadata(sid);}catch{}
-    if(meta.isSubagent) {
-      // A known child stays ignored even if later snapshot/metadata reads fail.
-      this.ignoredConnections.add(p.connection_id);
-      this.streams.get(p.connection_id)?.close();this.streams.delete(p.connection_id);
-      this.hub.sessions.delete(provisional);
-      this.hub.sessions.delete(`codeg:${sid}`);
+    let meta={};if(sid!==provisional)try{meta=this.metadata(sid);}catch{}
+    if(meta.isSubagent||known) {
+      if(String(meta.agentType).toLowerCase()==='codex')this.hub.hideCodegChildCodex(snap?.external_id||meta.externalId);
+      const child=this.children.get(p.connection_id)||{sid,open:null,startedAt:0,resolved:[]};
+      child.sid=sid;this.children.set(p.connection_id,child);
+      if(!request) {
+        // A known child stays ignored even if later snapshot/metadata reads fail.
+        if(child.open)this.releaseChild(p.connection_id);
+        this.streams.get(p.connection_id)?.close();this.streams.delete(p.connection_id);
+        this.hub.sessions.delete(`codeg:${provisional}`);
+        this.hub.sessions.delete(`codeg:${sid}`);
+        return true;
+      }
+      this.childWait(p.connection_id,sid,snap,meta,p);
       return true;
     }
     const existingStream=this.streams.get(p.connection_id);
@@ -138,14 +190,55 @@ export class CodegHooks {
       // Native webhook fields retain question/option text when snapshot unavailable.
       const text=ask?question(ask):fields.map(f=>String(f.value||'')).filter(Boolean).join('\n')||String(p.body||p.title||'等待确认');
       for(const pending of [...(this.hub.sessions.get(`codeg:${sid}`)?.pending||[])])send({type:'resolve',callId:pending.id});
-      send({type:'wait',callId:ask?.question_id||ask?.request_id||ask?.approval_id||`codeg:${p.connection_id}:${seq}`,tool:p.event==='question_request'?'ask':'permission',text,questions:ask?questionDetails(ask):[]});
+      send({type:'wait',callId:requestId(ask)||`codeg:${p.connection_id}:${seq}`,tool:p.event==='question_request'?'ask':'permission',text,questions:ask?questionDetails(ask):[]});
     } else if(p.event==='turn_complete'||p.event==='error')send({type:'end',status:p.event==='error'?'error':'done'});
     // The keyed snapshot can already be ahead of a delayed webhook.
-    if(snap?.status==='prompting')this.reconcileSnapshot(sid,snap);
+    if(snap?.status==='prompting')this.reconcileSnapshot(p.connection_id,sid,snap);
     this.attachStream(p.connection_id,sid);
     if(Number.isSafeInteger(snap?.event_seq)){const stream=this.streams.get(p.connection_id);if(stream)stream.seq=Math.max(stream.seq??-1,snap.event_seq);}
     this.hub.health(SOURCE,'ok','已收到 Codeg Webhook；确认状态通过实时事件同步');
     return true;
+  }
+  // A child shows a temporary card only while a request waits for the user. The
+  // read-only stream is the only source of the answer and a detached connection
+  // can never be attached again, so it is subscribed in this same pass.
+  childWait(connectionId,sid,snap,meta,p) {
+    const ask=askFromSnapshot(snap);
+    const call=requestId(ask);
+    // Without the request id in the snapshot no answer could ever be matched.
+    if(!call)return;
+    const child=this.children.get(connectionId);
+    // Already answered, or already on screen: the stream owns the state and a
+    // delayed webhook must not rewind it.
+    if(child.resolved.includes(call)||child.open===call)return;
+    meta.title=childTitle(meta.title);meta.subagent=true;
+    const ts=this.now(),seq=++this.sequence,key=`codeg:${sid}`;
+    const base=this.seedSession(sid,snap,meta,ts,seq,!this.hub.sessions.has(key),String(p.body||'Codeg').slice(0,240));
+    const send=e=>this.hub.ingest({...base,...e});
+    for(const pending of [...(this.hub.sessions.get(key)?.pending||[])])send({type:'resolve',callId:pending.id});
+    send({type:'wait',callId:call,tool:p.event==='question_request'?'ask':'permission',text:question(ask),questions:questionDetails(ask)});
+    child.open=call;child.startedAt=ts;
+    this.attachStream(connectionId,sid);
+    if(Number.isSafeInteger(snap?.event_seq)){const stream=this.streams.get(connectionId);if(stream)stream.seq=Math.max(stream.seq??-1,snap.event_seq);}
+    this.hub.health(SOURCE,'ok','已收到 Codeg Webhook；确认状态通过实时事件同步');
+  }
+  // Give up a child's temporary card: the session goes away, the stream is
+  // released and the answered request is remembered so a late duplicate cannot
+  // revive it.
+  releaseChild(connectionId,answered=null) {
+    const child=this.children.get(connectionId);if(!child)return;
+    const open=child.open;child.open=null;child.startedAt=0;
+    for(const id of [answered,open])if(id&&!child.resolved.includes(id)){child.resolved.push(id);if(child.resolved.length>CHILD_ANSWERED)child.resolved.shift();}
+    this.streams.get(connectionId)?.close();this.streams.delete(connectionId);
+    this.hub.sessions.delete(`codeg:${child.sid}`);
+  }
+  // Release cards past their TTL, or every card once the source is disabled.
+  // The known-child list itself survives while the source stays enabled.
+  releaseChildren(ttl) {
+    const time=this.now();
+    const release=[...this.children].filter(([,child])=>child.open&&(ttl==null||time-child.startedAt>ttl)).map(([connectionId])=>connectionId);
+    for(const connectionId of release)this.releaseChild(connectionId);
+    if(ttl==null)this.children.clear();
   }
   // Shared by the webhook path and the startup alignment so both emit the same
   // `start` shape and round id. `startBody` only fills in when the session
@@ -171,7 +264,7 @@ export class CodegHooks {
       const sid=String(snap?.conversation_id??'');
       if(!sid)continue;
       let meta={};try {meta=this.metadata(sid);}catch{}
-      if(meta.isSubagent)continue;
+      if(meta.isSubagent){if(String(meta.agentType).toLowerCase()==='codex')this.hub.hideCodegChildCodex(snap?.external_id||meta.externalId);continue;}
       // A webhook may have won the race; never start a round twice or revive
       // the one the hub already finished.
       if(this.hub.sessions.has(`codeg:${sid}`))continue;
@@ -179,7 +272,7 @@ export class CodegHooks {
       this.connections.set(conn,sid);
       const ts=this.now(),seq=++this.sequence;
       this.seedSession(sid,snap,meta,ts,seq,true,'');
-      this.reconcileSnapshot(sid,snap);
+      this.reconcileSnapshot(conn,sid,snap);
       this.attachStream(conn,sid);
       if(Number.isSafeInteger(snap?.event_seq)){const stream=this.streams.get(conn);if(stream)stream.seq=Math.max(stream.seq??-1,snap.event_seq);}
     }
@@ -189,7 +282,12 @@ export class CodegHooks {
     if(listed.length>limit)notes.push('Codeg 连接数超出上限，仅对齐前 64 条');
     if(notes.length)this.hub.health(SOURCE,'partial',notes.join('；'));
   }
-  reconcileSnapshot(sid,snap,authoritative=false) {
+  reconcileSnapshot(connectionId,sid,snap,authoritative=false) {
+    // A child card lives exactly as long as the stream still shows a pending
+    // request. An authoritative snapshot without one releases it, which covers
+    // an answer that landed while the webhook was still in flight.
+    const child=this.children.get(connectionId);
+    if(authoritative&&child?.open&&(snap?.conversation_id==null||String(snap.conversation_id)===sid)&&!['pending_question','pending_permission','pending_plan_approval'].some(key=>snap[key]!=null)){this.releaseChild(connectionId);return;}
     const session=this.hub.sessions.get(`codeg:${sid}`);
     if(!session||['done','error','aborted'].includes(session.status))return;
     const asks=['pending_question','pending_permission','pending_plan_approval'].flatMap(key=>{
@@ -204,18 +302,31 @@ export class CodegHooks {
     if(snap.status==='prompting')for(const pending of [...session.pending])if(!asks.some(a=>a.id===pending.id))send({type:'resolve',callId:pending.id});
     for(const {id,ask,tool} of asks)send({type:'wait',callId:id,tool,text:question(ask),questions:questionDetails(ask)});
   }
-  applyEnvelope(sid,envelope) {
-    const session=this.hub.sessions.get(`codeg:${sid}`);
-    if(!session||['done','error','aborted'].includes(session.status))return;
-    const send=e=>this.hub.ingest({source:SOURCE,sessionId:sid,ts:this.now(),...e});
+  applyEnvelope(connectionId,sid,envelope) {
     const kind=envelope.type;
-    const id=envelope.question_id||envelope.request_id||envelope.approval_id;
-    if(['question_resolved','permission_resolved','plan_approval_resolved'].includes(kind)) {
-      if(typeof id==='string'&&id)send({type:'resolve',callId:id});
+    const resolved=['question_resolved','permission_resolved','plan_approval_resolved'].includes(kind);
+    const session=this.hub.sessions.get(`codeg:${sid}`);
+    const live=!!session&&!['done','error','aborted'].includes(session.status);
+    // A child gives its card up on the authoritative answer or on the end of its
+    // turn, whether or not the hub still holds the session.
+    if((resolved||kind==='turn_complete')&&this.children.has(connectionId)) {
+      const answered=resolved?requestId(envelope):null;
+      if(live) {
+        if(answered)this.hub.ingest({source:SOURCE,sessionId:sid,ts:this.now(),type:'resolve',callId:answered});
+        else this.hub.ingest({source:SOURCE,sessionId:sid,ts:this.now(),type:'end',status:'done'});
+      }
+      this.releaseChild(connectionId,answered);
+      return;
+    }
+    if(!live)return;
+    const send=e=>this.hub.ingest({source:SOURCE,sessionId:sid,ts:this.now(),...e});
+    const id=requestId(envelope);
+    if(resolved) {
+      if(id)send({type:'resolve',callId:id});
     } else if(['question_request','permission_request','plan_approval_request'].includes(kind)) {
       const key=kind==='question_request'?'pending_question':kind==='permission_request'?'pending_permission':'pending_plan_approval';
       const ask=askFromSnapshot({[key]:envelope});
-      if(typeof id==='string'&&id)send({type:'wait',callId:id,tool:kind==='question_request'?'ask':'permission',text:question(ask),questions:questionDetails(ask)});
+      if(id)send({type:'wait',callId:id,tool:kind==='question_request'?'ask':'permission',text:question(ask),questions:questionDetails(ask)});
     } else if(kind==='turn_complete')send({type:'end',status:'done'});
   }
   attachStream(connectionId,sid) {
@@ -242,11 +353,11 @@ export class CodegHooks {
         attempt=0;
         if(frame.type==='snapshot'&&Number.isSafeInteger(frame.event_seq)) {
           if(state.seq!==null&&frame.event_seq<state.seq)return;
-          state.seq=frame.event_seq;this.reconcileSnapshot(sid,frame.snapshot||{},true);
+          state.seq=frame.event_seq;this.reconcileSnapshot(connectionId,sid,frame.snapshot||{},true);
         } else if(frame.type==='event'||frame.type==='replay') {
           for(const envelope of frame.type==='event'?[frame.envelope]:frame.events||[]) {
             if(!Number.isSafeInteger(envelope?.seq)||envelope.seq<=(state.seq??-1)||envelope.connection_id!==connectionId)continue;
-            state.seq=envelope.seq;this.applyEnvelope(sid,envelope);
+            state.seq=envelope.seq;this.applyEnvelope(connectionId,sid,envelope);
           }
           if(frame.type==='replay'&&Number.isSafeInteger(frame.high_water_seq))state.seq=Math.max(state.seq??0,frame.high_water_seq);
         } else if(frame.type==='detached') {

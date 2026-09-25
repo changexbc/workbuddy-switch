@@ -49,7 +49,7 @@ const colors = ['#b9cb91', '#ebbd8f', '#a8c8c4', '#d6b0b4', '#b8b9d5', '#d5c482'
 const eyes: Record<AvatarStatus, string[]> = {
   sleep: ['M35 53 Q40 58 45 53', 'M56 53 Q61 58 66 53'],
   idle: ['M40 45 Q40 51 40 57', 'M61 45 Q61 51 61 57'],
-  running: ['M39 49 Q41 52 42 57', 'M60 48 Q62 51 63 56'],
+  running: ['M40 48 L40 57', 'M61 48 L61 57'],
   wait: ['M40 44 Q40 50 40 56', 'M61 44 Q61 50 61 56'],
   done: ['M35 52 Q40 42 45 52', 'M56 52 Q61 42 66 52'],
   error: ['M36 46 Q40 48 44 49', 'M61 47 Q61 52 61 58'],
@@ -130,7 +130,7 @@ export function observeAvatars(root: Element) {
     state.timer = undefined;
   };
   const reset = (node: SVGSVGElement) => {
-    for (const name of ['x', 'y', 'scale-x', 'scale-y', 'transition']) node.style.removeProperty(`--gaze-${name}`);
+    for (const name of ['x', 'y', 'head-y', 'head-scale-y', 'tilt', 'scale-x', 'scale-y', 'transition']) node.style.removeProperty(`--gaze-${name}`);
   };
   const active = (node: SVGSVGElement) => node.dataset.state === 'running'
     && node.classList.contains('companion-visible') && !document.hidden && !media.matches
@@ -146,6 +146,9 @@ export function observeAvatars(root: Element) {
         state.direction = pose.direction;
         node.style.setProperty('--gaze-x', `${pose.x}px`);
         node.style.setProperty('--gaze-y', `${pose.y}px`);
+        node.style.setProperty('--gaze-head-y', `${pose.headY}px`);
+        node.style.setProperty('--gaze-head-scale-y', String(pose.headScaleY));
+        node.style.setProperty('--gaze-tilt', `${pose.tiltDeg}deg`);
         node.style.setProperty('--gaze-scale-x', String(pose.scaleX));
         node.style.setProperty('--gaze-scale-y', String(pose.scaleY));
         node.style.setProperty('--gaze-transition', `${pose.transitionMs}ms`);

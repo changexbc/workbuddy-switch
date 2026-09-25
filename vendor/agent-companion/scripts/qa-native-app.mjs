@@ -56,7 +56,7 @@ try {
  // and either way nothing may still be blocking by the time the report is taken.
  assert.equal(rail.welcome.blocking,false,`the rail is not hidden behind the welcome overlay (phase ${rail.welcome.phase})`);
  assert.equal(rail.welcome.running,false,'the welcome animation has finished');
- assert(!rail.menu.some(text=>/3D|办公室/.test(text)));
+ assert.deepEqual(rail.menu,[],'native rail has no right-click menu');
  assert(![...rail.resources,...preferences.resources].some(url=>/\.glb|\.exr|three|\/models\//i.test(url)));
  await fs.writeFile(path.join(out,'summary.json'),JSON.stringify({passed:true,labels,rail,settings:preferences},null,2));
  console.log(`PASS: packaged native rail, Hook question, settings, no office window; reports ${out}`);

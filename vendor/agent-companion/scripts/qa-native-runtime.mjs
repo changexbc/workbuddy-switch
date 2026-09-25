@@ -45,7 +45,8 @@ try {
   const other=await rpc('poll',{client:'wb-switch'});assert.equal(other.notifications.length,0);assert.equal(other.owner,false);assert.equal(state.owner,true);
   await rpc('leave',{client:'standalone'});await delay(200);
   assert.equal((await rpc('poll',{client:'wb-switch'})).owner,true);
-  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'fixture',hook_event_name:'Stop',turn_id:'r'})});
+  const stopOutput=execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'fixture',hook_event_name:'Stop',turn_id:'r'}),encoding:'utf8'});
+  assert.equal(stopOutput.trim(),'{}','Codex Stop hook returns valid JSON');
   for(let i=0;i<30;i++){state=await rpc('poll',{client:'wb-switch'});if(state.snapshot.sessions.find(s=>s.sessionId==='fixture')?.status==='done')break;await delay(100);}
   assert.equal(state.snapshot.sessions.find(s=>s.sessionId==='fixture').status,'done');
   for (const [event,status] of [['PreToolUse','wait'],['PostToolUse','running']]) {

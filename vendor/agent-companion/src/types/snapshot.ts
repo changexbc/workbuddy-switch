@@ -73,11 +73,20 @@ export interface Session {
   sourceLabel?: string;
   externalId?: string;
   webPort?: number;
-  permissionChecks?: string[];
+  permissionChecks?: {id: string; ts: number}[];
+  /**
+   * Set on a Codeg session delegated by another one. Such a child only appears
+   * while it waits for the user, and the rail marks it with a 子任务 badge.
+   */
+  subagent?: boolean;
+  /** Title of the session a subagent was delegated from; absent when unreadable. */
+  parentTitle?: string;
   /** Set when a host process exited; absent after a new round starts. */
   endedBy?: string;
   /** Written by the Codex read-state watcher, not by the hub ingest path. */
   viewedRoundId?: string | null;
+  /** Set only on Codex sessions restored from the native bounded state file. */
+  recovered?: boolean;
 
   // Added by the snapshot projection.
   project: string;

@@ -23,7 +23,8 @@ function isCodegHostedCodex(session, hosted) {
 }
 
 export class Hub {
-  constructor({ now = Date.now } = {}) { this.now = now; this.startedAt = now(); this.sessions = new Map(); this.events = new Map(); this.ready = false; this.sources = {}; }
+  constructor({ now = Date.now } = {}) { this.now = now; this.startedAt = now(); this.sessions = new Map(); this.events = new Map(); this.hiddenCodegCodexIds = new Set(); this.ready = false; this.sources = {}; }
+  hideCodegChildCodex(externalId) { const id = asId(externalId).replace(/^thr_/, ''); if (id) this.hiddenCodegCodexIds.add(id); }
   health(source, state, detail, extra = {}) { this.sources[source] = { state, detail, checkedAt: this.now(), ...extra }; }
   ingest(ev) {
     if (!ev.sessionId || !ev.source) return;
@@ -39,6 +40,8 @@ export class Hub {
     if (ev.agentType) s.agentType = String(ev.agentType);
     if (ev.hostKind) s.hostKind = String(ev.hostKind);
     if (ev.sourceLabel) s.sourceLabel = [...String(ev.sourceLabel)].slice(0, 60).join('');
+    if (ev.parentTitle) s.parentTitle = [...String(ev.parentTitle)].slice(0, 80).join('');
+    if (ev.subagent != null && ev.subagent !== '') s.subagent = ev.subagent;
     if (ev.externalId) s.externalId = String(ev.externalId);
     if (Number.isInteger(ev.webPort) && ev.webPort > 0 && ev.webPort < 65536) s.webPort = ev.webPort;
     if (ev.type === 'meta') { if (ev.roundId && s.roundId.startsWith('observed:')) s.roundId = ev.roundId; return; }
@@ -74,10 +77,10 @@ export class Hub {
     }
     if (ev.type === 'permission_check' && !TERMINAL.has(s.status)) {
       s.permissionChecks ||= [];
-      if (!s.permissionChecks.includes(ev.callId)) s.permissionChecks.push(ev.callId);
+      if (!s.permissionChecks.some(check => check.id === ev.callId)) s.permissionChecks.push({ id: ev.callId, ts });
     }
     if (ev.type === 'permission_resolve') {
-      s.permissionChecks = (s.permissionChecks || []).filter(id => id !== ev.callId);
+      s.permissionChecks = (s.permissionChecks || []).filter(check => check.id !== ev.callId);
     }
     if (ev.type === 'end') {
       s.status = ev.status; s.endedAt = ts; s.pending = [];
@@ -95,12 +98,16 @@ export class Hub {
   snapshot() {
     const now = this.now();
     const hosted = hostedCodexIds(this.sessions.values());
-    const sessions = [...this.sessions.values()].filter(s => !isCodegHostedCodex(s, hosted)).map(s => {
+    const hidden = s => s.source === 'codex' && this.hiddenCodegCodexIds.has(asId(s.sessionId).replace(/^thr_/, '')) || isCodegHostedCodex(s, hosted);
+    const sessions = [...this.sessions.values()].filter(s => !hidden(s)).map(s => {
       const stale = !TERMINAL.has(s.status) && !s.pending.length && now - s.updatedAt > STALE_MS;
       return { ...s, project: path.basename(s.cwd) || s.source, status: stale ? 'unknown' : s.status, stale, elapsed: Math.max(0, ((s.endedAt || now) - s.startedAt) / 1000), progress: null };
     }).sort((a,b) => b.updatedAt - a.updatedAt);
     // A long replay can evict old events; unresolved requests must stay discoverable.
-    const events = new Map(this.events);
+    const events = new Map([...this.events].filter(([, event]) => {
+      const session = this.sessions.get(event.sessionId);
+      return session ? !hidden(session) : !this.hiddenCodegCodexIds.has(asId(event.sessionId).replace(/^codex:/, '').replace(/^thr_/, ''));
+    }));
     for (const s of sessions) for (const p of s.pending) {
       const id=JSON.stringify([s.id,s.roundId,'wait',p.id]);
       if(!events.has(id))events.set(id,{id,sessionId:s.id,roundId:s.roundId,kind:'wait',ts:p.ts,historical:true,title:s.title||s.project});

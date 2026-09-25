@@ -8,6 +8,7 @@ import readline from 'node:readline';
 import { createRailModel } from '../src/desktop/rail-model.js';
 import { sessionPresentation } from '../src/monitor/presentation.js';
 import { providerLabel } from '../src/desktop/components/provider.tsx';
+import { railProjectLabel } from '../src/desktop/project-label.ts';
 import { createNotificationTracker } from '../src/monitor/model.js';
 import { snapshotKey } from '../collector/desktop.js';
 import { defaultSettings } from '../src/settings-config.js';
@@ -16,6 +17,15 @@ import { Hub, STALE_MS } from '../collector/lib/hub.js';
 
 const session = (n, status = 'running', extra = {}) => ({ id: `codex:${n}`, source: 'codex', sessionId: String(n), status, title: `任务 ${n}`, pending: [], steps: [], roundId: 'r1', updatedAt: 1000, ...extra });
 const snapshot = sessions => ({ version: 1, ts: 1000, ready: true, sources: { codex: { state: 'ok', checkedAt: 1000 } }, sessions, events: [] });
+test('generated Codeg and WorkBuddy directory names get readable rail labels', () => {
+  assert.equal(railProjectLabel({source:'codeg',project:'79f660f8af4149aa97b1f60a22be581e'},'Codeg'),'聊天');
+  assert.equal(railProjectLabel({source:'workbuddy',project:'2026-09-24-17-24-22'},'WorkBuddy'),'任务 · 09/24 17:24');
+  assert.equal(railProjectLabel({source:'codeg',project:'my-project'},'Codeg'),'my-project');
+  assert.equal(railProjectLabel({source:'workbuddy',project:'my-project'},'WorkBuddy'),'my-project');
+  assert.equal(railProjectLabel({source:'codex',project:'2026-09-24-17-24-22'},'Codex'),'2026-09-24-17-24-22');
+  assert.equal(railProjectLabel({source:'workbuddy',project:'2026-13-24-17-24-22'},'WorkBuddy'),'2026-13-24-17-24-22');
+  assert.equal(railProjectLabel({source:'codeg',project:'codeg'},'Codeg'),'Codeg');
+});
 test('desktop restart ignores existing Codex checkpoint and transcript', async t => {
  const home=await fs.mkdtemp(path.join(os.tmpdir(),'agent-studio-hook-only-'));
  t.after(()=>fs.rm(home,{recursive:true,force:true}));
@@ -76,6 +86,62 @@ test('desktop rail follows actual sessions, preserves identity/order, and has no
   model.accept(snapshot(Array.from({ length: 15 }, (_, n) => session(n + 1))));
   assert.equal(model.items.length, 15);
 });
+test('confirmed monitor close forgets only the matching row and a later Hook can show it again', () => {
+  const model = connected({now: () => 2000});
+  model.accept(snapshot([session(1), session(2)]));
+  model.forgetMonitoring('codex:1', 'older-round');
+  assert.equal(model.items.length, 2);
+  model.forgetMonitoring('codex:1', 'r1');
+  assert.deepEqual(model.items.map(item => item.id), ['codex:2']);
+  model.accept(snapshot([session(1), session(2)]));
+  assert.deepEqual(model.items.map(item => item.id), ['codex:2'], 'a delayed pre-close snapshot stays suppressed');
+  model.accept({...snapshot([session(1), session(2)]), ts: 2001});
+  assert.deepEqual(model.items.map(item => item.id), ['codex:2', 'codex:1'], 'a newer same-round Hook can return');
+  model.forgetMonitoring('codex:1', 'r1');
+  model.accept({...snapshot([session(2)]), ts: 2002});
+  model.accept({...snapshot([session(1, 'running', {roundId: 'r2'}), session(2)]), ts: 2003});
+  assert.deepEqual(model.items.map(item => item.id), ['codex:2', 'codex:1']);
+});
+test('confirmed close blocks a delayed old snapshot after the removal snapshot arrived first', () => {
+  const model = connected({now: () => 2000});
+  model.accept(snapshot([session(1), session(2)]));
+  model.accept({...snapshot([session(2)]), ts: 1999});
+  assert.deepEqual(model.items.map(item => item.id), ['codex:2']);
+  model.forgetMonitoring('codex:1', 'r1');
+  model.accept(snapshot([session(1), session(2)]));
+  assert.deepEqual(model.items.map(item => item.id), ['codex:2']);
+  model.accept({...snapshot([session(1, 'running', {roundId: 'r2'}), session(2)]), ts: 2001});
+  assert.deepEqual(model.items.map(item => item.id), ['codex:2', 'codex:1']);
+});
+test('recovered Codex completions appear once, expire, and respect dismissal across rail restarts', () => {
+  let time = 2000;
+  const values = new Map();
+  const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value)};
+  const complete = session(1, 'done', {recovered: true, endedAt: 1500, updatedAt: 1500});
+  let model = connected({now: () => time, holdMs: 1000, storage});
+  model.accept(snapshot([complete]));
+  assert.equal(model.items.length, 1);
+  model.dismiss('codex:1', 'r1');
+  model = connected({now: () => time, holdMs: 1000, storage});
+  model.accept(snapshot([complete]));
+  assert.equal(model.items.length, 0);
+  model.accept(snapshot([session(1, 'running', {roundId: 'r2', updatedAt: 2100})]));
+  assert.equal(model.items.length, 1);
+  model = connected({now: () => time, holdMs: 1000, storage});
+  model.accept(snapshot([{...complete, roundId: 'r2', endedAt: 1900, updatedAt: 1900}]));
+  assert.equal(model.items.length, 1);
+  model = connected({now: () => time, holdMs: 1000, storage});
+  model.accept(snapshot([{...complete, viewedRoundId: 'r1'}]));
+  assert.equal(model.items.length, 0);
+  model.accept(snapshot([complete]));
+  assert.equal(model.items.length, 0);
+  time = 2500;
+  model = connected({now: () => time, holdMs: 1000, storage});
+  model.accept(snapshot([{...complete, roundId: 'r3', endedAt: 1500}]));
+  assert.equal(model.items.length, 0);
+  model.accept(snapshot([session(2, 'done', {endedAt: 2400})]));
+  assert.equal(model.items.length, 0);
+});
 test('unknown and disconnected sessions are retained; disabling a source clears its avatars', () => {
   const model = connected(); model.accept(snapshot([session(1)]));
   model.accept(snapshot([session(1, 'unknown')])); assert.equal(model.items.length, 1);
@@ -127,6 +193,15 @@ test('shared card presentation preserves source-specific navigation and wait pre
   assert.equal(sessionPresentation(session(1, 'running', { source: 'workbuddy' })).url, 'workbuddy://chat/1');
   assert.equal(sessionPresentation(session(1, 'running', { source: 'workbuddy', agentType: 'workbuddy-ai' })).provider, 'WorkBuddy 国际版');
   assert.equal(sessionPresentation(session(1, 'running', { source: 'workbuddy', agentType: 'workbuddy-ai' })).url, 'workbuddy-ai://chat/1');
+  // A delegated Codeg child carries the 子任务 badge with its parent as the detail
+  // the card shows as the provider tooltip, and links to its own conversation.
+  const child = session(1, 'wait', { source: 'codeg', sessionId: '215', agentType: 'code_buddy', subagent: true, parentTitle: 'Build feature', pending: [{ id: 'p1', text: 'Allow shell?', questions: [{ text: 'Allow shell?' }] }] });
+  const childCard = sessionPresentation(child);
+  assert.deepEqual(childCard.badge, { host: 'codeg', id: 'codebuddy-ide', label: '子任务', detail: '父会话：Build feature' });
+  assert.equal(childCard.provider, 'Codeg');
+  assert.equal(childCard.url, 'codeg://session/215');
+  assert.equal(childCard.question, 'Allow shell?');
+  assert.equal(providerLabel({ session: child }, childCard), 'Codeg · 子任务');
 });
 test('the CodeBuddy VS Code plugin is labelled as a VS Code host and opens VS Code', () => {
   const vscode = session(1, 'running', { source: 'codebuddy-ide', agentType: 'codebuddy', hostKind: 'vscode', cwd: '/tmp/demo' });
@@ -200,6 +275,37 @@ test('opened completed rail session survives viewed updates for ten seconds, rep
  time=9000; model.retainOpened('codex:1','r1'); assert.equal(model.nextExpiry,12000);
  time=11999; model.refresh(); assert.equal(model.items.length,1);
  time=12000; model.refresh(); assert.equal(model.items.length,0);
+});
+test('clicked aborted round expires offline, while hover entry resets only its live deadline', () => {
+ let time=2000; const model=connected({now:()=>time});
+ model.accept(snapshot([session(1),session(2)]));
+ model.accept(snapshot([session(1,'aborted',{endedAt:time}),session(2,'done',{endedAt:time})]));
+ assert.equal(model.items[0].openedUntil,undefined);
+ assert.equal(model.resetOpened('codex:1','r1'),false,'ordinary hover has no countdown');
+ model.retainOpened('codex:1','r1');
+ assert.equal(model.nextExpiry,12000);
+ time=5000; assert.equal(model.resetOpened('codex:1','r1'),true);
+ assert.equal(model.items[0].openedUntil,15000);
+ assert.equal(model.resetOpened('codex:2','r1'),false,'other row is unaffected');
+ model.connect('offline');
+ assert.equal(model.nextExpiry,15000,'the clicked deadline stays scheduled offline');
+ time=15001; assert.equal(model.resetOpened('codex:1','r1'),false,'an expired row cannot restart');
+ model.refresh();
+ assert.deepEqual(model.items.map(item=>item.id),['codex:2']);
+ model.connect('connected');
+ assert.deepEqual(model.items.map(item=>item.id),['codex:2'],'reconnection cannot resurrect the expired round');
+ model.accept(snapshot([session(1,'running',{roundId:'r2'}),session(2,'done',{endedAt:2000})]));
+ assert.deepEqual(model.items.map(item=>item.id),['codex:2','codex:1'],'a new round remains available');
+});
+test('clicked terminal deadline remains authoritative when its host exits', () => {
+ let time=2000; const model=connected({now:()=>time});
+ model.accept(snapshot([session(1)]));
+ model.accept(snapshot([session(1,'aborted',{endedAt:time})]));
+ model.retainOpened('codex:1','r1');
+ model.accept({...snapshot([]),sources:{codex:{state:'exited'}}});
+ assert.equal(model.nextExpiry,12000);
+ time=9000;model.refresh();assert.equal(model.items.length,1);
+ time=12000;model.refresh();assert.equal(model.items.length,0);
 });
 test('a new active round cancels pending opened-session removal', () => {
  let time=2000; const model=connected({now:()=>time});

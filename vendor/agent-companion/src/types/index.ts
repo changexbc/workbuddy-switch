@@ -40,3 +40,5 @@ export type {
   HitRegion,
 } from './commands.js';
 export { errorMessage } from './commands.js';
+export type { UpdateConfig, UpdatePhase, UpdateSnapshot } from './update.js';
+export { idleUpdateSnapshot, isUpdateConfig, isUpdateSnapshot } from './update.js';

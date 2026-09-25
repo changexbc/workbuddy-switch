@@ -303,7 +303,7 @@ test('Codex hook install merges without dropping existing project hooks',async t
  assert.equal(doc.hooks.Stop.some(g=>JSON.stringify(g).includes('echo keep')),true);
  for(const event of HOOK_EVENTS)assert.equal(doc.hooks[event].some(g=>JSON.stringify(g).includes(HOOK_SCRIPT_NAME)),true);
  assert.equal(doc.hooks.SessionEnd.find(g=>JSON.stringify(g).includes(HOOK_SCRIPT_NAME)).hooks[0].async,undefined);
- assert.equal(doc.hooks.Stop.find(g=>JSON.stringify(g).includes(HOOK_SCRIPT_NAME)).hooks[0].async,true);
+ assert.equal(doc.hooks.Stop.find(g=>JSON.stringify(g).includes(HOOK_SCRIPT_NAME)).hooks[0].async,undefined);
  assert.equal(await fs.readFile(path.join(home,'.codex/hooks/astra-office-monitor.url'),'utf8'),'http://127.0.0.1:8850');
 });
 

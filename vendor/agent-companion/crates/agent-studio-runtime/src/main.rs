@@ -19,7 +19,7 @@ use std::{
 };
 fn main() {
     let result = match std::env::args().nth(1).as_deref() {
-        Some("hook") => {
+        Some("hook") => (|| -> Result<(), String> {
             let mut bytes = Vec::new();
             let _ = std::io::stdin().take(1024 * 1024).read_to_end(&mut bytes);
             let agent = arg_value("--source").unwrap_or_else(|| "codex".into());
@@ -30,6 +30,7 @@ fn main() {
                 let _ = std::io::stdout().flush();
             }
             if let Ok(mut p) = serde_json::from_slice::<Value>(&bytes) {
+                let codex_stop = agent == "codex" && matches!(p["hook_event_name"].as_str().or(p["hookEventName"].as_str()), Some("Stop" | "Interrupt" | "SessionEnd"));
                 p["agent_source"] = json!(agent);
                 if let Some(edition) = arg_value("--edition") {
                     p["agent_edition"] = json!(edition);
@@ -40,10 +41,23 @@ fn main() {
                         p["agent_edition"] = json!(edition);
                     }
                 }
-                let _ = call(&home(), "hook", p);
+                if codex_stop {
+                    // Stop expects JSON output. Report delivery failures to
+                    // Codex instead of silently leaving the session running.
+                    if let Err(delivery) = call(&home(), "hook", p.clone()) {
+                        match agent_studio_core::codex_recovery::record_offline_terminal(&home(), &p) {
+                            Ok(true) => {},
+                            Ok(false) => return Err(delivery),
+                            Err(persist) => return Err(format!("{delivery}; 离线结束事件保存失败：{persist}")),
+                        }
+                    }
+                    println!("{{}}");
+                } else {
+                    let _ = call(&home(), "hook", p);
+                }
             }
             Ok(())
-        }
+        })(),
         Some("serve") => serve(),
         Some("custom-hook") => custom_hook(),
         _ => {
@@ -162,6 +176,35 @@ impl Notifications {
         fresh
     }
 }
+fn ingest_hook_durably(collector: &mut Collector, payload: &Value) -> Result<Value, String> {
+    let accepted = collector.ingest_hook(payload);
+    if !accepted { return Ok(json!(false)); }
+    let sid = payload["session_id"].as_str().or(payload["sessionId"].as_str()).unwrap_or("");
+    let hidden_codex_child = payload["agent_source"] == "codex"
+        && collector.hub.hidden_codeg_codex_ids.contains(sid.trim_start_matches("thr_"));
+    if payload["agent_source"] == "codex" {
+        if !hidden_codex_child {
+            let session = collector.hub.sessions.get(&format!("codex:{sid}")).ok_or("Codex 会话状态缺失")?;
+            let live = collector.live.get(sid).ok_or("Codex 轮次状态缺失")?;
+            agent_studio_core::codex_recovery::save(&collector.home, &collector.settings, &collector.integrations, sid, session, live)?;
+        }
+    }
+    if payload["agent_source"] == "codex" && !hidden_codex_child
+        && matches!(payload["hook_event_name"].as_str().or(payload["hookEventName"].as_str()), Some("Stop" | "Interrupt" | "SessionEnd")) {
+        match agent_studio_core::codex_recovery::record_offline_terminal(&collector.home, payload) {
+            Ok(true) => Ok(json!(accepted)),
+            Ok(false) => Err("结束事件未被持久保存".into()),
+            Err(e) => Err(e),
+        }
+    } else {
+        Ok(json!(accepted))
+    }
+}
+fn collector_request_command(command: &str) -> bool {
+    matches!(command, "settings_set" | "settings_check" | "integrations_get" | "integrations_set"
+        | "custom_integrations_get" | "custom_integrations_set" | "custom_preview" | "custom_hook"
+        | "session_monitor_close")
+}
 fn serve() -> Result<(), String> {
     let home = home();
     let dir = home.join(".agent-studio");
@@ -216,7 +259,7 @@ fn serve() -> Result<(), String> {
                     let result = if command == "codeg_stream" {
                         Ok(json!(collector.ingest_codeg_stream(&payload)))
                     } else if command == "hook" {
-                        Ok(json!(collector.ingest_hook(&payload)))
+                        ingest_hook_durably(&mut collector, &payload)
                     } else if command == "integrations_get" {
                         Ok(integrations::get(&collector))
                     } else if command == "integrations_set" {
@@ -391,12 +434,21 @@ fn serve() -> Result<(), String> {
                     Ok(json!(true))
                 }
                 "hook" => {
-                    jobs.send(("hook".into(), p.clone(), None))
-                        .map_err(|_| "采集器已退出")?;
-                    Ok(json!(true))
+                    let terminal = p["agent_source"] == "codex";
+                    if terminal {
+                        let (send, receive) = std::sync::mpsc::channel();
+                        jobs.send(("hook".into(), p.clone(), Some(send)))
+                            .map_err(|_| "采集器已退出")?;
+                        receive.recv_timeout(Duration::from_secs(2))
+                            .map_err(|_| "结束事件未被采集器确认")?
+                    } else {
+                        jobs.send(("hook".into(), p.clone(), None))
+                            .map_err(|_| "采集器已退出")?;
+                        Ok(json!(true))
+                    }
                 }
                 "settings_get" => Ok(settings.clone()),
-                command if matches!(command, "settings_set" | "settings_check" | "integrations_get" | "integrations_set" | "custom_integrations_get" | "custom_integrations_set" | "custom_preview" | "custom_hook") => {
+                command if collector_request_command(command) => {
                     let (send, receive) = std::sync::mpsc::channel();
                     jobs.send((command.into(), p.clone(), Some(send)))
                         .map_err(|_| "采集器已退出")?;
@@ -427,4 +479,58 @@ fn serve() -> Result<(), String> {
     let _ = std::fs::remove_file(endpoint(&home));
     drop(lock);
     Ok(())
+}
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn manual_close_is_routed_to_the_serialized_collector_queue() {
+        assert!(collector_request_command("session_monitor_close"));
+        assert!(!collector_request_command("unknown"));
+    }
+    #[test]
+    fn terminal_rpc_rejects_a_failed_durable_write() {
+        let home = std::env::temp_dir().join(format!("codex-write-failure-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let mut collector = Collector::new(home.clone()).unwrap();
+        let started = now();
+        assert_eq!(ingest_hook_durably(&mut collector, &json!({"agent_source":"codex","session_id":"tracked","turn_id":"one","hook_event_name":"UserPromptSubmit","timestamp":started})).unwrap(), true);
+        let file = home.join(".agent-studio/codex-recovery-v1.json");
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        let stopped = json!({"agent_source":"codex","session_id":"tracked","turn_id":"one","hook_event_name":"Stop","timestamp":started+1});
+        assert!(ingest_hook_durably(&mut collector, &stopped).is_err());
+        std::fs::remove_dir(&file).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    fn start_rpc_rejects_a_failed_durable_write() {
+        let home = std::env::temp_dir().join(format!("codex-start-write-failure-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(home.join(".agent-studio/codex-recovery-v1.json")).unwrap();
+        let mut collector = Collector::new(home.clone()).unwrap();
+        assert!(ingest_hook_durably(&mut collector, &json!({"agent_source":"codex","session_id":"tracked","turn_id":"one","hook_event_name":"UserPromptSubmit","timestamp":now()})).is_err());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    fn untracked_codex_stop_remains_harmless() {
+        let home = std::env::temp_dir().join(format!("codex-untracked-stop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let mut collector = Collector::new(home.clone()).unwrap();
+        assert_eq!(ingest_hook_durably(&mut collector, &json!({"agent_source":"codex","session_id":"unknown","turn_id":"one","hook_event_name":"Stop","timestamp":now()})).unwrap(), false);
+        assert!(collector.hub.sessions.is_empty());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    fn hidden_codeg_child_stop_does_not_require_recovery_record() {
+        let home = std::env::temp_dir().join(format!("codex-hidden-child-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let mut collector = Collector::new(home.clone()).unwrap();
+        collector.hub.hide_codeg_child_codex("thr-child");
+        let started = now();
+        assert_eq!(ingest_hook_durably(&mut collector, &json!({"agent_source":"codex","session_id":"thr-child","turn_id":"one","hook_event_name":"UserPromptSubmit","timestamp":started})).unwrap(), true);
+        assert_eq!(ingest_hook_durably(&mut collector, &json!({"agent_source":"codex","session_id":"thr-child","turn_id":"one","hook_event_name":"Stop","timestamp":started+1})).unwrap(), true);
+        assert!(collector.hub.snapshot()["sessions"].as_array().unwrap().is_empty());
+        assert!(!home.join(".agent-studio/codex-recovery-v1.json").exists());
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }

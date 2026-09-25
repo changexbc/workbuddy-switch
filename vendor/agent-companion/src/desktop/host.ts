@@ -5,6 +5,7 @@
  * without a bundler.
  */
 import type {
+  SessionMonitorCloseResult,
   CollectorRequestCommand,
   DesktopCommand,
   DesktopCommandMap,
@@ -90,6 +91,15 @@ export async function desktopCommand<K extends DesktopCommand>(
 ): Promise<DesktopCommandMap[K]['result']> {
   const { invoke } = await invokeApi();
   return (await invoke(`plugin:agent-studio|${command}`, rest[0] as Record<string, unknown> | undefined)) as DesktopCommandMap[K]['result'];
+}
+
+/** Ends only the selected session round. The next activity may create another row. */
+export async function closeSessionMonitoring(source: string, sessionId: string, roundId: string): Promise<boolean> {
+  if (!isDesktop()) throw new Error('此操作仅在桌面悬浮窗中可用');
+  const result = await desktopCommand('collector_request', {
+    command: 'session_monitor_close', payload: {source, sessionId, roundId},
+  }) as SessionMonitorCloseResult;
+  return result.closed === true;
 }
 
 const railPreferenceKey = 'astra.desktop.visible-count.v1';

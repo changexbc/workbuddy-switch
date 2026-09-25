@@ -39,7 +39,7 @@ await context.addInitScript(() => {
     constructor(){ window.__stream=this; }
     close(){}
   };
-  window.__snapshot=(sessions)=>window.__stream.onmessage({data:JSON.stringify({version:1,ts:Date.now(),ready:true,sources:{codex:{state:'ok'}},sessions,events:[]})});
+  window.__snapshot=(sessions)=>window.__stream.onmessage({data:JSON.stringify({version:1,ts:Date.now(),ready:true,sources:{codex:{state:'ok'},'codebuddy-ide':{state:'ok'},codeg:{state:'ok'},workbuddy:{state:'ok'}},sessions,events:[]})});
 });
 const page=await context.newPage();
 // Playwright's locator.isDisabled() reports false for a <fieldset> even when it is
@@ -47,6 +47,16 @@ const page=await context.newPage();
 const fieldsetDisabled=()=>page.locator('fieldset').evaluate(fieldset=>fieldset.disabled);
 page.on('pageerror',e=>errors.push(e.message));
 page.on('response',r=>{resources.push(r.url());if(r.status()>=400&&!r.url().endsWith('favicon.ico'))failed.push(r.url());});
+// Playwright leaves the pointer where it last clicked, and a row under the
+// pointer keeps its hover card open — a hover card deliberately wins over the
+// automatic card for the same session, so the automatic card stays hidden until
+// the pointer leaves. Park it off the rail and wait the hover card out before
+// asserting an automatic card; the product rule is right, the assertion just
+// has to stop hovering.
+const clearHoverCard=async()=>{
+  await page.mouse.move(4,580);
+  await page.locator('#desktop-session-card').waitFor({state:'detached'});
+};
 await fs.mkdir('artifacts/ui',{recursive:true});
 try {
   await page.goto('http://127.0.0.1:4191/desktop.html');
@@ -57,7 +67,7 @@ try {
   assert.equal(await page.locator('.desktop-empty [data-session-id]').count(),0);
   assert.equal(await page.locator('.desktop-empty').getAttribute('title'),'暂无任务，小猫正在休息');
   await page.screenshot({path:'artifacts/ui/empty.png'});
-  const session={id:'codex:fixture',source:'codex',sessionId:'fixture',title:'独立悬浮框迁移验证',status:'running',roundId:'r1',updatedAt:Date.now(),steps:[],pending:[]};
+  const session={id:'codex:fixture',source:'codex',sessionId:'fixture',project:'agent-companion',title:'独立悬浮框迁移验证',status:'running',roundId:'r1',updatedAt:Date.now(),steps:[],pending:[]};
   await page.evaluate(s=>__snapshot([s]),session);
   await page.locator('.desktop-avatar[data-status=running]').waitFor();
   session.status='wait';session.pending=[{id:'q1',text:'请选择下一步',questions:[{question:'请选择下一步',options:[{label:'继续',description:'保留当前设置'},{label:'暂停'}]}]}];
@@ -68,17 +78,86 @@ try {
   session.status='done';session.pending=[];session.endedAt=Date.now();session.updatedAt=Date.now();
   await page.evaluate(s=>__snapshot([s]),session);
   await page.locator('.desktop-avatar[data-status=done]').waitFor();
-  await page.locator('.desktop-automatic-card').waitFor({state:'detached'});
+  await page.locator('.desktop-automatic-card [data-status=done]').waitFor({state:'visible'});
+  assert.match(await page.locator('.desktop-automatic-card').innerText(),/已完成/);
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-card-head strong').innerText(),session.project,'the card heading uses the session project');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-preview-text').innerText(),session.title,'the second line shows the session title');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-preview').getAttribute('aria-label'),`进入对话：${session.title}`,'the link keeps the full title for assistive technology');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-dismiss').evaluate(button=>getComputedStyle(button).borderTopWidth),'2px','the dismiss button has a visible white rim');
+  assert.equal(await page.locator('.desktop-automatic-card svg.desktop-chevron path').count(),1,'the session link uses a vector chevron');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-provider').innerText(),'','provider names stay available as labels without taking card width');
+  const headingBox=await page.locator('.desktop-automatic-card .desktop-card-head strong').boundingBox();
+  const actionBox=await page.locator('.desktop-automatic-card .desktop-preview-text').boundingBox();
+  const iconBox=await page.locator('.desktop-automatic-card .desktop-provider img').last().boundingBox();
+  const chevronBox=await page.locator('.desktop-automatic-card .desktop-chevron').boundingBox();
+  const reminderBox=await page.locator('.desktop-automatic-card').boundingBox();
+  assert(Math.abs(headingBox.x-actionBox.x)<1,'the title and action start in the same column');
+  assert(Math.abs(iconBox.x+iconBox.width-chevronBox.x-chevronBox.width)<2.5,'the provider icon and chevron share a right edge');
+  assert.equal(chevronBox.width,10,'the chevron uses the smaller size');
+  assert(Math.abs(actionBox.x-reminderBox.x-(reminderBox.x+reminderBox.width-chevronBox.x-chevronBox.width))<1,'the action and chevron have matching side insets');
+  await page.evaluate(s=>__snapshot([s]),session);
+  assert.equal(await page.locator('.desktop-automatic-card [data-status=done]').count(),1,'repeated snapshots keep one completion reminder');
   await page.screenshot({path:'artifacts/ui/done.png'});
-  await page.locator('.desktop-grip').click({button:'right'});
-  const menu=await page.locator('[role=menuitem]').allTextContents();
-  assert(menu.includes('悬浮窗设置'));assert(!menu.some(t=>/3D|办公室/.test(t)));
-  // Escape is the rail's whole keyboard story and had no coverage: it has to
-  // close the menu, close the card, and hand focus back to the row that opened
-  // it, or the rail becomes a keyboard trap. Focus rather than click opens the
-  // card, so nothing is launched.
+  await page.evaluate(()=>{ document.documentElement.style.background='linear-gradient(115deg,#456a68 0 38%,#94a56d 38% 62%,#315573 62% 100%)'; });
+  await page.screenshot({path:'artifacts/ui/done-background.png'});
+  await page.evaluate(()=>{ document.documentElement.style.removeProperty('background'); });
+  await page.locator('.desktop-automatic-card .desktop-dismiss').click();
+  await page.locator('.desktop-automatic-card').waitFor({state:'detached'});
+  await page.evaluate(s=>__snapshot([s]),session);
+  assert.equal(await page.locator('.desktop-automatic-card').count(),0,'dismissed completion stays closed on repeated snapshots');
+  const codeBuddy={...session,id:'codebuddy-ide:fixture',source:'codebuddy-ide',sessionId:'cb-fixture',hostKind:'vscode',agentType:'codebuddy',project:'vscode-extension',title:'排查 VSCode 插件任务监听失效',status:'running',roundId:'r1',endedAt:undefined,updatedAt:Date.now()};
+  await page.evaluate(s=>__snapshot([s]),codeBuddy);
+  await page.locator('.desktop-avatar[data-status=running]').waitFor();
+  await page.locator('.desktop-avatar[data-session-id="codebuddy-ide:fixture"]').click({button:'right'});
+  await page.getByRole('menuitem',{name:'关闭本次监听'}).waitFor();
   await page.keyboard.press('Escape');
-  await page.locator('.desktop-context-menu').waitFor({state:'hidden'});
+  codeBuddy.status='done';codeBuddy.endedAt=Date.now();codeBuddy.updatedAt=Date.now();
+  await page.evaluate(s=>__snapshot([s]),codeBuddy);
+  await clearHoverCard();
+  await page.locator('.desktop-automatic-card [data-status=done]').waitFor({state:'visible'});
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-provider img').count(),2,'the CodeBuddy VS Code card retains both provider icons');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-provider').innerText(),'','the CodeBuddy icons have no visible provider name');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-card-head strong').innerText(),codeBuddy.project,'the CodeBuddy heading uses the project');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-preview-text').innerText(),codeBuddy.title,'the CodeBuddy second line uses the title');
+  await page.screenshot({path:'artifacts/ui/codebuddy-card.png'});
+  const generatedProjects=[
+    {...session,id:'codeg:fixture',source:'codeg',sessionId:'codeg-fixture',project:'79f660f8af4149aa97b1f60a22be581e',title:'test',status:'running',roundId:'r1',endedAt:undefined,updatedAt:Date.now()},
+    {...session,id:'workbuddy:fixture',source:'workbuddy',sessionId:'workbuddy-fixture',project:'2026-09-24-17-24-22',title:'test',status:'running',roundId:'r1',endedAt:undefined,updatedAt:Date.now()},
+  ];
+  await page.evaluate(s=>__snapshot(s),generatedProjects);
+  await page.locator('.desktop-avatar[data-status=running]').first().waitFor();
+  for (const project of generatedProjects) {
+    await page.locator(`.desktop-avatar[data-session-id="${project.id}"]`).click({button:'right'});
+    await page.getByRole('menuitem',{name:'关闭本次监听'}).waitFor();
+    await page.keyboard.press('Escape');
+  }
+  for(const project of generatedProjects){project.status='done';project.endedAt=Date.now();project.updatedAt=Date.now();}
+  await page.evaluate(s=>__snapshot(s),generatedProjects);
+  await clearHoverCard();
+  await page.locator('.desktop-automatic-card').nth(1).waitFor({state:'visible'});
+  const projectLabels=await page.locator('.desktop-automatic-card .desktop-card-head strong').allTextContents();
+  assert(projectLabels.includes('聊天')&&projectLabels.includes('任务 · 09/24 17:24'),'generated directories show chat and task labels');
+  await page.screenshot({path:'artifacts/ui/generated-project-labels.png'});
+  await page.locator('.desktop-grip').click({button:'right'});
+  assert.equal(await page.locator('[role=menu],.desktop-context-menu').count(),0,'right-click does not open a rail menu');
+  assert(await page.locator('.desktop-grip').evaluate(element => {
+    const event=new MouseEvent('contextmenu',{bubbles:true,cancelable:true});
+    return !element.dispatchEvent(event);
+  }),'right-click does not open the WebView default menu');
+  session.status='running';session.roundId='r2';session.endedAt=undefined;session.updatedAt=Date.now();
+  await page.evaluate(s=>__snapshot([s]),session);
+  await page.locator('.desktop-avatar[data-status=running]').waitFor();
+  await page.locator('.desktop-avatar').click({button:'right'});
+  await page.getByRole('menuitem',{name:'关闭本次监听'}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.getByRole('menu').count(),0,'Escape closes only the avatar menu');
+  await page.locator('.desktop-avatar').click({button:'right'});
+  await page.getByRole('menuitem',{name:'关闭本次监听'}).click();
+  await page.getByRole('menu').waitFor({state:'detached'});
+  assert.equal(await page.locator('.desktop-avatar[data-status=running]').count(),1,'unsupported browser command keeps the avatar');
+  assert.match(await page.locator('.desktop-notice').innerText(),/桌面悬浮窗/,'unsupported browser command reports an error');
+  // Escape closes the card and hands focus back to the row that opened it.
+  // Focus rather than click opens the card, so nothing is launched.
   await page.locator('.desktop-avatar').first().focus();
   await page.locator('.desktop-card').waitFor({state:'visible'});
   // Focus has to start inside the card, or it never leaves the avatar and the
@@ -89,7 +168,21 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('.desktop-card').waitFor({state:'detached'});
   assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('data-session-id')),session.id,'Escape returns focus to the row that opened the card');
-  assert(await page.locator('.desktop-context-menu').isHidden(),'the menu stays closed');
+  // A failure is a finished round like a completion, so the rail must raise its
+  // card without a hover. It needs a new round of its own: the completion above
+  // was closed for r1, and a closed round never reopens.
+  session.status='error';session.roundId='r3';session.endedAt=Date.now();session.updatedAt=Date.now();
+  await page.evaluate(s=>__snapshot([s]),session);
+  await page.locator('.desktop-avatar[data-status=error]').waitFor();
+  await clearHoverCard();
+  await page.locator('.desktop-automatic-card [data-status=error]').waitFor({state:'visible'});
+  assert.match(await page.locator('.desktop-automatic-card').innerText(),/失败/,'the failure card names the status');
+  assert.equal(await page.locator('.desktop-automatic-card .desktop-dismiss').getAttribute('title'),'关闭本次失败提示','the failure card names its own dismissal');
+  await page.screenshot({path:'artifacts/ui/error.png'});
+  await page.locator('.desktop-automatic-card .desktop-dismiss').click();
+  await page.locator('.desktop-automatic-card').waitFor({state:'detached'});
+  await page.evaluate(s=>__snapshot([s]),session);
+  assert.equal(await page.locator('.desktop-automatic-card').count(),0,'a dismissed failure stays closed on repeated snapshots');
   // Hold the first read open. The retry button must not be reachable while a read
   // is in flight, or a stale success can overwrite a failure the user already saw.
   holdRead=true;
@@ -102,6 +195,8 @@ try {
   const codexSwitch=page.locator('[data-field=source-codex]');
   assert.equal(await codexSwitch.getAttribute('aria-checked'),'true');
   await page.locator('button[data-style=bot]').click();
+  await page.getByRole('combobox',{name:'悬浮窗尺寸'}).click();
+  await page.getByRole('option',{name:'小号'}).click();
   await page.getByRole('combobox', {name:'默认显示数量'}).click();
   await page.getByRole('option', {name:'5 个',exact:true}).click();
   settings.scene.speed=9;
@@ -135,6 +230,7 @@ try {
   // Walk the tab order here, right after the reload: a mouse click leaves
   // Chromium's sequential-focus starting point somewhere Tab no longer advances
   // from, so this has to run before the click-driven scenarios below.
+  await page.locator('.settings-form h1').click();
   const rings=[];
   for(let i=0;i<20;i++){
     await page.keyboard.press('Tab');
@@ -147,9 +243,36 @@ try {
     if(!stop)break;
     rings.push(stop);
   }
-  assert.equal(rings.length,13,'settings controls, integration refresh and four independent disclosure buttons are reachable by Tab');
+  assert.equal(rings.length,14,'settings controls, integration refresh and four independent disclosure buttons are reachable by Tab');
   for(const stop of rings)assert.equal(stop.ring,'2px solid rgb(71, 125, 102) @4px',`${stop.tag}[${stop.field}] keeps the pre-migration focus ring`);
   assert.equal(await page.locator('button[data-style=bot]').getAttribute('aria-pressed'),'true');
+  assert.equal(await page.locator('[data-field=size]').innerText(),'小号');
+  const sizingPage=await context.newPage();
+  await sizingPage.goto('http://127.0.0.1:4191/desktop.html');
+  await sizingPage.waitForFunction(()=>window.__stream?.onmessage);
+  await sizingPage.evaluate(s=>__snapshot([s]),{id:'codex:size',source:'codex',sessionId:'size',title:'尺寸预览',status:'running',roundId:'r1',updatedAt:Date.now(),steps:[],pending:[]});
+  await sizingPage.locator('.desktop-avatar').waitFor();
+  await sizingPage.waitForFunction(()=>document.querySelector('#desktop-rail').dataset.size==='small');
+  const dimensions=async()=>sizingPage.evaluate(()=>({strip:document.querySelector('.desktop-strip').getBoundingClientRect().width,avatar:document.querySelector('.desktop-avatar').getBoundingClientRect().width}));
+  await sizingPage.locator('.desktop-avatar').hover();
+  await sizingPage.locator('.desktop-card').waitFor({state:'visible'});
+  const small=await dimensions();
+  const smallCard=await sizingPage.locator('.desktop-card').evaluate(element=>element.getBoundingClientRect().width);
+  await sizingPage.screenshot({path:'artifacts/ui/rail-small.png'});
+  for(const size of ['medium','standard']){
+    await sizingPage.evaluate(size=>{
+      const key='astra.desktop.preferences.v1';
+      localStorage.setItem(key,JSON.stringify({...JSON.parse(localStorage.getItem(key)),size}));
+      window.dispatchEvent(new StorageEvent('storage',{key}));
+    },size);
+    await sizingPage.waitForFunction(size=>document.querySelector('#desktop-rail').dataset.size===size,size);
+  }
+  const standard=await dimensions();
+  const standardCard=await sizingPage.locator('.desktop-card').evaluate(element=>element.getBoundingClientRect().width);
+  assert(small.strip<standard.strip&&small.avatar<standard.avatar&&smallCard<standardCard,'saved size visibly changes the rail, portrait and preview card');
+  await sizingPage.screenshot({path:'artifacts/ui/rail-standard.png'});
+  await sizingPage.close();
+  await page.evaluate(()=>localStorage.setItem('astra.desktop.preferences.v1',JSON.stringify({...JSON.parse(localStorage.getItem('astra.desktop.preferences.v1')),size:'small'})));
   assert.equal(await page.locator('[data-field=visibleCount]').innerText(),'5 个');
   assert.equal(await page.locator('[data-field=source-codex]').getAttribute('aria-checked'),'false');
   await page.setViewportSize({width:480,height:700});
@@ -181,7 +304,7 @@ try {
   await countSelect.click();
   await page.keyboard.press('Escape');
   await page.getByRole('listbox').waitFor({state:'hidden'});
-  assert(await countSelect.evaluate(el=>el===document.activeElement),'Escape returns focus to the select');
+  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'combobox');
   await countSelect.click();
   await page.getByRole('option',{name:'5 个',exact:true}).click();
   await countSelect.click();
@@ -226,7 +349,7 @@ try {
   assert.deepEqual(errors,[]);
   assert(!resources.some(url=>/three|\.glb|\.exr|\/models\//i.test(url)));
   checks.push(
-    'empty','running','wait reminder','quiet done','settings persistence',
+    'empty','running','wait reminder','quiet done','failure reminder','settings persistence',
     'no retry while a read is in flight','row label toggles the switch','automatic changes persist without submit',
     'save re-reads then writes once','source write failure is not reported as success',
     'partial save is not reported as success','shared schema preserved',
@@ -235,8 +358,8 @@ try {
   await railMigrationRegressions();
   await railMotion();
   await railDesktopPath();
-  await fs.writeFile('artifacts/ui/report.json',JSON.stringify({passed:true,errors,failed,menu,checks},null,2));
-  console.log('PASS: rail lifecycle, question reminder, quiet completion, settings persistence, no office resources');
+  await fs.writeFile('artifacts/ui/report.json',JSON.stringify({passed:true,errors,failed,checks},null,2));
+  console.log('PASS: rail lifecycle, question, completion and failure reminders, settings persistence, no office resources');
 } finally {await browser.close();await new Promise(resolve=>server.httpServer.close(resolve));}
 
 async function railMigrationRegressions(){
@@ -271,10 +394,7 @@ async function railMigrationRegressions(){
     await page.waitForTimeout(100);
     const repeated=await page.evaluate(()=>window.__cardEntrances);
     await page.locator('.desktop-grip').click({button:'right'});
-    await page.locator('.desktop-context-menu').waitFor({state:'visible'});
-    await page.locator('.desktop-grip').click();
-    const menuClosed=await page.locator('.desktop-context-menu').isHidden();
-    await page.keyboard.press('Escape');
+    const noMenu=await page.locator('.desktop-context-menu').count()===0;
     const eyes=()=>page.locator('.desktop-list .companion-lids path').evaluateAll(paths=>paths.map(path=>path.getAttribute('d')));
     const before=await eyes();
     assert(before.length===2&&before.every(Boolean),'the waiting avatar starts with two drawn eyes');
@@ -287,8 +407,8 @@ async function railMigrationRegressions(){
       await page.locator(`.desktop-list svg[data-style=${avatarStyle}]`).waitFor();
       styles.push(await eyes());
     }
-    assert.deepEqual({replays:repeated-entrances,menuClosed,styles},{replays:0,menuClosed:true,styles:[before,before]},'unchanged snapshots preserve animation, outside clicks close menus, and both style switches preserve eyes');
-    checks.push('unchanged snapshots do not replay reminder entrance','outside click closes the rail menu','both avatar style switches preserve status eyes');
+    assert.deepEqual({replays:repeated-entrances,noMenu,styles},{replays:0,noMenu:true,styles:[before,before]},'unchanged snapshots preserve animation, right-click has no menu, and both style switches preserve eyes');
+    checks.push('unchanged snapshots do not replay reminder entrance','right-click opens no rail menu','both avatar style switches preserve status eyes');
   } finally {await context.close();}
 }
 
@@ -452,8 +572,7 @@ async function railDesktopPath(){
   await rail.locator('.desktop-empty').waitFor();
   await page.waitForFunction(()=>window.__regions()!==null);
   const empty=await page.evaluate(()=>window.__regions());
-  // The empty rail is a surface plus the grip and the menu's two items; nothing
-  // else exists yet, and the disclosure button is still hidden.
+  // The empty rail is a surface plus the grip; the disclosure button is hidden.
   assert(empty.length>0,'the empty rail reports something to click');
   assert(!empty.some(region=>region.width<=0||region.height<=0),'no zero-sized region is reported');
   const question=[{id:'q1',text:'请选择下一步',questions:[{question:'请选择下一步',options:[{label:'继续'}]}]}];
@@ -483,12 +602,15 @@ async function railDesktopPath(){
   assert(withCard.some(region=>Math.abs(region.x-previewBox.x)<1&&Math.abs(region.y-previewBox.y)<1&&Math.abs(region.width-previewBox.width)<1&&Math.abs(region.height-previewBox.height)<1),'the open-preview button is reported as a control at its own size');
   const dismissBox=await rail.locator('.desktop-dismiss').boundingBox();
   assert(withCard.some(region=>Math.abs(region.x-dismissBox.x)<1&&Math.abs(region.y-dismissBox.y)<1&&Math.abs(region.width-dismissBox.width)<1&&Math.abs(region.height-dismissBox.height)<1),'the dismiss button is reported as a control at its own size, not as part of the card surface');
+  assert(dismissBox.x<cardBox.x&&dismissBox.x+dismissBox.width>cardBox.x&&dismissBox.y<cardBox.y&&dismissBox.y+dismissBox.height>cardBox.y,'the dismiss button overlaps the top-left border from both sides');
+  const titleBox=await rail.locator('.desktop-card-head strong').boundingBox();
+  assert(dismissBox.x+dismissBox.width<titleBox.x,'the dismiss button does not cover the session title');
   // A hidden surface must contribute nothing. Padding is what makes this worth
   // asserting: a 0x0 box would otherwise become a valid 20x20 region at a
   // negative offset, which the host accepts and which would put a clickable hole
-  // in the corner of the window. The menu is hidden at this point.
+  // in the corner of the window.
   assert(withCard.every(region=>region.x>=0&&region.y>=0),'no region sits outside the window, which is what a hidden surface would produce');
-  assert(await rail.locator('.desktop-context-menu').isHidden(),'the menu really is hidden while this is asserted');
+  assert.equal(await rail.locator('.desktop-context-menu').count(),0,'the rail has no context-menu surface');
   // Disposing must release every subscription: a snapshot after teardown must
   // not repaint the rail. The event has to be dispatched inside the frame —
   // dispatching it on the parent window never reaches the rail's own listener.

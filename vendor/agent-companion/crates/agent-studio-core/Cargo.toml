@@ -11,3 +11,4 @@ chrono = "0.4"
 ureq = { version = "2", default-features = false, features = ["json"] }
 tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
 base64 = "0.22"
+fs2 = "0.4"

@@ -62,6 +62,13 @@ test('Codeg badges surface the nested agent on the outer portrait',()=>{
   assert.deepEqual(sessionBadge({source:'codeg',agentType:'code_buddy'}),{host:'codeg',id:'codebuddy-ide',label:'CodeBuddy'});
   assert.deepEqual(sessionBadge({source:'codeg',agentType:'antigravity'}),{host:'codeg',id:'antigravity',label:'antigravity'});
   assert.deepEqual(sessionBadge({source:'codeg'}),{host:'codeg',id:'codeg',label:'Codeg'});
+  // A delegated child is named as one and points at the session it came from.
+  assert.deepEqual(sessionBadge({source:'codeg',agentType:'code_buddy',subagent:true,parentTitle:'Build feature'}),{host:'codeg',id:'codebuddy-ide',label:'子任务',detail:'父会话：Build feature'});
+  assert.deepEqual(sessionBadge({source:'codeg',agentType:'codex',subagent:true,parentTitle:'Build feature'}),{host:'codeg',id:'codex',label:'子任务',detail:'父会话：Build feature'});
+  // An unreadable parent title drops the detail, never the 子任务 label.
+  assert.deepEqual(sessionBadge({source:'codeg',agentType:'codex',subagent:true}),{host:'codeg',id:'codex',label:'子任务',detail:undefined});
+  // The badge id still names the nested agent, so its icon survives.
+  assert.equal(sessionBadge({source:'codeg',agentType:'code_buddy',subagent:true}).id,'codebuddy-ide');
   assert.deepEqual(sessionBadge({source:'codex'}),{host:'codex',id:'codex',label:'Codex'});
   assert.deepEqual(sessionBadge({source:'workbuddy'}),{host:'workbuddy',id:'workbuddy',label:'WorkBuddy'});
   assert.deepEqual(sessionBadge({source:'workbuddy',agentType:'workbuddy-ai'}),{host:'workbuddy',id:'workbuddy',label:'WorkBuddy 国际版'});

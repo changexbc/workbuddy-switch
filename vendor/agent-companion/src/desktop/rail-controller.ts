@@ -2,7 +2,7 @@
  * The rail's one state owner.
  *
  * Everything that can change what the rail shows goes through here: the session
- * model, the mute set, the expanded flag, the open menu, the notice and the
+ * model, the mute set, the expanded flag, the notice and the
  * welcome animation. Components read a single frozen snapshot through
  * `useSyncExternalStore` and call back into these methods; none of them keeps a
  * second copy of a rule the model already owns.
@@ -26,15 +26,17 @@
  * Animation follows from that: `afterCommit()` runs in a layout effect after
  * every commit and is the only place a Web Animation starts.
  */
-import { createRailModel, type RailItem } from './rail-model.js';
+import { createRailModel, type PortraitStorage, type RailItem } from './rail-model.js';
 import { automaticReminderItems, questionKey } from '../monitor/reminders.js';
+import { permissionReminderKey, prolongedPermissionCheck } from '../monitor/permission-check.js';
 import { sessionPresentation } from '../monitor/presentation.js';
 import { openSessionLink } from '../monitor/session-link.js';
-import { createSSETransport } from '../monitor/transport.js';
-import { isDesktop, onDesktopPointer, onDesktopWindowActive } from './host.js';
+import { createSSETransport, type Subscribe } from '../monitor/transport.js';
+import { closeSessionMonitoring, isDesktop, onDesktopPointer, onDesktopWindowActive } from './host.js';
 import { createRailWelcome, type RailWelcomeState } from './welcome/index.js';
 import { createHitRegions, type HitRegions } from './hit-regions.js';
 import { loadPreferences, watchPreferences } from './preferences.js';
+import type { RailPreferencesState, RailSize } from '../types/settings.js';
 import { avatarIdentity, observeAvatars, pointAvatar, type AvatarStyle } from './avatar.js';
 import { animateArrival, animateHeight, animateReorder, cancelHeightAnimations, leaveSurface, reducedMotion, revealSurface, retireGhost } from './rail-animations.js';
 import type { ConnectionState } from '../types/snapshot.js';
@@ -65,24 +67,52 @@ export interface RailState {
   stripEmpty: boolean;
   connectionLabel: string;
   card: {id: string; leaving: boolean} | null;
+  contextMenu: {id: string; roundId: string; x: number; y: number; busy: boolean} | null;
   automaticIds: string[];
-  menuOpen: boolean;
   notice: {text: string} | null;
-  replayDisabled: boolean;
   welcome: RailWelcomeState;
   departing: DepartingGhost[];
 }
 
 export type RailController = ReturnType<typeof createRailController>;
 
-export function createRailController() {
-  let storage: Storage | undefined;
-  try { storage = localStorage; } catch { /* An unavailable store only costs the portrait cache. */ }
-  const model = createRailModel({ storage });
+/**
+ * The native edges of the rail, each replaceable so the public web demo can run
+ * the same controller with no host behind it. Every default is the untouched
+ * production path: the desktop bridge or the browser's own monitor stream,
+ * the real link opener, the real close command, the shared preferences and the
+ * persistent portrait cache. Only a demo build passes replacements, and it
+ * passes all of them, so no injected seam can silently mix demo and real data.
+ */
+export interface RailControllerOptions {
+  /** Where snapshots and connection changes come from. */
+  subscribe?: Subscribe;
+  /** Opens a session link; resolves when the hand-off was made. */
+  openSessionLink?: (url: string) => void | Promise<void>;
+  /** Closes one monitor round; resolves to whether the round was closed. */
+  closeMonitoring?: (source: string, sessionId: string, roundId: string) => Promise<boolean>;
+  /** The rail's appearance preferences. */
+  loadPreferences?: () => Promise<RailPreferencesState>;
+  /** Portrait and dismissal cache; `null` disables persistence. */
+  storage?: PortraitStorage | null;
+}
+
+function browserStorage(): PortraitStorage | null {
+  try { return localStorage; } catch { /* An unavailable store only costs the portrait cache. */ return null; }
+}
+
+export function createRailController(options: RailControllerOptions = {}) {
+  const readPreferences = options.loadPreferences ?? loadPreferences;
+  const openLink = options.openSessionLink ?? openSessionLink;
+  const endMonitoring = options.closeMonitoring ?? closeSessionMonitoring;
+  // `??` short-circuits, so a demo build never constructs a transport at all.
+  const subscribeToSessions = options.subscribe ?? createSSETransport().subscribe;
+  const model = createRailModel({ storage: options.storage !== undefined ? options.storage : browserStorage() });
   const mutedQuestions = new Map<string, string>();
 
   let avatarStyle: AvatarStyle = 'animal';
   let visibleCount = 8;
+  let size: RailSize = 'standard';
   let expanded = false;
   let restingAvatar: RailState['restingAvatar'] = {slot: 0, style: 'animal', fromStatus: 'idle'};
   let restingElement: HTMLElement | null = null;
@@ -91,6 +121,7 @@ export function createRailController() {
   let inactive = false;
   let motionPaused = false;
   let card: {id: string; leaving: boolean} | null = null;
+  let contextMenu: RailState['contextMenu'] = null;
   /**
    * The session the pointer is over, cleared the moment a hide starts rather
    * than when the exit animation ends. The two have to be separate: the
@@ -99,14 +130,12 @@ export function createRailController() {
    * `card` is what reproduces that.
    */
   let activeId: string | null = null;
-  let menuOpen = false;
-  let menuClientY = 0;
   let notice: {text: string} | null = null;
   let departing: DepartingGhost[] = [];
   let animationEnabled = true;
-  let menuFocusPending = false;
   let welcome: RailWelcomeState = {phase: 'idle', blocking: false, running: false};
   let activeAnchor: string | null = null;
+  let pointerRegion: string | null = null;
 
   // Registered DOM. `avatars` and `automatics` are keyed by session id; the rest
   // are singletons, because the rail has exactly one of each.
@@ -115,7 +144,6 @@ export function createRailController() {
   let list: HTMLElement | null = null;
   let cardEl: HTMLElement | null = null;
   let noticeEl: HTMLElement | null = null;
-  let menuEl: HTMLElement | null = null;
   const avatars = new Map<string, HTMLElement>();
   const automatics = new Map<string, HTMLElement>();
   const lastKnown = new Map<string, RailItem>();
@@ -170,10 +198,9 @@ export function createRailController() {
       stripEmpty: count === 0,
       connectionLabel: connection === 'connected' ? `${count} 个监控会话` : connection === 'offline' ? '连接中断，保留最后状态' : '连接中',
       card,
+      contextMenu,
       automaticIds: reminders().map(item => item.id),
-      menuOpen,
       notice,
-      replayDisabled: !animationEnabled,
       welcome,
       departing,
     };
@@ -191,6 +218,7 @@ export function createRailController() {
     container.classList.toggle('welcome-running', welcome.running);
     container.classList.toggle('welcome-blocking', welcome.blocking);
     container.dataset.welcome = welcome.phase;
+    container.dataset.size = size;
   }
 
   function publish() {
@@ -245,7 +273,7 @@ export function createRailController() {
 
   function placeAutomatics() {
     for (const [id, surface] of automatics) {
-      if (activeId === id || menuOpen) { surface.hidden = true; visible.set(id, false); continue; }
+      if (activeId === id) { surface.hidden = true; visible.set(id, false); continue; }
       const was = visible.get(id) ?? false;
       revealSurface(surface, was);
       visible.set(id, true);
@@ -289,12 +317,21 @@ export function createRailController() {
     placeAutomatics();
   }
 
-  function closeMenu() {
-    menuEl?.querySelectorAll('.native-hover').forEach(element => element.classList.remove('native-hover'));
-    if (!menuOpen) return;
-    menuOpen = false;
-    publish();
-    placeAutomatics();
+  function enterRegion(id: string, region: 'avatar' | 'card'): boolean {
+    const key = `${region}:${id}`;
+    if (pointerRegion === key) return model.items.some(item => item.id === id);
+    pointerRegion = key;
+    // Reconcile first: a delayed WebView timer must not grant an expired row
+    // another ten seconds merely because the pointer woke the window.
+    model.refresh();
+    const row = model.items.find(item => item.id === id);
+    if (row?.openedUntil && model.resetOpened(id, row.session.roundId)) sync();
+    else if (!row) sync();
+    return !!row;
+  }
+
+  function leaveRegion(id: string, region: 'avatar' | 'card') {
+    if (pointerRegion === `${region}:${id}`) pointerRegion = null;
   }
 
   function showError(error: unknown, id: string | null = null) {
@@ -315,7 +352,7 @@ export function createRailController() {
     const roundId = item.session.roundId;
     if (finished) { model.retainOpened(item.id, roundId); sync(); }
     try {
-      await openSessionLink(presentation.url);
+      await openLink(presentation.url);
       if (finished) {
         model.retainOpened(item.id, roundId);
         if (activeId === item.id && !model.items.some(row => row.id === item.id)) hide();
@@ -358,7 +395,10 @@ export function createRailController() {
   function sync() {
     welcomeController.update(model.items.some(item => URGENT.has(item.session.status)));
     const items = model.items;
+    if (contextMenu && !items.some(item => item.id === contextMenu!.id && item.session.roundId === contextMenu!.roundId)) contextMenu = null;
     const ids = new Set(items.map(item => item.id));
+    if (card && !ids.has(card.id)) hide();
+    if (pointerRegion && !ids.has(pointerRegion.slice(pointerRegion.indexOf(':') + 1))) pointerRegion = null;
     let restingId: string | undefined;
     if (!items.length && avatars.size) {
       // Retain appearance only, never a finished session or its interaction.
@@ -373,7 +413,9 @@ export function createRailController() {
     if (items.length && state.items.length === 0) waking = true;
     for (const [id, key] of mutedQuestions) {
       const item = items.find(row => row.id === id);
-      if (!item || item.session.status !== 'wait' || questionKey(item) !== key) mutedQuestions.delete(id);
+      const current = item && (item.session.status === 'wait' ? questionKey(item)
+        : prolongedPermissionCheck(item.session) ? permissionReminderKey(item.session) : null);
+      if (current !== key) mutedQuestions.delete(id);
     }
     const wanted = new Set(reminders().map(item => item.id));
     for (const id of [...avatars.keys()]) if (!ids.has(id)) retireAvatar(id, id === restingId);
@@ -410,6 +452,9 @@ export function createRailController() {
 
   const unsubscribeWindowActive = onDesktopWindowActive(value => {
     inactive = !value;
+    model.refresh();
+    sync();
+    if (!value && contextMenu && !contextMenu.busy) contextMenu = null;
     applyContainer();
     state = build();
     notify();
@@ -420,15 +465,18 @@ export function createRailController() {
     const target = point ? document.elementFromPoint(point.x, point.y) : null;
     const control = (target?.closest('button:not(:disabled)') as HTMLElement | null) || null;
     if (control !== nativeControl) { nativeControl?.classList.remove('native-hover'); control?.classList.add('native-hover'); nativeControl = control; }
-    if (menuOpen) return;
     const avatar = target?.closest('.desktop-avatar') as HTMLElement | null;
     const id = avatar?.dataset.sessionId;
     if (avatar && id) {
+      if (!enterRegion(id, 'avatar')) return;
       if (nativeHover !== id) pointAvatar(avatars.get(nativeHover ?? ''), null);
       pointAvatar(avatar, point);
       if (nativeHover !== id) { nativeHover = id; show(id); }
       else clearTimeout(hideTimer);
     } else {
+      const cardId = target?.closest('.desktop-card') && card?.id;
+      if (cardId) enterRegion(cardId, 'card');
+      else pointerRegion = null;
       pointAvatar(avatars.get(nativeHover ?? ''), null);
       nativeHover = null;
       if (target?.closest('.desktop-card')) clearTimeout(hideTimer);
@@ -436,21 +484,23 @@ export function createRailController() {
     }
   });
 
-  function applySettings(settings: {avatarStyle?: string; visibleCount?: number; animation?: boolean} | null) {
+  function applySettings(settings: {avatarStyle?: string; visibleCount?: number; animation?: boolean; size?: RailSize} | null) {
     if (!settings) return;
     const count = settings.visibleCount || 8;
     if (count !== visibleCount) expanded = false;
     avatarStyle = settings.avatarStyle === 'bot' ? 'bot' : 'animal';
     visibleCount = count;
+    size = settings.size === 'small' || settings.size === 'medium' ? settings.size : 'standard';
     animationEnabled = settings.animation !== false;
     motionPaused = !animationEnabled;
     applyContainer();
     publish();
+    positionAll();
     welcomeController.setPreferences(settings);
   }
 
   const unsubscribeSettings = watchPreferences(applySettings);
-  const unsubscribeTransport = createSSETransport().subscribe(
+  const unsubscribeData = subscribeToSessions(
     snapshot => { model.accept(snapshot); sync(); },
     value => { if (value === model.connection) return; model.connect(value); sync(); },
   );
@@ -528,14 +578,6 @@ export function createRailController() {
 
     placeAutomatics();
 
-    if (menuOpen && menuEl) {
-      menuEl.style.right = '107px';
-      menuEl.style.top = `${Math.max(8, Math.min(menuClientY || strip?.offsetTop || 0, innerHeight - menuEl.offsetHeight - 8))}px`;
-      // Focus can only move once the menu is visible, so it waits for the commit
-      // that un-hid it rather than running inside the event handler.
-      if (menuFocusPending) { menuFocusPending = false; menuEl.querySelector('button')?.focus(); }
-    }
-
     if (noticeEl && notice) positionNotice();
     hitRegions.sync();
   }
@@ -564,7 +606,8 @@ export function createRailController() {
         if (element) resize.observe(element);
       },
       notice(element: HTMLElement | null) { noticeEl = element; hitRegions.register('notice', 'surface', element); },
-      menu(element: HTMLElement | null) { menuEl = element; hitRegions.register('menu', 'surface', element); },
+      contextBackdrop(element: HTMLElement | null) { hitRegions.register('context-backdrop', 'surface', element); },
+      contextMenu(element: HTMLElement | null) { hitRegions.register('context-menu', 'control', element); },
       welcome(element: SVGSVGElement | null) { welcomeController.attach(element); },
       resting(element: HTMLElement | null) {
         avatarObserver?.unobserve(restingElement?.querySelector('.companion-avatar'));
@@ -587,33 +630,62 @@ export function createRailController() {
       retireGhost(element, () => { departing = departing.filter(ghost => ghost.key !== key); publish(); });
     },
 
-    hoverAvatar(id: string) { show(id); },
-    leaveAvatar() { scheduleHide(); },
+    hoverAvatar(id: string) { if (enterRegion(id, 'avatar')) show(id); },
+    leaveAvatar(id?: string) { if (id) leaveRegion(id, 'avatar'); scheduleHide(); },
     pointerMove(id: string, point: {x: number; y: number}) { pointAvatar(avatars.get(id), point); },
     clearPointer(id: string) { pointAvatar(avatars.get(id), null); },
     focusAvatar(id: string) { show(id); },
-    clickAvatar(id: string) { const item = model.items.find(row => row.id === id); if (item) void open(item); },
+    clickAvatar(id: string) { model.refresh(); sync(); const item = model.items.find(row => row.id === id); if (item) void open(item); },
+
+    openContextMenu(id: string, x: number, y: number) {
+      const item = model.items.find(row => row.id === id);
+      if (!item) return;
+      hide();
+      contextMenu = {
+        id, roundId: item.session.roundId,
+        x: Math.max(8, Math.min(x, innerWidth - 102)),
+        y: Math.max(8, Math.min(y, innerHeight - 34)), busy: false,
+      };
+      publish();
+    },
+    closeContextMenu() {
+      if (!contextMenu || contextMenu.busy) return;
+      contextMenu = null;
+      publish();
+    },
+    async closeMonitoring() {
+      const current = contextMenu;
+      if (!current || current.busy) return;
+      const item = model.items.find(row => row.id === current.id && row.session.roundId === current.roundId);
+      if (!item) { contextMenu = null; publish(); return; }
+      contextMenu = {...current, busy: true};
+      publish();
+      try {
+        const closed = await endMonitoring(item.session.source, item.session.sessionId, current.roundId);
+        if (!closed) throw new Error('这次监听未关闭，请重试');
+        model.forgetMonitoring(current.id, current.roundId);
+        if (contextMenu?.id === current.id && contextMenu.roundId === current.roundId) contextMenu = null;
+        if (card?.id === current.id) hide();
+        sync();
+      } catch (error) {
+        if (contextMenu?.id === current.id && contextMenu.roundId === current.roundId) contextMenu = null;
+        showError(error, current.id);
+      }
+    },
 
     dismiss(id: string) {
       const item = model.items.find(row => row.id === id);
       if (!item) return;
       if (item.session.status === 'wait') mutedQuestions.set(id, questionKey(item));
+      else if (prolongedPermissionCheck(item.session)) mutedQuestions.set(id, permissionReminderKey(item.session));
       else model.dismiss(id);
       hide();
       sync();
     },
     toggleExpanded() { expanded = !expanded; hide(); publish(); },
 
-    openMenu(clientY: number) {
-      notice = null; clearTimeout(noticeTimer); activeAnchor = null;
-      clearTimeout(hideTimer); hide();
-      menuOpen = true; menuClientY = clientY; menuFocusPending = true;
-      publish();
-      placeAutomatics();
-    },
-    closeMenu,
-
-    holdCard() { clearTimeout(hideTimer); },
+    holdCard() { if (card?.id) enterRegion(card.id, 'card'); clearTimeout(hideTimer); },
+    leaveCard() { if (card?.id) leaveRegion(card.id, 'card'); scheduleHide(); },
     /** Scrolling the list moves every placed surface without changing any data. */
     onListScroll() {
       if (activeId && card && cardEl) {
@@ -627,8 +699,7 @@ export function createRailController() {
     reportError(error: unknown) { showError(error); },
 
     /**
-     * Escape closes the menu, closes the card and returns focus to the avatar
-     * that opened it.
+     * Escape closes the card and returns focus to the avatar that opened it.
      *
      * The second `hide()` is not redundant, and the pre-migration code was right
      * to have two. Focusing the avatar fires its own focus handler, which shows
@@ -637,26 +708,25 @@ export function createRailController() {
      * a real regression, caught by the keyboard assertion in qa-ui.mjs.
      */
     escape() {
+      if (contextMenu) { contextMenu = null; publish(); return; }
       const id = card?.id ?? null;
-      closeMenu();
       hide();
       if (id) avatars.get(id)?.focus();
       hide();
     },
 
-    replayWelcome() { welcomeController.play(); },
     closeCard() { hide(); },
 
     sync,
     afterCommit,
 
     start() {
-      loadPreferences().then(applySettings).catch(error => { welcomeController.setPreferences(null); showError(error); });
+      readPreferences().then(applySettings).catch(error => { welcomeController.setPreferences(null); showError(error); });
       sync();
     },
     dispose() {
       welcomeController.dispose();
-      unsubscribeWindowActive(); unsubscribePointer(); unsubscribeSettings(); unsubscribeTransport();
+      unsubscribeWindowActive(); unsubscribePointer(); unsubscribeSettings(); unsubscribeData();
       avatarObserver?.dispose(); resize.disconnect(); window.removeEventListener('resize', onWindowResize);
       clearTimeout(expiryTimer); clearTimeout(hideTimer); clearTimeout(noticeTimer);
     },

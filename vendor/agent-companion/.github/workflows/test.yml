@@ -1,0 +1,63 @@
+name: Test suite
+
+# 测试必须独立于发布路径：build.yml 只在 tag push / 手动触发，测试若只挂在它下面，
+# 就只在发版时执行——回归会整版漏出去。本 workflow 每次 push main 即跑。
+# 仓库已转公开（2026-09-25），标准 runner 免费，因此同时接受 pull_request 触发。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: web checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # 命令清单的唯一来源在 package.json，build.yml 的 quality job 也调用同一条，
+      # 避免两份 YAML 各写一遍后慢慢漂移。
+      - run: npm run ci:web
+
+  rust:
+    name: rust tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 两个平台各自出结果：任一平台失败不阻塞另一平台。
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # 这两个 crate 零 tauri 依赖，不装 webkit 等系统库。
+      # 不放 macOS：平台分支只有 cfg(unix) / cfg(windows) 两种，macOS 与 ubuntu
+      # 同属 unix 分支、不增加覆盖，而 macOS runner 按 10× 计费。
+      - run: cargo test -p agent-studio-core -p agent-studio-runtime --locked
+
+  parity:
+    name: rust/node parity
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: node scripts/qa-rust-parity.mjs

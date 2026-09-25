@@ -2,6 +2,7 @@
 //! Credentials at registration; keyed session metadata only after an event.
 use super::*;
 use crate::{merge, question, questions};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 pub const CODEG_EVENTS: [&str; 5] = [
     "user_prompt_sent",
@@ -12,6 +13,27 @@ pub const CODEG_EVENTS: [&str; 5] = [
 ];
 /// The one-shot startup alignment enumerates at most this many connections.
 const CODEG_ALIGN_LIMIT: usize = 64;
+/// A delegated child never keeps its temporary card longer than this without
+/// an answer; a cancelled child emits no signal at all, so this is the floor.
+const CODEG_CHILD_TTL: i64 = 60 * 60 * 1000;
+/// Answered request ids a child remembers against late duplicate webhooks.
+const CODEG_CHILD_ANSWERED: usize = 8;
+/// Child titles are raw prompt fragments; the rail gets one capped line.
+const CODEG_CHILD_TITLE: usize = 80;
+/// A known delegated child. It stays invisible unless it waits for the user,
+/// so this only carries what it takes to ignore its traffic cheaply and to
+/// release the temporary card again.
+#[derive(Default)]
+struct ChildState {
+    /// Conversation id of the child; always resolved, never provisional.
+    sid: String,
+    /// Request id of the card on screen, if any.
+    open: Option<String>,
+    /// When that card was created, for the TTL sweep.
+    started_at: i64,
+    /// Recently answered request ids; a late duplicate must not revive them.
+    resolved: VecDeque<String>,
+}
 #[derive(Default)]
 pub struct CodegHooks {
     pub url: String,
@@ -20,7 +42,7 @@ pub struct CodegHooks {
     pub next_attempt: Option<Instant>,
     auth: Option<(u16, String)>,
     connections: HashMap<String, String>,
-    ignored_connections: std::collections::HashSet<String>,
+    children: HashMap<String, ChildState>,
     sequence: u64,
     pub stream_sink: Option<super::codeg_stream::Sink>,
     streams: HashMap<String, super::codeg_stream::Stream>,
@@ -107,6 +129,11 @@ impl Collector {
             || !self.integration_automatic("codeg")
         {
             self.codeg.streams.clear();
+            // Disabling releases every temporary child card with its stream.
+            self.codeg_release_children(None);
+        } else {
+            // A cancelled or silently finished child emits no signal at all.
+            self.codeg_release_children(Some(CODEG_CHILD_TTL));
         }
         if self.codeg.url.is_empty() {
             self.hub
@@ -267,6 +294,7 @@ impl Collector {
     }
     pub fn stop_codeg_webhook(&mut self) {
         self.codeg.streams.clear();
+        self.hub.hidden_codeg_codex_ids.clear();
         self.settings["sources"]["codeg"]["enabled"] = json!(false);
         self.codeg.registered = false;
         self.codeg.next_attempt = None;
@@ -314,9 +342,32 @@ impl Collector {
                 cwd = json!(p);
             }
         }
-        Ok(
-            json!({"cwd":cwd,"title":raw["title"],"agentType":get(&["agent_type","agent"]),"externalId":raw["external_id"],"folderId":raw["folder_id"],"isSubagent":!raw["parent_id"].is_null() || raw["kind"] == "delegate"}),
-        )
+        let mut meta = json!({"cwd":cwd,"title":raw["title"],"agentType":get(&["agent_type","agent"]),"externalId":raw["external_id"],"folderId":raw["folder_id"],"isSubagent":!raw["parent_id"].is_null() || raw["kind"] == "delegate"});
+        if meta["isSubagent"] == true && !raw["parent_id"].is_null() {
+            // One extra keyed lookup: the badge names the session the child was
+            // delegated from. An unreadable parent only drops that detail.
+            let mut st = db
+                .prepare(&format!("SELECT title FROM {table} WHERE id=?1"))
+                .map_err(|_| "Codeg 会话表不可读")?;
+            if let Ok(Some(title)) = st.query_row([text(&raw["parent_id"])], |r| {
+                r.get::<_, Option<String>>(0)
+            }) {
+                if !title.trim().is_empty() {
+                    meta["parentTitle"] = json!(codeg_title(&title));
+                }
+            }
+        }
+        Ok(meta)
+    }
+    pub fn is_codeg_child_codex(&self, external_id: &str) -> bool {
+        if self.settings["sources"]["codeg"]["enabled"] != true || !self.integration_automatic("codeg") || external_id.is_empty() { return false; }
+        let Ok(db) = open(&self.paths("codeg")) else { return false; };
+        let table = if db.prepare("SELECT id FROM conversation LIMIT 0").is_ok() { "conversation" } else { "conversations" };
+        let id = external_id.strip_prefix("thr_").unwrap_or(external_id);
+        let Ok(mut st) = db.prepare(&format!("SELECT id FROM {table} WHERE external_id IN (?1, ?2) LIMIT 1")) else { return false; };
+        let Ok(sid) = st.query_row(rusqlite::params![id, format!("thr_{id}")], |r| r.get::<_, i64>(0)) else { return false; };
+        let Ok(meta) = self.codeg_metadata(&sid.to_string()) else { return false; };
+        text(&meta["agentType"]).eq_ignore_ascii_case("codex") && meta["isSubagent"] == true
     }
     pub fn ingest_codeg_hook(&mut self, p: &Value) -> bool {
         if self.settings["sources"]["codeg"]["enabled"] != true
@@ -330,7 +381,19 @@ impl Collector {
         if !CODEG_EVENTS.contains(&event.as_str()) || conn.trim().is_empty() || conn.len() > 256 {
             return false;
         }
-        if self.codeg.ignored_connections.contains(&conn) {
+        let request = matches!(event.as_str(), "question_request" | "permission_request");
+        let known_sid = self.codeg.children.get(&conn).map(|child| child.sid.clone());
+        // A known child costs nothing until it waits for the user: no snapshot,
+        // no metadata, no session. Only the end of its turn releases the card.
+        if known_sid.is_some() && !request {
+            let open = self
+                .codeg
+                .children
+                .get(&conn)
+                .is_some_and(|child| child.open.is_some());
+            if open && matches!(event.as_str(), "turn_complete" | "error") {
+                self.codeg_release_child(&conn, None);
+            }
             return true;
         }
         if self.codeg.auth.is_none() {
@@ -345,6 +408,8 @@ impl Collector {
         let provisional = format!("connection:{conn}");
         let sid = if !snap["conversation_id"].is_null() {
             text(&snap["conversation_id"])
+        } else if let Some(sid) = known_sid.clone() {
+            sid
         } else {
             self.codeg
                 .connections
@@ -352,6 +417,14 @@ impl Collector {
                 .cloned()
                 .unwrap_or(provisional.clone())
         };
+        // A silently finished child keeps no conversation id; seeding a session
+        // here would leave a `done` ghost for a task that never needed a user.
+        if sid == provisional
+            && matches!(event.as_str(), "turn_complete" | "error")
+            && !self.hub.sessions.contains_key(&format!("codeg:{sid}"))
+        {
+            return true;
+        }
         if sid != provisional {
             self.codeg.connections.insert(conn.clone(), sid.clone());
             self.hub.sessions.remove(&format!("codeg:{provisional}"));
@@ -361,17 +434,34 @@ impl Collector {
                 self.codeg.connections.remove(&k);
             }
         }
-        let meta = if sid != provisional {
+        let mut meta = if sid != provisional {
             self.codeg_metadata(&sid).unwrap_or(json!({}))
         } else {
             json!({})
         };
-        if meta["isSubagent"] == true {
-            // Keep known children ignored during subsequent API/database outages.
-            self.codeg.streams.remove(&conn);
-            self.codeg.ignored_connections.insert(conn);
-            self.hub.sessions.remove(&format!("codeg:{provisional}"));
-            self.hub.sessions.remove(&format!("codeg:{sid}"));
+        if meta["isSubagent"] == true || known_sid.is_some() {
+            if text(&meta["agentType"]).eq_ignore_ascii_case("codex") {
+                let external_id = if text(&snap["external_id"]).is_empty() { text(&meta["externalId"]) } else { text(&snap["external_id"]) };
+                self.hub.hide_codeg_child_codex(&external_id);
+            }
+            self.codeg.children.entry(conn.clone()).or_default().sid = sid.clone();
+            if !request {
+                // Keep known children ignored during API/database outages; only a
+                // waiting request buys a child a temporary card.
+                if self
+                    .codeg
+                    .children
+                    .get(&conn)
+                    .is_some_and(|child| child.open.is_some())
+                {
+                    self.codeg_release_child(&conn, None);
+                }
+                self.codeg.streams.remove(&conn);
+                self.hub.sessions.remove(&format!("codeg:{provisional}"));
+                self.hub.sessions.remove(&format!("codeg:{sid}"));
+                return true;
+            }
+            self.codeg_child_wait(&conn, &sid, &snap, &mut meta, &p);
             return true;
         }
         if self.codeg.streams.get(&conn).is_some_and(|s| s.sid != sid) {
@@ -410,6 +500,11 @@ impl Collector {
         if event == "turn_complete" && snap["status"] == "prompting" {
             return true;
         }
+        let key = format!("codeg:{sid}");
+        if self.closed_monitor_sessions.contains(&key) {
+            if matches!(event.as_str(), "turn_complete" | "error") { return true; }
+            self.closed_monitor_sessions.remove(&key);
+        }
         let ts = now();
         self.codeg.sequence += 1;
         let seq = self.codeg.sequence;
@@ -420,16 +515,7 @@ impl Collector {
         if matches!(event.as_str(), "question_request" | "permission_request")
             && !crate::hub::terminal(&text(&self.hub.sessions[&k]["status"]))
         {
-            let ask = if !snap["pending_question"].is_null() {
-                snap["pending_question"].clone()
-            } else if !snap["pending_plan_approval"].is_null() {
-                json!({"approval_id":snap["pending_plan_approval"]["approval_id"],"questions":[{"question":snap["pending_plan_approval"]["plan_markdown"],"options":[{"label":"批准"},{"label":"拒绝"}]}]})
-            } else if !snap["pending_permission"].is_null() {
-                let a = &snap["pending_permission"];
-                json!({"request_id":a["request_id"],"questions":[{"question":a["tool_call"]["title"].as_str().unwrap_or("需要你的许可"),"options":a["options"].as_array().into_iter().flatten().map(|o|json!({"label":o["name"],"description":o["kind"]})).collect::<Vec<_>>()}]})
-            } else {
-                Value::Null
-            };
+            let ask = codeg_ask(&snap);
             let pending = self.hub.sessions[&k]["pending"]
                 .as_array()
                 .cloned()
@@ -455,10 +541,7 @@ impl Collector {
             } else {
                 text(&p["body"])
             };
-            let call = ask["question_id"]
-                .as_str()
-                .or(ask["request_id"].as_str())
-                .or(ask["approval_id"].as_str())
+            let call = request_id(&ask)
                 .map(str::to_owned)
                 .unwrap_or(format!("codeg:{conn}:{seq}"));
             self.hub.ingest(merge(base,json!({"type":"wait","callId":call,"tool":if event=="question_request"{"ask"}else{"permission"},"text":message,"questions":questions(&ask)})));
@@ -469,7 +552,7 @@ impl Collector {
             ));
         }
         if snap["status"] == "prompting" {
-            self.reconcile_codeg_snapshot(&sid, &snap, false);
+            self.reconcile_codeg_snapshot(&conn, &sid, &snap, false);
         }
         self.attach_codeg_stream(&conn, &sid);
         self.codeg_sync_stream_cursor(&conn, &snap);
@@ -499,6 +582,38 @@ fn request_id(value: &Value) -> Option<&str> {
         .or(value["request_id"].as_str())
         .or(value["approval_id"].as_str())
         .filter(|s| !s.is_empty())
+}
+/// The request a snapshot is waiting on, in the precedence every path shares.
+/// It parses each pending field with the same helper the stream frames use, so a
+/// snapshot and an envelope carrying one request can never describe it
+/// differently — the Node twin parses both shapes in one function for the same
+/// reason.
+fn codeg_ask(snap: &Value) -> Value {
+    if !snap["pending_question"].is_null() {
+        stream_ask("pending_question", &snap["pending_question"])
+    } else if !snap["pending_plan_approval"].is_null() {
+        stream_ask("pending_plan_approval", &snap["pending_plan_approval"])
+    } else if !snap["pending_permission"].is_null() {
+        stream_ask("pending_permission", &snap["pending_permission"])
+    } else {
+        Value::Null
+    }
+}
+/// Whether a snapshot still carries any pending request.
+fn codeg_pending(snap: &Value) -> bool {
+    ["pending_question", "pending_permission", "pending_plan_approval"]
+        .iter()
+        .any(|key| !snap[*key].is_null())
+}
+/// A child title is a raw prompt fragment: collapse its whitespace so the rail
+/// keeps one line, and cap what it has to render.
+fn codeg_title(raw: &str) -> String {
+    raw.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(CODEG_CHILD_TITLE)
+        .collect()
 }
 impl Collector {
     /// One-shot alignment at startup or integration enablement: enumerate live
@@ -537,6 +652,10 @@ impl Collector {
             }
             let meta = self.codeg_metadata(&sid).unwrap_or(json!({}));
             if meta["isSubagent"] == true {
+                if text(&meta["agentType"]).eq_ignore_ascii_case("codex") {
+                    let external_id = if text(&snap["external_id"]).is_empty() { text(&meta["externalId"]) } else { text(&snap["external_id"]) };
+                    self.hub.hide_codeg_child_codex(&external_id);
+                }
                 continue;
             }
             // A webhook may have won the race; never start a round twice or
@@ -559,7 +678,7 @@ impl Collector {
             self.codeg.sequence += 1;
             let seq = self.codeg.sequence;
             self.codeg_seed_session(&sid, &snap, &meta, ts, seq, Some(""));
-            self.reconcile_codeg_snapshot(&sid, &snap, false);
+            self.reconcile_codeg_snapshot(&conn, &sid, &snap, false);
             self.attach_codeg_stream(&conn, &sid);
             self.codeg_sync_stream_cursor(&conn, &snap);
         }
@@ -648,7 +767,129 @@ impl Collector {
             event,
         ));
     }
-    fn reconcile_codeg_snapshot(&mut self, sid: &str, snap: &Value, authoritative: bool) {
+    /// A child shows a temporary card only while a request waits for the user.
+    /// The read-only stream is the only source of the answer and a detached
+    /// connection can never be attached again, so it is subscribed in this same
+    /// pass — never after the fact.
+    fn codeg_child_wait(&mut self, conn: &str, sid: &str, snap: &Value, meta: &mut Value, p: &Value) {
+        let ask = codeg_ask(snap);
+        let Some(call) = request_id(&ask).map(str::to_owned) else {
+            // Without the request id in the snapshot no answer could ever be
+            // matched, so nothing is shown at all.
+            return;
+        };
+        if self.codeg.children.get(conn).is_some_and(|child| {
+            child.resolved.iter().any(|id| *id == call)
+                || child.open.as_deref() == Some(call.as_str())
+        }) {
+            // Already answered, or already on screen: the stream owns the state
+            // and a delayed webhook must not rewind it.
+            return;
+        }
+        meta["title"] = json!(codeg_title(&text(&meta["title"])));
+        meta["subagent"] = json!(true);
+        let ts = now();
+        self.codeg.sequence += 1;
+        let seq = self.codeg.sequence;
+        let key = format!("codeg:{sid}");
+        let start_title = self
+            .hub
+            .sessions
+            .get(&key)
+            .is_none()
+            .then(|| text(&p["body"]));
+        let base = self.codeg_seed_session(sid, snap, meta, ts, seq, start_title.as_deref());
+        let pending = self.hub.sessions[&key]["pending"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for item in pending {
+            self.hub.ingest(merge(
+                base.clone(),
+                json!({"type":"resolve","callId":item["id"]}),
+            ));
+        }
+        self.hub.ingest(merge(
+            base,
+            json!({"type":"wait","callId":call,"tool":if p["event"] == "question_request" {"ask"} else {"permission"},"text":question(&ask),"questions":questions(&ask)}),
+        ));
+        if let Some(child) = self.codeg.children.get_mut(conn) {
+            child.open = Some(call);
+            child.started_at = ts;
+        }
+        self.attach_codeg_stream(conn, sid);
+        self.codeg_sync_stream_cursor(conn, snap);
+        self.hub.health(
+            "codeg",
+            "ok",
+            "已收到 Codeg Webhook；确认状态通过实时事件同步",
+        );
+    }
+    /// Give up a child's temporary card: the hub session goes away, the stream
+    /// is released (dropping it stops its socket and retry loop) and the
+    /// answered request is remembered so a late duplicate cannot revive it.
+    fn codeg_release_child(&mut self, conn: &str, answered: Option<&str>) {
+        let Some(child) = self.codeg.children.get_mut(conn) else {
+            return;
+        };
+        let open = child.open.take();
+        child.started_at = 0;
+        for id in [answered, open.as_deref()].into_iter().flatten() {
+            if child.resolved.iter().any(|known| known == id) {
+                continue;
+            }
+            if child.resolved.len() >= CODEG_CHILD_ANSWERED {
+                child.resolved.pop_front();
+            }
+            child.resolved.push_back(id.to_owned());
+        }
+        let sid = child.sid.clone();
+        self.codeg.streams.remove(conn);
+        self.hub.sessions.remove(&format!("codeg:{sid}"));
+    }
+    /// Release cards past their TTL, or every card once the source is disabled.
+    /// The known-child list itself survives while the source stays enabled, so
+    /// delegated traffic keeps costing nothing.
+    fn codeg_release_children(&mut self, ttl: Option<i64>) {
+        let time = now();
+        let release: Vec<String> = self
+            .codeg
+            .children
+            .iter()
+            .filter(|(_, child)| {
+                child.open.is_some() && ttl.is_none_or(|ttl| time - child.started_at > ttl)
+            })
+            .map(|(conn, _)| conn.clone())
+            .collect();
+        for conn in release {
+            self.codeg_release_child(&conn, None);
+        }
+        if ttl.is_none() {
+            self.codeg.children.clear();
+        }
+    }
+    fn reconcile_codeg_snapshot(
+        &mut self,
+        conn: &str,
+        sid: &str,
+        snap: &Value,
+        authoritative: bool,
+    ) {
+        // A child card lives exactly as long as the stream still shows a pending
+        // request. An authoritative snapshot without one releases it, which
+        // covers an answer that landed while the webhook was still in flight.
+        if authoritative
+            && self
+                .codeg
+                .children
+                .get(conn)
+                .is_some_and(|child| child.open.is_some())
+            && (snap["conversation_id"].is_null() || text(&snap["conversation_id"]) == sid)
+            && !codeg_pending(snap)
+        {
+            self.codeg_release_child(conn, None);
+            return;
+        }
         let Some(session) = self.hub.sessions.get(&format!("codeg:{sid}")) else {
             return;
         };
@@ -701,18 +942,35 @@ impl Collector {
             self.codeg_send(sid,json!({"type":"wait","callId":id,"tool":tool,"text":question(&ask),"questions":questions(&ask)}));
         }
     }
-    fn apply_codeg_envelope(&mut self, sid: &str, envelope: &Value) {
-        let Some(session) = self.hub.sessions.get(&format!("codeg:{sid}")) else {
-            return;
-        };
-        if crate::hub::terminal(&text(&session["status"])) {
-            return;
-        }
+    fn apply_codeg_envelope(&mut self, conn: &str, sid: &str, envelope: &Value) {
         let kind = text(&envelope["type"]);
-        if matches!(
+        let resolved = matches!(
             kind.as_str(),
             "question_resolved" | "permission_resolved" | "plan_approval_resolved"
-        ) {
+        );
+        let live = self
+            .hub
+            .sessions
+            .get(&format!("codeg:{sid}"))
+            .is_some_and(|session| !crate::hub::terminal(&text(&session["status"])));
+        // A child gives its card up on the authoritative answer or on the end of
+        // its turn, whether or not the hub still holds the session.
+        if (resolved || kind == "turn_complete") && self.codeg.children.contains_key(conn) {
+            let answered = if resolved { request_id(envelope) } else { None };
+            if live {
+                if let Some(id) = answered {
+                    self.codeg_send(sid, json!({"type":"resolve","callId":id}));
+                } else {
+                    self.codeg_send(sid, json!({"type":"end","status":"done"}));
+                }
+            }
+            self.codeg_release_child(conn, answered);
+            return;
+        }
+        if !live {
+            return;
+        }
+        if resolved {
             if let Some(id) = request_id(envelope) {
                 self.codeg_send(sid, json!({"type":"resolve","callId":id}));
             }
@@ -759,7 +1017,7 @@ impl Collector {
                     }
                     changed = true;
                     cursor.store(seq, Ordering::Release);
-                    self.reconcile_codeg_snapshot(&sid, &frame["snapshot"], true);
+                    self.reconcile_codeg_snapshot(&conn, &sid, &frame["snapshot"], true);
                 }
             }
             Some("event" | "replay") => {
@@ -789,7 +1047,7 @@ impl Collector {
                         )
                     );
                     cursor.store(seq, Ordering::Release);
-                    self.apply_codeg_envelope(&sid, &envelope);
+                    self.apply_codeg_envelope(&conn, &sid, &envelope);
                 }
                 if frame["type"] == "replay" {
                     if let Some(high) = frame["high_water_seq"].as_u64() {
@@ -807,5 +1065,356 @@ impl Collector {
             _ => return false,
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod child_card_tests {
+    use super::*;
+    use crate::settings;
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    struct Home(std::path::PathBuf);
+    impl Home {
+        fn new() -> Self {
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let p = std::env::temp_dir().join(format!(
+                "codeg-child-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Minimal loopback Codeg API: only the keyed snapshot the adapter asks for
+    /// after a webhook. Unlisted connections answer `null`, like a connection
+    /// that is already gone.
+    struct Api {
+        port: u16,
+        stop: Arc<AtomicBool>,
+        snapshots: Arc<Mutex<HashMap<String, Value>>>,
+        calls: Arc<Mutex<Vec<String>>>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Api {
+        fn start() -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let stop = Arc::new(AtomicBool::new(false));
+            let snapshots: Arc<Mutex<HashMap<String, Value>>> = Default::default();
+            let calls: Arc<Mutex<Vec<String>>> = Default::default();
+            let worker = {
+                let (stop, snapshots, calls) = (stop.clone(), snapshots.clone(), calls.clone());
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Acquire) {
+                        let Ok((mut stream, _)) = listener.accept() else {
+                            std::thread::sleep(Duration::from_millis(2));
+                            continue;
+                        };
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                        let mut buf = Vec::new();
+                        let mut chunk = [0u8; 4096];
+                        let head_end = loop {
+                            if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break Some(i + 4);
+                            }
+                            match stream.read(&mut chunk) {
+                                Ok(0) | Err(_) => break None,
+                                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                            }
+                        };
+                        let Some(head_end) = head_end else { continue };
+                        let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                        let length: usize = head
+                            .lines()
+                            .find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse().ok())?
+                            })
+                            .unwrap_or(0);
+                        while buf.len() < head_end + length {
+                            match stream.read(&mut chunk) {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                            }
+                        }
+                        let body: Value = serde_json::from_slice(&buf[head_end..]).unwrap_or(Value::Null);
+                        let method = head
+                            .split_whitespace()
+                            .nth(1)
+                            .unwrap_or("/")
+                            .trim_start_matches("/api/")
+                            .to_string();
+                        let payload = if method == "acp_get_session_snapshot" {
+                            calls.lock().unwrap().push(method);
+                            snapshots
+                                .lock()
+                                .unwrap()
+                                .get(body["connectionId"].as_str().unwrap_or(""))
+                                .cloned()
+                                .unwrap_or(Value::Null)
+                        } else {
+                            Value::Null
+                        };
+                        let payload = payload.to_string();
+                        let _ = write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",payload.len());
+                        let _ = stream.flush();
+                    }
+                })
+            };
+            Self { port, stop, snapshots, calls, worker: Some(worker) }
+        }
+        fn set(&self, conn: &str, snapshot: Value) {
+            self.snapshots.lock().unwrap().insert(conn.into(), snapshot);
+        }
+        fn calls(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+    impl Drop for Api {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    /// Codeg home whose database holds a parent task and three delegated
+    /// children: a delegate, a regular child of the parent and a `kind=delegate`
+    /// task without a parent row.
+    fn collector(home: &Home, port: u16) -> Collector {
+        let mut s = settings::defaults();
+        for id in settings::SOURCES {
+            s["sources"][id]["enabled"] = json!(id == "codeg");
+        }
+        crate::atomic_json(&home.0.join(".agent-studio/settings.json"), &s).unwrap();
+        let dir = home.0.join("Library/Application Support/app.codeg");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = rusqlite::Connection::open(dir.join("codeg.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE conversation(id INTEGER,title TEXT,agent_type TEXT,external_id TEXT,folder_id INTEGER,status TEXT,parent_id INTEGER,kind TEXT);
+             CREATE TABLE folder(id INTEGER,path TEXT);
+             INSERT INTO conversation VALUES(214,'Build feature','codex','thr-native',1,'in_progress',NULL,'regular');
+             INSERT INTO conversation VALUES(215,'Child task\n<recommended_plugins> Here','codex','thr-child',1,'in_progress',214,'delegate');
+             INSERT INTO conversation VALUES(217,'Second child','codex','thr-second',1,'in_progress',214,'regular');
+             INSERT INTO conversation VALUES(218,'Root child','codex','thr-root',1,'in_progress',NULL,'delegate');
+             INSERT INTO folder VALUES(1,'/project/test');",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO conversation VALUES(219,?1,'codex','thr-long',1,'in_progress',214,'delegate')",
+            ["word ".repeat(30).trim()],
+        )
+        .unwrap();
+        drop(db);
+        let mut c = Collector::new(home.0.clone()).unwrap();
+        c.codeg.auth = Some((port, "test-token".into()));
+        c.set_codeg_stream_sink(Arc::new(|_| {}));
+        c
+    }
+
+    /// The snapshot a waiting child reports: its conversation, still prompting,
+    /// with one permission request.
+    fn pending(sid: i64, request: &str) -> Value {
+        json!({"conversation_id":sid,"status":"prompting","event_seq":5,"pending_permission":{"request_id":request,"tool_call":{"title":"Allow shell?"},"options":[{"name":"允许","kind":"allow_once"}]}})
+    }
+
+    /// A child runs invisibly, surfaces exactly one temporary card while it
+    /// waits for the user and gives that card up with the answer.
+    #[test]
+    fn codeg_child_requests_surface_a_temporary_card_until_answered() {
+        let home = Home::new();
+        let api = Api::start();
+        api.set("connection-1", json!({"conversation_id":214,"external_id":"thr-native","folder_id":1,"status":"prompting"}));
+        api.set("child", json!({"conversation_id":215,"external_id":"thr-child","folder_id":1,"status":"prompting"}));
+        let mut c = collector(&home, api.port);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"connection-1","event":"user_prompt_sent","body":"Build"})));
+        let parent = c.hub.sessions["codeg:214"].clone();
+        // Running children never reach the rail, whatever their metadata says.
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"user_prompt_sent","body":"Child"})));
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+        let calls = api.calls();
+        api.set("child", Value::Null);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"user_prompt_sent"})));
+        assert_eq!(api.calls(), calls, "a known child never queries the API again");
+        // The request surfaces the card, its parent and the child's stream.
+        api.set("child", pending(215, "p1"));
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        let child = c.hub.sessions["codeg:215"].clone();
+        assert_eq!(child["status"], "wait");
+        assert_eq!(child["subagent"], true);
+        assert_eq!(child["parentTitle"], "Build feature");
+        assert_eq!(child["title"], "Child task <recommended_plugins> Here");
+        assert_eq!(child["cwd"], "/project/test");
+        assert_eq!(child["pending"][0]["id"], "p1");
+        assert_eq!(child["pending"][0]["text"], "Allow shell?");
+        assert!(c.hub.snapshot()["sessions"].as_array().unwrap().iter().any(|s| s["id"] == "codeg:215"));
+        assert!(c.codeg.streams.contains_key("child"), "the wait subscribes the child stream");
+        assert_eq!(c.hub.sessions["codeg:214"], parent, "the child never changes its parent");
+        // The authoritative answer releases both.
+        let subscription = c.codeg.streams["child"].subscription.clone();
+        assert!(c.ingest_codeg_stream(&json!({"type":"event","connection_id":"child","subscription_id":subscription,"envelope":{"seq":6,"type":"permission_resolved","connection_id":"child","request_id":"p1"}})));
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+        assert!(!c.codeg.streams.contains_key("child"));
+        assert_eq!(c.hub.sessions["codeg:214"], parent);
+        // A late duplicate of the answered request never revives the card.
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+        // A request whose snapshot cannot be read names no request id: nothing is
+        // shown, because no answer could ever be matched against it.
+        api.set("child", Value::Null);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+        assert!(!c.codeg.streams.contains_key("child"));
+        // A new request from the same child surfaces again.
+        api.set("child", pending(215, "p2"));
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        assert_eq!(c.hub.sessions["codeg:215"]["pending"][0]["id"], "p2");
+        assert!(c.codeg.streams.contains_key("child"));
+    }
+
+    /// The end of a child's turn releases the card even without an answer.
+    #[test]
+    fn codeg_child_turn_completion_releases_the_card() {
+        let home = Home::new();
+        let api = Api::start();
+        api.set("child", pending(215, "p1"));
+        let mut c = collector(&home, api.port);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        assert!(c.hub.sessions.contains_key("codeg:215"));
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"turn_complete"})));
+        assert!(!c.hub.sessions.contains_key("codeg:215"), "a child never keeps a done card");
+        assert!(!c.codeg.streams.contains_key("child"));
+        // The finished request cannot come back through a delayed webhook.
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+    }
+
+    /// An answer that lands while the webhook is still in flight releases the
+    /// card on the stream snapshot instead of leaving a running child behind.
+    #[test]
+    fn codeg_child_card_released_by_an_idle_stream_snapshot() {
+        let home = Home::new();
+        let api = Api::start();
+        api.set("child", pending(215, "p1"));
+        let mut c = collector(&home, api.port);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        let subscription = c.codeg.streams["child"].subscription.clone();
+        assert!(c.ingest_codeg_stream(&json!({"type":"snapshot","connection_id":"child","subscription_id":subscription,"event_seq":7,"snapshot":{"conversation_id":215,"status":"prompting"}})));
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+        assert!(!c.codeg.streams.contains_key("child"));
+        // A snapshot for another conversation settles nothing here.
+        api.set("child", pending(215, "p2"));
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        assert!(c.hub.sessions.contains_key("codeg:215"));
+        let subscription = c.codeg.streams["child"].subscription.clone();
+        assert!(c.ingest_codeg_stream(&json!({"type":"snapshot","connection_id":"child","subscription_id":subscription,"event_seq":8,"snapshot":{"conversation_id":999,"status":"prompting"}})));
+        assert!(c.hub.sessions.contains_key("codeg:215"));
+    }
+
+    /// A cancelled child emits no signal at all, so the card has a time bound.
+    #[test]
+    fn codeg_child_cards_expire_without_an_answer() {
+        let home = Home::new();
+        let api = Api::start();
+        api.set("child", pending(215, "p1"));
+        let mut c = collector(&home, api.port);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        c.codeg.children.get_mut("child").unwrap().started_at = now() - CODEG_CHILD_TTL - 1;
+        c.maintain_codeg_webhook().unwrap();
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+        assert!(!c.codeg.streams.contains_key("child"));
+        assert!(c.codeg.children.contains_key("child"), "the child stays known");
+        // A fresh request still surfaces after the sweep.
+        api.set("child", pending(215, "p2"));
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        assert_eq!(c.hub.sessions["codeg:215"]["pending"][0]["id"], "p2");
+        assert!(c.codeg.streams.contains_key("child"));
+    }
+
+    /// Disabling the source drops every temporary card with its stream.
+    #[test]
+    fn codeg_child_cards_are_released_when_the_source_is_disabled() {
+        let home = Home::new();
+        let api = Api::start();
+        api.set("child", pending(215, "p1"));
+        let mut c = collector(&home, api.port);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"permission_request","body":"Task"})));
+        c.settings["sources"]["codeg"]["enabled"] = json!(false);
+        c.maintain_codeg_webhook().unwrap();
+        assert!(!c.hub.sessions.contains_key("codeg:215"));
+        assert!(!c.codeg.streams.contains_key("child"));
+        assert!(c.codeg.children.is_empty());
+    }
+
+    /// A child that finishes silently has no conversation to resolve: the
+    /// provisional session that path used to seed was a `done` ghost on a task
+    /// that never needed the user.
+    #[test]
+    fn codeg_silent_child_completion_never_seeds_a_session() {
+        let home = Home::new();
+        let api = Api::start();
+        let mut c = collector(&home, api.port);
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"child","event":"turn_complete","body":"CodeBuddy session completed"})));
+        assert!(c.hub.sessions.is_empty());
+        assert!(c.hub.snapshot()["sessions"].as_array().unwrap().is_empty());
+        assert_eq!(api.calls(), 1, "the event was still resolved once");
+        // An existing provisional session still ends on its own completion.
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"gone","event":"user_prompt_sent","body":"Task"})));
+        assert_eq!(c.hub.sessions["codeg:connection:gone"]["status"], "running");
+        assert!(c.ingest_hook(&json!({"source":"codeg","connection_id":"gone","event":"turn_complete"})));
+        assert_eq!(c.hub.sessions["codeg:connection:gone"]["status"], "done");
+    }
+
+    /// Every child shape the database can report is treated as a child, and a
+    /// long prompt fragment is collapsed and capped before the rail sees it.
+    #[test]
+    fn codeg_child_metadata_covers_every_delegation_shape() {
+        let home = Home::new();
+        let api = Api::start();
+        let c = collector(&home, api.port);
+        let meta = |sid: i64| c.codeg_metadata(&sid.to_string()).unwrap();
+        for id in [215, 217, 218, 219] {
+            assert_eq!(meta(id)["isSubagent"], true, "conversation {id}");
+        }
+        assert_eq!(meta(214)["isSubagent"], false);
+        assert_eq!(meta(215)["title"], "Child task\n<recommended_plugins> Here");
+        assert_eq!(meta(215)["parentTitle"], "Build feature");
+        assert_eq!(meta(219)["parentTitle"], "Build feature");
+        assert_eq!(codeg_title(&text(&meta(219)["title"])).chars().count(), 80);
+        assert_eq!(meta(218).get("parentTitle"), None, "a parentless delegate carries no parent title");
+    }
+
+    /// The Node twin parses a snapshot and a stream envelope with one function,
+    /// so the two Rust parsers must agree too: a tool call carrying only a `name`
+    /// and an option carrying only a `label` may not read differently depending
+    /// on which path surfaced the card.
+    #[test]
+    fn codeg_child_permission_ask_matches_the_stream_twin() {
+        let snap = json!({"pending_permission":{"request_id":"p1","tool_call":{"name":"Bash"},"options":[{"label":"允许","kind":"allow_once"}]}});
+        let ask = codeg_ask(&snap);
+        assert_eq!(
+            ask,
+            stream_ask("pending_permission", &snap["pending_permission"])
+        );
+        assert_eq!(question(&ask), "Bash");
+        assert_eq!(questions(&ask)[0]["options"][0]["label"], "允许");
     }
 }

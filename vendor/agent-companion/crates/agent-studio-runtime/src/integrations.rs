@@ -153,7 +153,9 @@ fn edit(c: &Collector, source: &str, install: bool) -> Result<(), String> {
                 let mut h = json!({"type":"command","command":command(c,source,file),"timeout":3});
                 if source != "codebuddy-ide" {
                     h["statusMessage"] = json!("Agent Studio");
-                    if *event != "SessionEnd" {
+                    // Codex CLI skips handlers marked async entirely. Keep all
+                    // Codex hooks synchronous so their lifecycle is observable.
+                    if source == "workbuddy" && *event != "SessionEnd" {
                         h["async"] = json!(true);
                     }
                 }
@@ -290,6 +292,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(get(&restarted)["sources"][0]["status"], "installed");
+        let codex_hooks = read(&home.join(".codex/hooks.json")).unwrap();
+        for event in CODEX_EVENTS {
+            assert_eq!(codex_hooks["hooks"][event][0]["hooks"][0]["async"], Value::Null, "{event} must complete before Codex leaves the turn");
+        }
         std::fs::write(home.join(".codex/hooks.json"), "malformed").unwrap();
         assert_eq!(get(&restarted)["sources"][0]["status"], "error");
         assert!(set(

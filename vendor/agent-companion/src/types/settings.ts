@@ -7,6 +7,7 @@
 export type SourceId = 'codex' | 'workbuddy' | 'codebuddy-ide' | 'codeg';
 
 export type AvatarStyle = 'animal' | 'bot';
+export type RailSize = 'small' | 'medium' | 'standard';
 export type RailVisibleCount = 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 export type RetentionHours = 0 | 0.5 | 24 | 168;
 export type AssignmentMode = 'auto' | 'fixed';
@@ -82,6 +83,7 @@ export interface RailPreferences {
   avatarStyle: AvatarStyle;
   visibleCount: number;
   animation: boolean;
+  size: RailSize;
 }
 
 export interface RailPreferencesState extends RailPreferences {
