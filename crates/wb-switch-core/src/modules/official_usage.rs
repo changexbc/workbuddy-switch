@@ -37,7 +37,13 @@ fn official_usage_url_for(account: &Value) -> &'static str {
     }
 }
 pub const OFFICIAL_USAGE_PAGE_SIZE: usize = 3_000;
-pub const OFFICIAL_USAGE_DETAIL_LIMIT: usize = 100;
+/// 每个账号落进 `requests` 明细的条数上限。
+///
+/// 官方接口已全量扫回（见 [`OFFICIAL_USAGE_PAGE_SIZE`] 的分页扫描），这里只是
+/// 「明细对外暴露多少条」的闸门：定得太低，用户排查高消耗请求时看不到更早的
+/// 记录；不设上限，重度账号会把明细撑到几万条，缓存文件与前端渲染一起变慢。
+/// 1000 条配合前端分页与按消耗排序，足够覆盖排查场景，同时保持有界。
+pub const OFFICIAL_USAGE_DETAIL_LIMIT: usize = 1_000;
 /// 连续扫描的轮数上限：每轮最多 [`OFFICIAL_USAGE_PAGE_SIZE`] 条，100 轮足够覆盖
 /// 单账号单窗口的任何真实量级，同时兜住「服务端异常回同样一页」的死循环。
 const OFFICIAL_USAGE_MAX_ROUNDS: usize = 100;
