@@ -55,7 +55,7 @@ import { screenshotDemoResponse } from "./screenshot-demo";
 const API_BASE = "http://127.0.0.1:57890";
 
 const DEMO_READ_COMMANDS = new Set([
-  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_codebuddy_ide_status", "get_vscode_ext_status", "get_jetbrains_status", "list_vscode_sessions", "get_checkin_status",
+  "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_codebuddy_ide_status", "get_vscode_ext_status", "get_jetbrains_status", "list_vscode_sessions", "list_codebuddy_ide_sessions", "vscode_session_links_preview", "codebuddy_ide_session_links_preview", "get_checkin_status",
   "get_credit_expiry", "get_credit_statistics", "get_auto_checkin_config",
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
@@ -105,6 +105,11 @@ const ROUTES: Record<string, Route> = {
   get_codebuddy_cn_ide_status: { method: "GET", path: "/api/codebuddy-cn-ide/status" },
   switch_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/switch" },
   detect_codebuddy_cn_ide_account: { method: "POST", path: "/api/codebuddy-cn-ide/detect" },
+  list_codebuddy_ide_sessions: { method: "GET", path: "/api/codebuddy-cn-ide/sessions" },
+  codebuddy_ide_session_links_preview: {
+    method: "POST",
+    path: "/api/codebuddy-cn-ide/session-links",
+  },
   get_vscode_ext_status: { method: "GET", path: "/api/vscode-ext/status" },
   get_jetbrains_status: { method: "GET", path: "/api/jetbrains/status" },
   switch_jetbrains_account: { method: "POST", path: "/api/jetbrains/switch" },
@@ -271,11 +276,36 @@ export function getCodebuddyCnIdeStatus(): Promise<CodeBuddyCnIdeStatus> {
   return call("get_codebuddy_cn_ide_status");
 }
 
+/**
+ * 切换 CodeBuddy IDE 账号（可同时复制 / 同步会话）。
+ *
+ * `restart` 默认 true：IDE 运行时由后端先关闭、写入后再重新打开。
+ * `copySessions` 非空时切换前把勾选会话复制到目标账号（默认沿用会话 id，冲突才重随机）；
+ * `syncSelections` 与 VS Code 侧同形；两者都不传时行为与纯切换逐字一致。
+ */
 export function switchCodebuddyCnIdeAccount(
   accountId: string,
   restart = true,
+  copySessions?: VscodeSessionRef[],
+  syncSelections?: SessionSyncSelection[],
 ): Promise<CodeBuddyCnIdeSwitchResult> {
-  return call("switch_codebuddy_cn_ide_account", { accountId, restart });
+  return call("switch_codebuddy_cn_ide_account", { accountId, restart, copySessions, syncSelections });
+}
+
+/** 列出当前 CodeBuddy IDE 账号可复制的会话（未登录/未安装时返回空列表）。 */
+export function listCodebuddyIdeSessions(): Promise<VscodeSessionList> {
+  return call("list_codebuddy_ide_sessions");
+}
+
+/**
+ * 预览「当前 CodeBuddy IDE 账号 → 目标账号」可同步的关联会话。
+ *
+ * 只读：`defaultChecked` 与 `availableModes` 是勾选权限的唯一来源，前端不得自行扩大。
+ */
+export function codebuddyIdeSessionLinksPreview(
+  targetAccountId: string,
+): Promise<SessionLinksPreview> {
+  return call("codebuddy_ide_session_links_preview", { targetAccountId });
 }
 
 export function detectCodebuddyCnIdeAccount(): Promise<{

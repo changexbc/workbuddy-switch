@@ -2,7 +2,7 @@ import type {
   AccountMeta, AppStatus, AutoRotateConfig, CheckinConfig, CheckinLog,
   CodeBuddyCliStatus, CodeBuddyCliSwitchResult, CodeBuddyCnIdeStatus, CreditExpiry, CreditOfficialUsageModel, CreditStatistics,
   GithubConfig, RateLimitHookStatus, RateLimitsPayload, RotateLog, RotateStatus, TokenStatistics, TokenStatsGroup, TokenStatsRequestRow, TokenStatsSource, TokenStatsTotals,
-  TravelConfig, TravelStatus, VscodeExtStatus, VscodeSessionList,
+  SessionLinksPreview, TravelConfig, TravelStatus, VscodeExtStatus, VscodeSessionList,
 } from "./types";
 import { demoModeEnabled } from "./demo-mode";
 import { accountVariant, normalizeVariant, variantSupportsCheckin } from "./variant";
@@ -618,6 +618,7 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "get_codebuddy_cn_ide_status": return {
       installed: true,
       running: true,
+      loggedIn: true,
       dataDir: "/demo/codebuddy-cn-ide",
       dbPath: "/demo/codebuddy-cn-ide/state.vscdb",
       dbExists: true,
@@ -661,6 +662,28 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
         { id: "66554433221100998877665544332211", workspaceHash: "aabbccddeeff00112233445566778899", title: "(无标题)", updatedAt: Date.now() - 1000 * 60 * 60 * 50, type: "craft", hasHistory: false },
       ],
     } satisfies VscodeSessionList;
+    case "list_codebuddy_ide_sessions": return {
+      sourceUid: demoAccounts[0].uid,
+      skipped: 0,
+      dataRoot: "/demo/CodeBuddyExtension/Data",
+      sessions: [
+        { id: "4a598bb4e3144a799e602dd6c9091d03", workspaceHash: "6c4b8aec50b679a6fc4023b379160418", title: "两分钟后自动回复设置", updatedAt: Date.now() - 1000 * 60 * 8, type: "craft", hasHistory: true },
+        { id: "1d2e3f405162738495a6b7c8d9e0f1a2", workspaceHash: "6c4b8aec50b679a6fc4023b379160418", title: "整理会话复制文案", updatedAt: Date.now() - 1000 * 60 * 90, type: "craft", hasHistory: true },
+        { id: "a1b2c3d4e5f60718293a4b5c6d7e8f90", workspaceHash: "ffeeddccbbaa99887766554433221100", title: "工作区索引结构确认", updatedAt: Date.now() - 1000 * 60 * 60 * 30, type: "craft", hasHistory: true },
+      ],
+    } satisfies VscodeSessionList;
+    // 关联预览：演示库没有复制记录，返回 missing（弹窗默认 tab 会拉一次；不得落到「演示模式不可操作」）。
+    case "codebuddy_ide_session_links_preview":
+    case "vscode_session_links_preview": {
+      const target = demoAccounts.find((account) => account.id === args?.targetAccountId) ?? demoAccounts[1] ?? demoAccounts[0];
+      return {
+        supported: true,
+        storeStatus: "missing",
+        sourceUid: demoAccounts[0].uid ?? "demo-source",
+        targetUid: target.uid ?? "demo-target",
+        groups: [],
+      } satisfies SessionLinksPreview;
+    }
     case "switch_codebuddy_cli_account": {
       const target = demoAccounts.find((account) => account.id === args?.accountId);
       if (!target) throw new Error("账号不存在");
