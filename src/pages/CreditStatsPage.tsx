@@ -580,15 +580,12 @@ function buildStackedChart(
 function TrendChart({
   stats,
   officialUsage,
-  accountFilter,
-  onAccountFilterChange,
 }: {
   stats: CreditStatistics;
   officialUsage?: CreditOfficialUsage;
-  /** 与同页其他模块共享，null = 所有账号汇总 */
-  accountFilter: string | null;
-  onAccountFilterChange: (accountId: string | null) => void;
 }) {
+  /** null = 所有账号汇总；本卡片独立，不影响其他卡片 */
+  const [accountFilter, setAccountFilter] = useState<string | null>(null);
   /** 本卡片独立的时间范围，不影响其他卡片 */
   const [range, setRange] = useState<RangeKey>("30d");
   const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
@@ -664,7 +661,7 @@ function TrendChart({
               <AccountFilterMenu
                 accounts={filterAccounts}
                 accountFilter={effectiveFilter}
-                onAccountFilterChange={onAccountFilterChange}
+                onAccountFilterChange={setAccountFilter}
                 ariaLabel="按账号筛选趋势"
               />
               <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
@@ -955,14 +952,11 @@ function ModelBreakdownRows({ models }: { models: CreditOfficialUsageModel[] }) 
 
 function ModelBreakdown({
   officialUsage,
-  accountFilter,
-  onAccountFilterChange,
 }: {
   officialUsage: CreditOfficialUsage;
-  /** 与同页其他模块共享，null = 所有账号汇总 */
-  accountFilter: string | null;
-  onAccountFilterChange: (accountId: string | null) => void;
 }) {
+  /** null = 所有账号汇总；本卡片独立，不影响其他卡片 */
+  const [accountFilter, setAccountFilter] = useState<string | null>(null);
   /** 本卡片独立的时间范围，不影响其他卡片 */
   const [range, setRange] = useState<RangeKey>("30d");
   const filterAccounts = officialUsage.accounts;
@@ -1011,7 +1005,7 @@ function ModelBreakdown({
               <AccountFilterMenu
                 accounts={filterAccounts}
                 accountFilter={effectiveFilter}
-                onAccountFilterChange={onAccountFilterChange}
+                onAccountFilterChange={setAccountFilter}
                 ariaLabel="按账号筛选模型分类"
               />
               <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="模型分类时间范围">
@@ -1552,20 +1546,19 @@ function SelectedAccountDetails({
   officialUsage,
   creditMap,
   creditLoadingMap,
-  accountFilter,
-  onAccountFilterChange,
 }: {
   stats: CreditStatistics;
   officialUsage?: CreditOfficialUsage;
   creditMap: Record<string, CreditExpiry>;
   creditLoadingMap: Record<string, boolean>;
-  /** 与同页其他模块共享；本卡片只允许单账号，未指定时回退到第一个账号 */
-  accountFilter: string | null;
-  onAccountFilterChange: (accountId: string | null) => void;
 }) {
   const [detailTab, setDetailTab] = useState<"credits" | "requests">("credits");
   const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
   const filterAccounts = official ? official.accounts : stats.accounts;
+  /** 本卡片仅允许选择单个账号，默认第一个账号 */
+  const [accountFilter, setAccountFilter] = useState<string | null>(
+    () => filterAccounts[0]?.accountId ?? null,
+  );
   const activeFilterAccount =
     accountFilter && filterAccounts.some((account) => account.accountId === accountFilter)
       ? filterAccounts.find((account) => account.accountId === accountFilter)
@@ -1605,7 +1598,7 @@ function SelectedAccountDetails({
               <AccountFilterMenu
                 accounts={filterAccounts}
                 accountFilter={effectiveFilter}
-                onAccountFilterChange={onAccountFilterChange}
+                onAccountFilterChange={setAccountFilter}
                 ariaLabel="按账号筛选积分明细"
                 allowAll={false}
               />
@@ -1724,8 +1717,6 @@ export default function CreditStatsPage() {
   const [loading, setLoading] = useState(!cachedStatistics);
   const [error, setError] = useState<string | null>(null);
   const [viewVariant, setViewVariant] = useState<StatsVariantView>("all");
-  /** 页面级共享：在任一模块切换账号，趋势 / 模型分类 / 积分明细三处同步联动 */
-  const [sharedAccountFilter, setSharedAccountFilter] = useState<string | null>(null);
 
   const load = useCallback(
     async (refresh = false) => {
@@ -1954,15 +1945,11 @@ export default function CreditStatsPage() {
               <TrendChart
                 stats={filteredStats}
                 officialUsage={officialUsage}
-                accountFilter={sharedAccountFilter}
-                onAccountFilterChange={setSharedAccountFilter}
               />
 
               {official && (
                 <ModelBreakdown
                   officialUsage={official}
-                  accountFilter={sharedAccountFilter}
-                  onAccountFilterChange={setSharedAccountFilter}
                 />
               )}
 
@@ -1975,8 +1962,6 @@ export default function CreditStatsPage() {
                 officialUsage={officialUsage}
                 creditMap={creditMap}
                 creditLoadingMap={creditLoadingMap}
-                accountFilter={sharedAccountFilter}
-                onAccountFilterChange={setSharedAccountFilter}
               />
             </>
           )}
