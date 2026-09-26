@@ -16,6 +16,7 @@ import {
 
 import { AccountCard } from "@/components/account-card";
 import { JetbrainsSwitchDialog } from "@/components/jetbrains-switch-dialog";
+import { CodebuddyIdeSwitchAccountDialog } from "@/components/codebuddy-ide-switch-account-dialog";
 import { DemoAction } from "@/components/demo-action";
 import {
   CodeBuddyAiIdeMark,
@@ -202,7 +203,8 @@ export default function AccountsPage() {
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [codebuddyCnIde, setCodebuddyCnIde] = useState<CodeBuddyCnIdeStatus | null>(null);
-  const [codebuddyCnIdeSwitchingId, setCodebuddyCnIdeSwitchingId] = useState<string | null>(null);
+  /** CodeBuddy IDE 切换弹窗目标（null=关闭）；切换与可选会话复制/同步在弹窗内完成（国内版 / 国际版共用）。 */
+  const [codebuddyIdeSwitchAccount, setCodebuddyIdeSwitchAccount] = useState<AccountMeta | null>(null);
   const [vscodeExt, setVscodeExt] = useState<VscodeExtStatus | null>(null);
   /** VS Code 扩展切换弹窗目标（null=关闭）；切换与可选会话复制在弹窗内完成。 */
   const [vscodeSwitchAccount, setVscodeSwitchAccount] = useState<AccountMeta | null>(null);
@@ -695,28 +697,10 @@ export default function AccountsPage() {
   }
 
   async function onSwitchCodebuddyCnIde(account: AccountMeta) {
-    if (codebuddyCnIdeSwitchingId !== null) return;
-    setCodebuddyCnIdeSwitchingId(account.id);
-    const toastId = toast.loading("正在切换 CodeBuddy IDE…", {
-      description: "将注入凭证并重启 CodeBuddy IDE",
-    });
-    try {
-      const result = variantUsesIntlCodebuddyIde(variant)
-        ? await api.switchCodebuddyIdeAccount(account.id, true)
-        : await api.switchCodebuddyCnIdeAccount(account.id, true);
-      await refreshCodebuddyCnIdeStatus();
-      toast.success("CodeBuddy IDE 已切换", {
-        id: toastId,
-        description: result.message || result.account,
-      });
-    } catch (error) {
-      toast.error("CodeBuddy IDE 切换失败", {
-        id: toastId,
-        description: api.asError(error),
-      });
-    } finally {
-      setCodebuddyCnIdeSwitchingId(null);
-    }
+    if (codebuddyIdeSwitchAccount !== null) return;
+    // 国内版与国际版共用同一弹窗（关联会话 / 复制会话两个 tab），只有数据源与切换接口按档位分流；
+    // 弹窗本身承担确认职责（不勾选时行为与一键切换一致），不再另设轻量确认框。
+    setCodebuddyIdeSwitchAccount(account);
   }
 
   async function onInstallCodebuddyCli() {
@@ -1090,8 +1074,7 @@ export default function AccountsPage() {
                 codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
                 codebuddyCnIdeAvailable={Boolean(codebuddyCnIde?.installed)}
                 codebuddyCnIdeActive={enabledTools.codebuddyIde && a.id === cnIdeCurrentAccountId}
-                codebuddyCnIdeBusy={codebuddyCnIdeSwitchingId !== null}
-                codebuddyCnIdeLoading={codebuddyCnIdeSwitchingId === a.id}
+                codebuddyCnIdeBusy={codebuddyIdeSwitchAccount !== null}
                 onSwitchCodebuddyCnIde={onSwitchCodebuddyCnIde}
                 vscodeExtInstalled={Boolean(vscodeExt?.installed)}
                 vscodeExtExtensionInstalled={Boolean(vscodeExt?.extensionInstalled)}
@@ -1135,6 +1118,18 @@ export default function AccountsPage() {
         onDone={() => {
           void fetchAll();
           void refreshCodebuddyCliStatus();
+          void refreshCodebuddyCnIdeStatus();
+        }}
+      />
+      <CodebuddyIdeSwitchAccountDialog
+        open={codebuddyIdeSwitchAccount !== null}
+        onOpenChange={(o) => {
+          if (!o) setCodebuddyIdeSwitchAccount(null);
+        }}
+        account={codebuddyIdeSwitchAccount}
+        variant={variant}
+        ideStatus={codebuddyCnIde}
+        onDone={() => {
           void refreshCodebuddyCnIdeStatus();
         }}
       />

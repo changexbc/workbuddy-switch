@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CircleCheck, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
+import { CircleCheck, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -12,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildGroups, SessionCopyTab } from "@/components/session-copy-tab";
@@ -21,29 +20,35 @@ import { VscodeSessionSyncSection } from "@/components/vscode-session-sync-secti
 import * as api from "@/lib/api";
 import type {
   AccountMeta,
+  CodeBuddyCnIdeStatus,
   SessionLinkPreviewGroup,
   SessionSyncSelection,
-  VscodeExtStatus,
   VscodeSession,
   VscodeSessionRef,
+  WbVariant,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { variantUsesIntlCodebuddyIde } from "@/lib/variant";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** 目标账号 */
   account: AccountMeta | null;
-  /** VS Code 扩展状态（用于渲染空态与运行中提示）。 */
-  vscodeExtStatus?: VscodeExtStatus | null;
+  /**
+   * 当前档位：决定会话列表 / 关联预览 / 切换走哪条通道。
+   *
+   * 国内版（`CodeBuddy CN.app`）与国际版（`CodeBuddy.app`）共用同一套会话存储与后端语义，
+   * 因此组件只做这一处分流，两个 tab、摘要与空态保持一份。
+   */
+  variant: WbVariant;
+  /** CodeBuddy IDE 状态（用于渲染空态与运行中提示）。 */
+  ideStatus?: CodeBuddyCnIdeStatus | null;
   /** 切换完成后刷新列表 */
   onDone?: () => void;
 }
 
-/** 自动关闭并重开 VS Code 的开关持久化 key（缺省开启，与 `wb-switch.compact` 同风格）。 */
-const AUTO_RESTART_KEY = "wb-switch.vscodeExt.autoRestart";
-
-/** tab 样式：下划线指示 + 可选计数徽标（与 WorkBuddy 切号弹窗一致）。 */
+/** tab 样式：下划线指示 + 可选计数徽标（与 VS Code / WorkBuddy 切号弹窗一致）。 */
 const TAB_TRIGGER_CLASS =
   "-mb-px h-9 flex-none rounded-none border-b-2 border-transparent px-0.5 pb-2 text-sm font-medium text-muted-foreground hover:text-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none";
 
@@ -54,28 +59,29 @@ function tabCount(count: number) {
   ) : null;
 }
 
-/** VS Code 扩展会话切换弹窗：可勾选「当前扩展账号」的会话复制到目标账号。 */
-export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeExtStatus, onDone }: Props) {
+/**
+ * CodeBuddy IDE 会话切换弹窗：可勾选「当前 IDE 账号」的会话复制到目标账号。
+ *
+ * 国内版与国际版共用本组件（差异只有三处 API 通道，按 `variant` 分流），与 VS Code 插件弹窗
+ * 同形（关联会话 / 复制会话两个 tab），差异：
+ * - 切换固定走「关闭并重开 IDE」（`restart = true`），不提供自动关闭开关；
+ * - 复制默认沿用会话 id，仅目标已有同 id 时改用新 id（后端决定，前端只提交引用）。
+ */
+export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, variant, ideStatus, onDone }: Props) {
+  /** 国际版档位：会话列表 / 关联预览 / 切换接口都走 `codebuddy-ide` 通道。 */
+  const intl = variantUsesIntlCodebuddyIde(variant);
   const [sessions, setSessions] = useState<VscodeSession[]>([]);
   const [sourceUid, setSourceUid] = useState<string | null>(null);
-  /** 扩展数据根目录：`null` = 未找到（与「有目录但无会话」区分）；`undefined` = 后端未返回该字段。 */
+  /** IDE 数据根目录：`null` = 未找到（与「有目录但无会话」区分）；`undefined` = 后端未返回该字段。 */
   const [dataRoot, setDataRoot] = useState<string | null | undefined>(undefined);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [copyEnabled, setCopyEnabled] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 展开的工作区分组（默认全部展开，会话较少）。 */
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  /** 自动关闭并重开 VS Code：默认开启，持久化到 localStorage。 */
-  const [autoRestart, setAutoRestart] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(AUTO_RESTART_KEY) !== "0";
-    } catch {
-      return true;
-    }
-  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  /** 当前 tab：与 WorkBuddy 切换弹窗同一顺序与默认值（关联会话在前）。 */
+  /** 当前 tab：与 VS Code 切换弹窗同一顺序与默认值（关联会话在前）。 */
   const [tab, setTab] = useState<"links" | "copy">("links");
   /** 关联会话区块上报的状态（tab 徽标 / 未登录时隐藏 tab）。 */
   const [linksMeta, setLinksMeta] = useState<SessionLinksMeta | null>(null);
@@ -84,16 +90,7 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
   /** 已勾选的关联会话（结果反馈里回显会话名）。 */
   const [syncGroups, setSyncGroups] = useState<SessionLinkPreviewGroup[]>([]);
 
-  function toggleAutoRestart(next: boolean) {
-    setAutoRestart(next);
-    try {
-      localStorage.setItem(AUTO_RESTART_KEY, next ? "1" : "0");
-    } catch {
-      /* 存储不可用时静默 */
-    }
-  }
-
-  // 打开时加载「当前扩展账号」可复制的会话。
+  // 打开时加载「当前 IDE 账号」可复制的会话。
   useEffect(() => {
     if (!open || !account) return;
     setCopyEnabled(false);
@@ -102,8 +99,8 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
     setDataRoot(undefined);
     setError("");
     setLoadingSessions(true);
-    api
-      .listVscodeSessions()
+    const fetchSessions = intl ? api.listCodebuddyIntlIdeSessions : api.listCodebuddyIdeSessions;
+    fetchSessions()
       .then((res) => {
         setSessions(res.sessions);
         setSourceUid(res.sourceUid);
@@ -115,7 +112,7 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
         setDataRoot(undefined);
       })
       .finally(() => setLoadingSessions(false));
-  }, [open, account]);
+  }, [open, account, intl]);
 
   const groups = useMemo(() => buildGroups(sessions), [sessions]);
   const sessionById = useMemo(() => {
@@ -168,13 +165,20 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
             .filter((ref): ref is VscodeSessionRef => ref !== null)
         : undefined;
 
-      // 勾选绑定预览凭据；执行前后端会重新校验，版本变化则跳过该项。
-      const res = await api.switchVscodeExtAccount(
-        account.id,
-        autoRestart,
-        refs,
-        syncSelections.length > 0 ? syncSelections : undefined,
-      );
+      // IDE 切换固定「关闭 + 写入 + 重开」；勾选绑定预览凭据，执行前后端会重新校验。
+      const res = intl
+        ? await api.switchCodebuddyIdeAccount(
+            account.id,
+            true,
+            refs,
+            syncSelections.length > 0 ? syncSelections : undefined,
+          )
+        : await api.switchCodebuddyCnIdeAccount(
+            account.id,
+            true,
+            refs,
+            syncSelections.length > 0 ? syncSelections : undefined,
+          );
       const nickname = account.nickname || account.email || account.uid || "该账号";
       const copied = res.sessionCopy?.copied.length ?? 0;
       const errors = res.sessionCopy?.errors ?? [];
@@ -183,13 +187,7 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
       const syncedItems = syncReport?.synced ?? [];
       const skippedItems = syncReport?.skipped ?? [];
       const syncErrors = syncReport?.errors ?? [];
-      // 生效方式提示：重载窗口读不到外部写入，不再提示；区分「已重开 / 重开失败 / 本来没运行」。
-      // 重开失败时前端拿不到原因，用后端 message（含具体错误）兜底。
-      const restartHint = res.restarted
-        ? "已切换并重新打开 VS Code"
-        : res.closedByUs
-          ? res.message || "已切换，但自动重新打开 VS Code 失败，请手动打开"
-          : "已切换；请打开 VS Code 生效";
+      const restartHint = res.message || "已重启 CodeBuddy IDE";
       const copiedHint = copied > 0 ? `已复制 ${copied} 个会话` : null;
       const syncedHint = syncedItems.length > 0 ? `已同步 ${syncedItems.length} 个会话` : null;
       const requestedSync = syncSelections.length > 0;
@@ -253,6 +251,7 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
   const overwriteCount = syncSelections.filter((item) => item.mode === "overwrite").length;
   /** 关联会话 tab 是否可用：区块不可用（能力判定不通过）时回落到仅复制会话。 */
   const linksAvailable = linksMeta?.available ?? true;
+  const running = ideStatus?.running === true;
   const summaryMain =
     copyCount > 0 && syncCount > 0
       ? `将复制 ${copyCount} 个、同步 ${syncCount} 个关联会话`
@@ -261,47 +260,42 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
         : syncCount > 0
           ? `将同步 ${syncCount} 个关联会话`
           : "本次仅切换账号";
+  // 国际版不再有独立确认框，不勾选时由底部摘要承担「将重启 IDE」的说明。
+  // 国内版文案保持原句，不在这里改。
   const summarySub =
     overwriteCount > 0
       ? `其中 ${overwriteCount} 个会替换目标账号的完整内容`
       : copyCount === 0 && syncCount === 0
-        ? "未选择复制或同步会话"
+        ? intl
+          ? running
+            ? "未选择复制或同步会话，确认后将关闭并重启 IDE"
+            : "未选择复制或同步会话，确认后将打开 IDE"
+          : "未选择复制或同步会话"
         : copyCount === 0
           ? "未选择复制会话"
           : syncCount === 0
             ? "未选择同步会话"
             : null;
-  const running = vscodeExtStatus?.running === true;
-  /** 扩展未登录（`loggedIn === false`）：按新会话写入，仅影响提示文案。 */
-  const notLoggedIn = vscodeExtStatus?.loggedIn === false;
-  /** 本次会由后端关闭并重开 VS Code（仅在编辑器正在运行且开关打开时）。 */
-  const autoClose = running && autoRestart;
-  /** 未登录时的追加说明（三态提示共用，渲染为 tooltip 内第二段）。 */
+  /** IDE 未登录（`loggedIn === false`）：按新登录写入，仅影响提示文案。 */
+  const notLoggedIn = ideStatus?.loggedIn === false;
+  /** 未登录时的追加说明（tooltip 第二段）。 */
   const notLoggedInHint = notLoggedIn
-    ? "未检测到 VS Code CodeBuddy 插件登录态，将按新会话写入；切换后打开 VS Code 即登录为目标账号。"
+    ? "未检测到 CodeBuddy IDE 登录态，将按新登录写入；切换后打开 IDE 即登录为目标账号。"
     : undefined;
-  const emptyHint = emptyStateHint(vscodeExtStatus, loadingSessions, sourceUid, dataRoot, hasCopyable);
+  const emptyHint = emptyStateHint(ideStatus, loadingSessions, sourceUid, dataRoot, hasCopyable);
   /** 标题行状态图标：三态提示收进 tooltip，仅以图标色调区分正常/警告。 */
   const statusNotice = running
-    ? autoRestart
-      ? {
-          icon: <RefreshCw className="size-4" />,
-          title: "将自动关闭并重开 VS Code",
-          description:
-            "将先关闭 VS Code（未保存内容由 VS Code 自身提示/热退出保护），写入凭证后自动重新打开。",
-          warning: false,
-        }
-      : {
-          icon: <TriangleAlert className="size-4" />,
-          title: "请先完全退出 VS Code",
-          description:
-            "已关闭「自动关闭并重开」。检测到 VS Code 正在运行，运行中写入会被覆盖且不会生效，请完全退出后重试。",
-          warning: true,
-        }
+    ? {
+        icon: <RefreshCw className="size-4" />,
+        title: "将自动关闭并重开 CodeBuddy IDE",
+        description:
+          "将先关闭 CodeBuddy IDE（未保存内容由 IDE 自身提示保护），写入凭证后自动重新打开。",
+        warning: false,
+      }
     : {
         icon: <CircleCheck className="size-4" />,
-        title: "VS Code 未运行，可直接切换",
-        description: "写入凭证后打开 VS Code，插件即为目标账号。",
+        title: "CodeBuddy IDE 未运行，可直接切换",
+        description: "写入凭证后自动打开 CodeBuddy IDE，即为目标账号。",
         warning: false,
       };
 
@@ -334,7 +328,7 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
         className="flex max-h-[min(90vh,calc(100vh-2rem))] min-w-0 flex-col overflow-hidden"
         tabIndex={-1}
         onOpenAutoFocus={(event) => {
-          // Radix 默认把焦点交给第一个可聚焦元素（状态图标 / 自动重开开关），
+          // Radix 默认把焦点交给第一个可聚焦元素（状态图标 / 关闭按钮），
           // 其 Tooltip 会因 focus 常驻在弹窗上；改为聚焦弹窗容器本身。
           event.preventDefault();
           const container = event.target as HTMLElement | null;
@@ -346,7 +340,7 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
             <DialogTitle className="min-w-0 flex-1">
               切换到「{account?.nickname || account?.email || account?.uid || "该账号"}」
             </DialogTitle>
-            {/* 提示收进图标 tooltip、开关与标题同行；mr-6 为右上角关闭按钮留空位。 */}
+            {/* 提示收进图标 tooltip；mr-6 为右上角关闭按钮留空位。 */}
             <div className="mr-6 flex shrink-0 items-center gap-2">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -369,28 +363,10 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
                   {notLoggedInHint && <p className="text-muted-foreground">{notLoggedInHint}</p>}
                 </TooltipContent>
               </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex">
-                    <Switch
-                      checked={autoRestart}
-                      onCheckedChange={toggleAutoRestart}
-                      disabled={busy}
-                      aria-label="自动关闭并重开 VS Code"
-                    />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" align="end" className="max-w-xs space-y-1">
-                  <div className="font-medium">自动关闭并重开 VS Code</div>
-                  <p className="text-muted-foreground">
-                    VS Code 运行时先自动关闭编辑器，写入凭证后再重新打开
-                  </p>
-                </TooltipContent>
-              </Tooltip>
             </div>
           </div>
           <DialogDescription>
-            将把所选账号写入 VS Code CodeBuddy 插件；可选把当前账号的会话复制过去，并把关联会话的新内容同步过去。
+            将把所选账号写入 CodeBuddy IDE；可选把当前账号的会话复制过去，并把关联会话的新内容同步过去。
           </DialogDescription>
         </DialogHeader>
 
@@ -398,18 +374,14 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 rounded-lg bg-background/85 backdrop-blur-sm">
             <Loader2 className="size-8 animate-spin text-primary" />
             <p className="text-sm font-medium">
-              {autoClose
-                ? "正在关闭 VS Code 并写入凭证…"
-                : copyCount > 0
-                  ? "正在切换并复制会话…"
-                  : syncCount > 0
-                    ? "正在切换并同步会话…"
-                    : "正在切换账号…"}
+              {copyCount > 0
+                ? "正在关闭 CodeBuddy IDE 并复制会话…"
+                : syncCount > 0
+                  ? "正在关闭 CodeBuddy IDE 并同步会话…"
+                  : "正在关闭 CodeBuddy IDE 并写入凭证…"}
             </p>
             <p className="max-w-xs text-center text-xs text-muted-foreground">
-              {autoClose
-                ? "若 VS Code 弹出保存提示请先处理（最多等待 60 秒）"
-                : "正在处理中，请勿关闭窗口"}
+              若 IDE 弹出保存提示请先处理（最长等待 60 秒）
             </p>
           </div>
         )}
@@ -449,6 +421,13 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
                   account={account}
                   loggedIn={!notLoggedIn}
                   disabled={busy}
+                  // 两个 IDE 共用展示件，只有预览通道按档位分流（稳定引用：模块级函数）。
+                  fetchPreview={
+                    intl
+                      ? api.codebuddyIntlIdeSessionLinksPreview
+                      : api.codebuddyIdeSessionLinksPreview
+                  }
+                  loggedOutHint="未检测到 CodeBuddy IDE 当前登录账号，请先在 CodeBuddy IDE 中登录后再切换。"
                   onChange={(state) => {
                     setSyncSelections(state.selections);
                     setSyncGroups(state.groups);
@@ -491,19 +470,18 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
   );
 }
 
-/** 统一空态文案：区分未装 VS Code / 未装扩展 / 未找到数据目录 / 未登录 / 无会话。 */
+/** 统一空态文案：区分未装 IDE / 未找到数据目录 / 未登录 / 无会话。 */
 function emptyStateHint(
-  status: VscodeExtStatus | null | undefined,
+  status: CodeBuddyCnIdeStatus | null | undefined,
   loading: boolean,
   sourceUid: string | null,
   dataRoot: string | null | undefined,
   hasCopyable: boolean,
 ): string {
   if (loading) return "正在加载会话…";
-  if (status && !status.installed) return "未检测到 VS Code，请先安装并登录 CodeBuddy 插件";
-  if (status && !status.extensionInstalled) return "未安装 VS Code CodeBuddy 插件，请先在 VS Code 中安装并登录";
-  if (dataRoot === null) return "未找到 VS Code CodeBuddy 插件数据目录，请先打开 VS Code 并登录插件";
-  if (!sourceUid) return "未检测到 VS Code CodeBuddy 插件当前登录账号，请先在 VS Code 中登录";
+  if (status && !status.installed) return "未检测到 CodeBuddy IDE，请先安装并登录";
+  if (dataRoot === null) return "未找到 CodeBuddy IDE 数据目录，请先打开 IDE 并登录一次";
+  if (!sourceUid) return "未检测到 CodeBuddy IDE 当前登录账号，请先在 IDE 中登录";
   if (!hasCopyable) return "当前账号暂无可复制的会话（无含正文的历史）";
-  return "将当前账号勾选的会话以新 id 复制给目标账号（加法，不影响源账号）";
+  return "将当前账号勾选的会话复制给目标账号（沿用会话 id，目标已有同 id 时自动改用新 id）";
 }

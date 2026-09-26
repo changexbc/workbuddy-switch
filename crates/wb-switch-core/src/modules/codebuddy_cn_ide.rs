@@ -21,8 +21,8 @@ use crate::modules::process;
 use crate::modules::process::run_cmd_timeout as run_cmd;
 use crate::modules::variant::codebuddy_domain_for;
 use crate::modules::vscode_cn_inject::{
-    codebuddy_cn_data_dir, codebuddy_cn_state_db_path, inject_codebuddy_cn_secret,
-    read_codebuddy_cn_secret,
+    codebuddy_cn_data_dir, codebuddy_cn_state_db_path, has_secret_row_for,
+    inject_codebuddy_cn_secret, read_codebuddy_cn_secret, CODEBUDDY_CN_TARGET,
 };
 
 const STATE_FILE: &str = "codebuddy_cn_ide.json";
@@ -1171,6 +1171,9 @@ pub fn status() -> Value {
     let installed = codebuddy_cn_app_path().is_some();
     let db_exists = db_path.as_ref().map(|p| p.exists()).unwrap_or(false);
     let running = is_codebuddy_cn_running();
+    // 登录态 = `state.vscdb` 里是否存在会话 secret 行：只查 key、不解密（macOS 解密会弹
+    // 钥匙串授权，绝不能进这条轮询路径）。查询失败/文件不存在一律 false，仅用于文案与入口判定。
+    let logged_in = has_secret_row_for(&CODEBUDDY_CN_TARGET, data_dir.as_deref()).unwrap_or(false);
 
     let mut active_account_id = active_account_id_from_state();
     let mut active_account_name: Option<String> = None;
@@ -1187,6 +1190,7 @@ pub fn status() -> Value {
     json!({
         "installed": installed,
         "running": running,
+        "loggedIn": logged_in,
         "dataDir": data_dir.map(|p| p.to_string_lossy().to_string()),
         "dbPath": db_path.map(|p| p.to_string_lossy().to_string()),
         "dbExists": db_exists,
@@ -1200,6 +1204,21 @@ pub fn status() -> Value {
 
 /// 切换 CodeBuddy CN IDE 账号：关进程 → 注入 secret → 启动。
 pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> {
+    let (acc, data_dir) = validate_switch_target(account_id)?;
+
+    if restart {
+        eprintln!("[codebuddy-cn-ide] closing CodeBuddy CN…");
+        close_codebuddy_cn(20)?;
+    }
+
+    inject_session_and_finish(account_id, &acc, &data_dir, restart)
+}
+
+/// 切换前置校验：账号存在 + `access_token` 非空 + 用户数据目录存在。返回账号条目与数据目录。
+///
+/// 必须在关闭 IDE **之前**执行：账号不存在、token 为空、数据目录缺失这类「无论怎么关都
+/// 注定失败」的目标，不该让用户的 IDE 被关掉。幂等且廉价，注入前会再次使用返回的数据目录。
+pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf), String> {
     let acc =
         account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
     let token = get_str(&acc, "access_token")
@@ -1216,15 +1235,21 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
             data_dir.display()
         ));
     }
+    Ok((acc, data_dir))
+}
 
-    if restart {
-        eprintln!("[codebuddy-cn-ide] closing CodeBuddy CN…");
-        close_codebuddy_cn(20)?;
-    }
-
-    let session = build_session_json(&acc);
+/// 「已可切换」后执行：注入 secret → 记录当前账号 → 按需重启（关闭动作由调用方负责）。
+///
+/// 会话复制等前置写入完成后调用的就是这一步，因此它不碰进程关闭逻辑。
+pub(crate) fn inject_session_and_finish(
+    account_id: &str,
+    acc: &Value,
+    data_dir: &Path,
+    restart: bool,
+) -> Result<Value, String> {
+    let session = build_session_json(acc);
     eprintln!("[codebuddy-cn-ide] injecting secret…");
-    let db_path = inject_codebuddy_cn_secret(&session, Some(&data_dir)).map_err(|err| {
+    let db_path = inject_codebuddy_cn_secret(&session, Some(data_dir)).map_err(|err| {
         if err.contains("Safe Storage") || err.contains("Keychain") {
             format!(
                 "注入登录状态失败：{err}\n\n请先手动打开 CodeBuddy CN 并登录一次，确保 Keychain 中存在「CodeBuddy CN Safe Storage」条目后再试。"
@@ -1243,16 +1268,34 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
 
     Ok(json!({
         "ok": true,
-        "account": account::account_display_name(&acc),
+        "account": account::account_display_name(acc),
         "accountId": account_id,
         "dbPath": db_path.to_string_lossy(),
         "restarted": restart,
         "message": if restart {
-            format!("已切换 CodeBuddy IDE 到 {} 并重启", account::account_display_name(&acc))
+            format!("已切换 CodeBuddy IDE 到 {} 并重启", account::account_display_name(acc))
         } else {
-            format!("已写入 CodeBuddy IDE 凭证（{}）；请手动重启 CodeBuddy CN 生效", account::account_display_name(&acc))
+            format!("已写入 CodeBuddy IDE 凭证（{}）；请手动重启 CodeBuddy CN 生效", account::account_display_name(acc))
         },
     }))
+}
+
+/// 当前 CodeBuddy CN IDE 登录账号的 uid（用于定位可复制的会话目录）。
+///
+/// 优先从本机 IDE 登录 secret 解析 uid（与切号注入的是同一处真相）；不可用时回退到
+/// 本地状态文件记录的账号 id → 账号库 uid。任一来源都拿不到时返回 `None`（调用方据此给出空态）。
+pub fn active_cn_ide_uid() -> Option<String> {
+    if let Ok(Some(secret)) = read_codebuddy_cn_secret(None) {
+        if let Some((Some(uid), _token)) = parse_token_from_secret(&secret) {
+            let uid = uid.trim().to_string();
+            if !uid.is_empty() {
+                return Some(uid);
+            }
+        }
+    }
+    active_account_id_from_state()
+        .and_then(|id| account::find_account(&id))
+        .and_then(|acc| get_str(&acc, "uid"))
 }
 
 /// 从本机 CN IDE 读取当前 token；若能匹配账号库则返回匹配信息（不新建账号）。

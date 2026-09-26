@@ -35,14 +35,21 @@ interface Props {
   onChange: (state: { selections: SessionSyncSelection[]; groups: SessionLinkPreviewGroup[] }) => void;
   /** 预览状态上报：父组件用于 tab 徽标 */
   onMetaChange?: (meta: SessionLinksMeta) => void;
+  /**
+   * 预览数据源：默认走 VS Code 插件通道；CodeBuddy IDE 弹窗传入 IDE 通道。
+   * 必须传稳定引用（模块级函数），否则会随重渲染反复拉取预览。
+   */
+  fetchPreview?: (targetAccountId: string) => Promise<SessionLinksPreview>;
+  /** 未登录时的空态文案（按目标客户端定制）。 */
+  loggedOutHint?: string;
 }
 
 /**
- * VS Code CodeBuddy 插件切号弹窗「关联会话」tab 的内容。
+ * 切号弹窗「关联会话」tab 的内容（VS Code 插件；CodeBuddy IDE 通过 `fetchPreview` 复用同一展示件）。
  *
  * 展示件与勾选逻辑与 WorkBuddy 侧共用（`session-link-shared.tsx`），差异只在数据源：
- * 这里读插件侧的关联表（`vscode_session_links.json`），且没有档位与「自动同步」开关
- * （D5：同步跟随「确认切换」）。
+ * 这里读目标侧的关联表（`vscode_session_links.json` / `codebuddy_ide_session_links.json`），
+ * 且没有档位与「自动同步」开关（D5：同步跟随「确认切换」）。
  */
 export function VscodeSessionSyncSection({
   account,
@@ -51,6 +58,8 @@ export function VscodeSessionSyncSection({
   loggedIn,
   onChange,
   onMetaChange,
+  fetchPreview = api.vscodeSessionLinksPreview,
+  loggedOutHint = "未检测到 VS Code CodeBuddy 插件当前登录账号，请先在 VS Code 中登录该插件后再切换。",
 }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -72,8 +81,7 @@ export function VscodeSessionSyncSection({
     let cancelled = false;
     setLoading(true);
     setError("");
-    api
-      .vscodeSessionLinksPreview(account.id)
+    fetchPreview(account.id)
       .then((res) => {
         if (cancelled) return;
         setPreview(res);
@@ -96,8 +104,9 @@ export function VscodeSessionSyncSection({
     return () => {
       cancelled = true;
     };
-    // 预览拉取只看「弹窗开关 / 目标账号 / 登录态 / 手动重试」；onChange 只做状态回写，不进依赖。
-  }, [open, account, loggedIn, reloadToken]);
+    // 预览拉取只看「弹窗开关 / 目标账号 / 登录态 / 手动重试 / 数据源」；onChange 只做状态回写，不进依赖。
+    // fetchPreview 必须是稳定引用（模块级函数），否则会随重渲染反复拉取。
+  }, [open, account, loggedIn, reloadToken, fetchPreview]);
 
   const groups = preview?.groups ?? [];
   // 插件侧没有档位能力探测，正常不会出现 supported=false；保留兜底以免渲染空 tab。
@@ -166,9 +175,7 @@ export function VscodeSessionSyncSection({
             STATUS_MIN_H,
           )}
         >
-          <p className="text-center text-xs text-muted-foreground">
-            未检测到 VS Code CodeBuddy 插件当前登录账号，请先在 VS Code 中登录该插件后再切换。
-          </p>
+          <p className="text-center text-xs text-muted-foreground">{loggedOutHint}</p>
         </div>
       )}
 

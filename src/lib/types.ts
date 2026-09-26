@@ -691,6 +691,13 @@ export interface UpdateSnapshot {
 export interface CodeBuddyCnIdeStatus {
   installed: boolean;
   running: boolean;
+  /**
+   * 是否存在 IDE 登录态（`state.vscdb` 里有会话 secret 行）。
+   *
+   * 只读查询、不解密；查询失败或文件不存在时为 false。仅用于文案与入口判定，
+   * 不参与切换判定。国内版与国际版 IDE 状态都返回该字段（旧后端可能缺省 `undefined`）。
+   */
+  loggedIn?: boolean;
   dataDir: string | null;
   dbPath: string | null;
   dbExists: boolean;
@@ -708,6 +715,10 @@ export interface CodeBuddyCnIdeSwitchResult {
   dbPath?: string;
   restarted?: boolean;
   message?: string;
+  /** 切换时复制会话的结果（未勾选复制时不返回）。 */
+  sessionCopy?: VscodeSessionCopyResult;
+  /** 切换时同步关联会话的结果（未勾选同步时不返回）。 */
+  sessionSync?: VscodeSessionSyncReport;
 }
 
 /** VS Code 内 CodeBuddy 扩展（tencent-cloud.coding-copilot）状态；与 CN IDE / CLI 独立。 */
