@@ -85,18 +85,24 @@ fn merge_import_record(accounts: &mut Vec<Value>, item: &Value) -> MergeOutcome 
             .find(|a| account::get_str(a, "uid").as_deref() == Some(uid))
         {
             let mut replaced = item.clone();
-            // 导入记录缺 id 时保留本地 id：账号库不允许出现无 id 记录
-            //（删除按 id、列表 key、导出选择都依赖 id）。
+            // 账号库不允许出现无 id 记录（删除按 id、列表 key、导出选择都依赖
+            // id）：优先保留本地 id；本地也是无 id 的历史脏数据时补一个。
             if account::get_str(&replaced, "id").is_none() {
-                if let Some(id) = existing.get("id").cloned() {
-                    replaced["id"] = id;
-                }
+                replaced["id"] = account::get_str(existing, "id")
+                    .map(Value::String)
+                    .unwrap_or_else(|| Value::String(uuid::Uuid::new_v4().to_string()));
             }
             *existing = replaced;
             return MergeOutcome::Overwritten;
         }
     }
-    accounts.push(item.clone());
+    // 追加同样必须带 id：缺 id 的记录在刷新回写时无法被按 id 覆盖，会被
+    // 反复追加副本（issue #111）。
+    let mut appended = item.clone();
+    if account::get_str(&appended, "id").is_none() {
+        appended["id"] = Value::String(uuid::Uuid::new_v4().to_string());
+    }
+    accounts.push(appended);
     MergeOutcome::Appended
 }
 
@@ -331,6 +337,62 @@ mod tests {
         assert_eq!(result.overwritten, 1);
         assert_eq!(accounts.len(), 1, "文件内重复 uid 也不得产生重复账号");
         assert_eq!(accounts[0]["id"], "f2");
+    }
+
+    /// 回归 issue #111：导入记录缺 id 时必须补一个，否则刷新回写会反复追加副本。
+    #[test]
+    fn merge_generates_id_for_imported_record_without_id() {
+        let mut accounts: Vec<Value> = vec![];
+        let text = r#"[{ "uid": "u-new", "nickname": "无id", "access_token": "t1" }]"#;
+        let result = merge_import_records(&mut accounts, text, &[0]).unwrap();
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(accounts.len(), 1);
+        assert!(
+            accounts[0]["id"]
+                .as_str()
+                .is_some_and(|id| !id.trim().is_empty()),
+            "追加入库的记录必须带 id"
+        );
+    }
+
+    /// 本地同 uid 记录也是无 id 的历史脏数据时，覆盖后同样要补 id。
+    #[test]
+    fn merge_generates_id_when_neither_imported_nor_local_record_has_one() {
+        let mut accounts = vec![json!({
+            "uid": "u1",
+            "nickname": "旧名称",
+            "access_token": "t-old",
+        })];
+        let text = r#"[{ "uid": "u1", "nickname": "新名称", "access_token": "t-new" }]"#;
+        let result = merge_import_records(&mut accounts, text, &[0]).unwrap();
+
+        assert_eq!(result.overwritten, 1);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0]["nickname"], "新名称");
+        assert!(
+            accounts[0]["id"]
+                .as_str()
+                .is_some_and(|id| !id.trim().is_empty()),
+            "本地也无 id 时覆盖后必须补 id"
+        );
+    }
+
+    #[test]
+    fn merge_repairs_empty_local_id_when_imported_record_has_no_id() {
+        let mut accounts = vec![json!({
+            "id": "  ",
+            "uid": "u1",
+            "access_token": "t-old",
+        })];
+        let text = r#"[{ "uid": "u1", "access_token": "t-new" }]"#;
+
+        let result = merge_import_records(&mut accounts, text, &[0]).unwrap();
+
+        assert_eq!(result.overwritten, 1);
+        assert_eq!(accounts.len(), 1);
+        assert!(account::get_str(&accounts[0], "id").is_some());
+        assert_eq!(accounts[0]["access_token"], "t-new");
     }
 
     #[test]
