@@ -219,6 +219,8 @@ export default function AccountsPage() {
   const [installConfirmOpen, setInstallConfirmOpen] = useState(false);
   /** 切换 CodeBuddy CLI 确认目标（null=关闭） */
   const [cliSwitchTarget, setCliSwitchTarget] = useState<AccountMeta | null>(null);
+  /** 切换 CodeBuddy IDE（国际版档位）确认目标（null=关闭）；国际版不接会话复制，仅用于防误触 */
+  const [intlIdeSwitchTarget, setIntlIdeSwitchTarget] = useState<AccountMeta | null>(null);
   /** 删除账号确认目标（null=关闭） */
   const [deleteTarget, setDeleteTarget] = useState<AccountMeta | null>(null);
   /** 当前档位下的账号：列表、计数、签到、积分等一律只作用于当前档位。 */
@@ -699,31 +701,38 @@ export default function AccountsPage() {
 
   async function onSwitchCodebuddyCnIde(account: AccountMeta) {
     if (codebuddyCnIdeSwitchingId !== null) return;
-    // 国际版 IDE（CodeBuddy.app）本轮不接入会话复制，保持一键切换。
+    // 国际版 IDE（CodeBuddy.app）本轮不接入会话复制：只做二次确认，避免误触直接重启 IDE。
     if (variantUsesIntlCodebuddyIde(variant)) {
-      setCodebuddyCnIdeSwitchingId(account.id);
-      const toastId = toast.loading("正在切换 CodeBuddy IDE…", {
-        description: "将注入凭证并重启 CodeBuddy IDE",
-      });
-      try {
-        const result = await api.switchCodebuddyIdeAccount(account.id, true);
-        await refreshCodebuddyCnIdeStatus();
-        toast.success("CodeBuddy IDE 已切换", {
-          id: toastId,
-          description: result.message || result.account,
-        });
-      } catch (error) {
-        toast.error("CodeBuddy IDE 切换失败", {
-          id: toastId,
-          description: api.asError(error),
-        });
-      } finally {
-        setCodebuddyCnIdeSwitchingId(null);
-      }
+      setIntlIdeSwitchTarget(account);
       return;
     }
     // 国内版：打开切换弹窗（关联会话 / 复制会话两个 tab），不勾选时行为与一键切换一致。
     setCodebuddyIdeSwitchAccount(account);
+  }
+
+  async function confirmSwitchIntlCodebuddyIde() {
+    const account = intlIdeSwitchTarget;
+    if (!account || codebuddyCnIdeSwitchingId !== null) return;
+    setIntlIdeSwitchTarget(null);
+    setCodebuddyCnIdeSwitchingId(account.id);
+    const toastId = toast.loading("正在切换 CodeBuddy IDE…", {
+      description: "将注入凭证并重启 CodeBuddy IDE",
+    });
+    try {
+      const result = await api.switchCodebuddyIdeAccount(account.id, true);
+      await refreshCodebuddyCnIdeStatus();
+      toast.success("CodeBuddy IDE 已切换", {
+        id: toastId,
+        description: result.message || result.account,
+      });
+    } catch (error) {
+      toast.error("CodeBuddy IDE 切换失败", {
+        id: toastId,
+        description: api.asError(error),
+      });
+    } finally {
+      setCodebuddyCnIdeSwitchingId(null);
+    }
   }
 
   async function onInstallCodebuddyCli() {
@@ -775,6 +784,9 @@ export default function AccountsPage() {
   const cliCurrentAccountId = codebuddyCli?.activeAccountId;
   const cliSwitchAccountLabel = cliSwitchTarget
     ? cliSwitchTarget.nickname || cliSwitchTarget.email || cliSwitchTarget.id
+    : "";
+  const intlIdeSwitchAccountLabel = intlIdeSwitchTarget
+    ? intlIdeSwitchTarget.nickname || intlIdeSwitchTarget.email || intlIdeSwitchTarget.id
     : "";
   const workbuddyCurrentName = current
     ? current.nickname || current.email || current.uid || "未知账号"
@@ -1234,6 +1246,27 @@ export default function AccountsPage() {
             </Button>
             <Button onClick={() => void confirmSwitchCodebuddyCli()}>
               关闭 CLI 并切换
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 切换 CodeBuddy IDE（国际版）确认：国际版不接会话复制，这里只做防误触 */}
+      <Dialog open={intlIdeSwitchTarget !== null} onOpenChange={(open) => !open && setIntlIdeSwitchTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>切换 CodeBuddy IDE</DialogTitle>
+            <DialogDescription>
+              将把 CodeBuddy IDE 账号切换为「{intlIdeSwitchAccountLabel}」。
+              确认后会关闭并重启 CodeBuddy IDE，正在进行的对话会中断。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIntlIdeSwitchTarget(null)}>
+              取消
+            </Button>
+            <Button onClick={() => void confirmSwitchIntlCodebuddyIde()}>
+              重启 IDE 并切换
             </Button>
           </DialogFooter>
         </DialogContent>
