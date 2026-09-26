@@ -210,7 +210,16 @@ pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value)
         // —— 否则 UI 每次自动 importLocal 都会把扫码凭据冲掉，签到/积分等
         // 需要明文 token 的功能随之失效。明文过期后才放行信封接管。
         if is_envelope(&collected, "access_token") && has_unexpired_plain_token(existing) {
-            return existing.clone();
+            if get_str(existing, "id").is_some() {
+                return existing.clone();
+            }
+            // 凭据保护短路时也修复缺失的本地 id，但不动任何 token 或展示字段。
+            let mut preserved = existing.clone();
+            preserved["id"] = get_str(&collected, "id")
+                .map(Value::String)
+                .unwrap_or_else(|| Value::String(uuid::Uuid::new_v4().to_string()));
+            accounts[first_index] = preserved.clone();
+            return preserved;
         }
         // 展示字段兜底：新采集为信封时保留已有记录的明文展示值。
         for key in ["nickname", "email", "enterpriseName"] {
@@ -221,8 +230,11 @@ pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value)
             }
         }
 
-        if let Some(existing_id) = existing.get("id").cloned() {
-            collected["id"] = existing_id;
+        if let Some(existing_id) = get_str(existing, "id") {
+            collected["id"] = Value::String(existing_id);
+        } else if get_str(&collected, "id").is_none() {
+            // 同 uid 的历史记录也可能缺 id；命中覆盖分支时同样维持账号库不变量。
+            collected["id"] = Value::String(uuid::Uuid::new_v4().to_string());
         }
         if get_str(&collected, "uid").is_none() {
             if let Some(existing_uid) = existing.get("uid").cloned() {
@@ -239,6 +251,10 @@ pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value)
         }
         accounts.insert(first_index.min(accounts.len()), collected.clone());
     } else {
+        // 追加分支同样保证入库记录带 id（账号库不允许无 id 记录）。
+        if get_str(&collected, "id").is_none() {
+            collected["id"] = Value::String(uuid::Uuid::new_v4().to_string());
+        }
         accounts.push(collected.clone());
     }
 
@@ -253,25 +269,60 @@ pub fn save_collected_account(collected: Value) -> std::io::Result<Value> {
     Ok(saved)
 }
 
-/// 按 id 覆盖写入账号库（不存在则追加）。对照 server.py `_upsert_account`。
+/// 按 id 覆盖；id 缺失或未命中时按 uid 回退覆盖，仍未命中则补 id 追加。
 pub fn upsert_account(updated: &Value) -> std::io::Result<()> {
     let mut accounts = load_accounts();
     upsert_account_in(&mut accounts, updated);
     save_accounts(&accounts)
 }
 
-/// 覆盖写入的内存实现：命中已有 id 时保留其档位，避免覆盖写入丢字段。
+/// 覆盖写入的内存实现：按 id 覆盖；id 缺失或未命中时回退按 uid 收敛到已有
+/// 记录；仍无归属才追加，且追加前补 id。
+///
+/// 无 id 但有 uid 的历史记录按 uid 覆盖，并在原记录上补 id；新追加记录也补 id。
+/// 两种身份都缺失的旧记录无法在此处安全关联到原行，导入入口会先生成 id。
 fn upsert_account_in(accounts: &mut Vec<Value>, updated: &Value) {
-    let id = updated.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    for a in accounts.iter_mut() {
-        if a.get("id").and_then(|v| v.as_str()) == Some(id) {
-            let mut next = updated.clone();
-            inherit_existing_variant(a, &mut next);
-            *a = next;
-            return;
+    let id = get_str(updated, "id");
+    let uid = get_str(updated, "uid");
+    let id_matched_index = id.as_deref().and_then(|id| {
+        accounts
+            .iter()
+            .position(|a| get_str(a, "id").as_deref() == Some(id))
+    });
+    let uid_matched_index = id_matched_index
+        .is_none()
+        .then(|| {
+            uid.as_deref().and_then(|uid| {
+                accounts
+                    .iter()
+                    .position(|a| get_str(a, "uid").as_deref() == Some(uid))
+            })
+        })
+        .flatten();
+    let matched_index = id_matched_index.or(uid_matched_index);
+
+    if let Some(index) = matched_index {
+        let mut next = updated.clone();
+        inherit_existing_variant(&accounts[index], &mut next);
+        // uid 回退时保留本地稳定 id，即使刷新对象携带了另一 id；历史脏数据
+        // 的空 id 不继承，优先保留刷新对象的有效 id，否则生成新 id。
+        if uid_matched_index.is_some() {
+            if let Some(existing_id) = get_str(&accounts[index], "id") {
+                next["id"] = Value::String(existing_id);
+            }
         }
+        if get_str(&next, "id").is_none() {
+            next["id"] = Value::String(uuid::Uuid::new_v4().to_string());
+        }
+        accounts[index] = next;
+        return;
     }
-    accounts.push(updated.clone());
+
+    let mut appended = updated.clone();
+    if get_str(&appended, "id").is_none() {
+        appended["id"] = Value::String(uuid::Uuid::new_v4().to_string());
+    }
+    accounts.push(appended);
 }
 
 /// WorkBuddy 5.6 加密信封凭据的可读错误：`access_token` 为信封形态时返回提示文案。
@@ -553,6 +604,28 @@ mod tests {
     }
 
     #[test]
+    fn protected_envelope_reimport_repairs_missing_local_id_without_changing_tokens() {
+        let mut accounts = vec![json!({
+            "uid": "uid-1",
+            "access_token": "plain-token",
+            "refresh_token": "plain-refresh",
+            "expiresAt": crate::modules::config::now_ms() + 86_400_000_i64,
+        })];
+        let collected = json!({
+            "uid": "uid-1",
+            "access_token": {"$wbEncrypted": 1, "envelope": "a"},
+            "refresh_token": {"$wbEncrypted": 1, "envelope": "r"},
+        });
+
+        let saved = upsert_collected_account(&mut accounts, collected);
+
+        assert!(get_str(&saved, "id").is_some());
+        assert_eq!(saved["access_token"], "plain-token");
+        assert_eq!(saved["refresh_token"], "plain-refresh");
+        assert_eq!(accounts[0]["id"], saved["id"]);
+    }
+
+    #[test]
     fn envelope_reimport_takes_over_after_plain_token_expired() {
         let mut accounts = vec![json!({
             "id": "a-1",
@@ -623,6 +696,139 @@ mod tests {
         );
         assert_eq!(accounts.len(), 2);
         assert_eq!(accounts[1]["variant"], "cn");
+    }
+
+    /// 回归 issue #111：无 id 记录刷新回写时按 uid 收敛，不得追加副本。
+    #[test]
+    fn upsert_without_id_falls_back_to_uid_and_keeps_store_size() {
+        let mut accounts = vec![json!({
+            "id": "local-id",
+            "uid": "uid-1",
+            "access_token": "old",
+        })];
+        let mut refreshed = accounts[0].clone();
+        refreshed.as_object_mut().unwrap().remove("id");
+        refreshed["access_token"] = json!("new");
+
+        upsert_account_in(&mut accounts, &refreshed);
+
+        assert_eq!(accounts.len(), 1, "缺 id 刷新不得追加副本");
+        assert_eq!(accounts[0]["id"], "local-id", "按 uid 命中时保留库中 id");
+        assert_eq!(accounts[0]["access_token"], "new");
+    }
+
+    #[test]
+    fn uid_fallback_keeps_local_id_when_updated_has_a_different_id() {
+        let mut accounts = vec![json!({
+            "id": "local-id",
+            "uid": "uid-1",
+            "access_token": "old",
+        })];
+
+        upsert_account_in(
+            &mut accounts,
+            &json!({
+                "id": "foreign-id",
+                "uid": "uid-1",
+                "access_token": "new",
+            }),
+        );
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0]["id"], "local-id");
+        assert_eq!(accounts[0]["access_token"], "new");
+    }
+
+    #[test]
+    fn uid_fallback_repairs_empty_local_id() {
+        let mut accounts = vec![json!({
+            "id": "  ",
+            "uid": "uid-1",
+            "access_token": "old",
+        })];
+
+        upsert_account_in(
+            &mut accounts,
+            &json!({
+                "id": "",
+                "uid": "uid-1",
+                "access_token": "new",
+            }),
+        );
+
+        assert_eq!(accounts.len(), 1);
+        assert!(get_str(&accounts[0], "id").is_some());
+        assert_eq!(accounts[0]["access_token"], "new");
+    }
+
+    #[test]
+    fn collected_uid_match_repairs_missing_local_id() {
+        let mut accounts = vec![json!({
+            "id": "",
+            "uid": "uid-1",
+            "access_token": "old",
+        })];
+
+        let saved = upsert_collected_account(
+            &mut accounts,
+            json!({"uid": "uid-1", "access_token": "new"}),
+        );
+
+        assert_eq!(accounts.len(), 1);
+        assert!(get_str(&saved, "id").is_some());
+        assert_eq!(accounts[0]["id"], saved["id"]);
+    }
+
+    /// 既无 id 也无 uid 的记录：首次追加时补 id，之后按 id 覆盖不追加。
+    #[test]
+    fn upsert_without_id_or_uid_appends_once_with_generated_id() {
+        let mut accounts: Vec<Value> = vec![];
+        upsert_account_in(&mut accounts, &json!({"access_token": "t1"}));
+
+        assert_eq!(accounts.len(), 1);
+        let id = accounts[0]["id"].as_str().unwrap_or_default().to_string();
+        assert!(!id.is_empty(), "追加时必须补 id");
+
+        let mut again = accounts[0].clone();
+        again["access_token"] = json!("t2");
+        upsert_account_in(&mut accounts, &again);
+
+        assert_eq!(accounts.len(), 1, "补 id 后必须按 id 覆盖");
+        assert_eq!(accounts[0]["access_token"], "t2");
+        assert_eq!(accounts[0]["id"], id, "覆盖不得改变 id");
+    }
+
+    /// 回归 issue #111 的增长曲线：模拟刷新回写循环，无 id 记录连续多轮
+    /// upsert 后账号库长度恒为 1，且首轮即自愈出 id。
+    #[test]
+    fn repeated_refresh_upsert_of_id_less_record_does_not_grow_store() {
+        let mut accounts = vec![json!({"uid": "uid-1", "access_token": "t0"})];
+        for round in 0..5 {
+            let mut refreshed = accounts[0].clone();
+            refreshed["access_token"] = json!(format!("t{round}"));
+            upsert_account_in(&mut accounts, &refreshed);
+        }
+
+        assert_eq!(accounts.len(), 1, "刷新循环不得复制无 id 记录");
+        assert!(
+            accounts[0]["id"]
+                .as_str()
+                .is_some_and(|id| !id.trim().is_empty()),
+            "首轮覆盖后必须自愈出 id"
+        );
+        assert_eq!(accounts[0]["access_token"], "t4");
+    }
+
+    /// 采集路径的追加分支同样保证入库记录带 id（纵深防御）。
+    #[test]
+    fn collected_account_without_identity_gets_generated_id() {
+        let mut accounts: Vec<Value> = vec![];
+        let saved = upsert_collected_account(&mut accounts, json!({"access_token": "t"}));
+
+        assert_eq!(accounts.len(), 1);
+        let id = saved["id"].as_str().unwrap_or_default();
+        assert!(!id.is_empty(), "采集追加分支必须补 id");
+        assert_eq!(accounts[0]["id"], saved["id"], "返回值与库中记录一致");
     }
 
     #[test]
