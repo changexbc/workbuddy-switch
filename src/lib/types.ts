@@ -695,7 +695,7 @@ export interface CodeBuddyCnIdeStatus {
    * 是否存在 IDE 登录态（`state.vscdb` 里有会话 secret 行）。
    *
    * 只读查询、不解密；查询失败或文件不存在时为 false。仅用于文案与入口判定，
-   * 不参与切换判定。国际版 IDE 状态不返回该字段（`undefined`）。
+   * 不参与切换判定。国内版与国际版 IDE 状态都返回该字段（旧后端可能缺省 `undefined`）。
    */
   loggedIn?: boolean;
   dataDir: string | null;

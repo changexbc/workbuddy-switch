@@ -25,14 +25,23 @@ import type {
   SessionSyncSelection,
   VscodeSession,
   VscodeSessionRef,
+  WbVariant,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { variantUsesIntlCodebuddyIde } from "@/lib/variant";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** 目标账号 */
   account: AccountMeta | null;
+  /**
+   * 当前档位：决定会话列表 / 关联预览 / 切换走哪条通道。
+   *
+   * 国内版（`CodeBuddy CN.app`）与国际版（`CodeBuddy.app`）共用同一套会话存储与后端语义，
+   * 因此组件只做这一处分流，两个 tab、摘要与空态保持一份。
+   */
+  variant: WbVariant;
   /** CodeBuddy IDE 状态（用于渲染空态与运行中提示）。 */
   ideStatus?: CodeBuddyCnIdeStatus | null;
   /** 切换完成后刷新列表 */
@@ -53,12 +62,14 @@ function tabCount(count: number) {
 /**
  * CodeBuddy IDE 会话切换弹窗：可勾选「当前 IDE 账号」的会话复制到目标账号。
  *
- * 与 VS Code 插件弹窗同形（关联会话 / 复制会话两个 tab），差异：
+ * 国内版与国际版共用本组件（差异只有三处 API 通道，按 `variant` 分流），与 VS Code 插件弹窗
+ * 同形（关联会话 / 复制会话两个 tab），差异：
  * - 切换固定走「关闭并重开 IDE」（`restart = true`），不提供自动关闭开关；
- * - 复制默认沿用会话 id，仅目标已有同 id 时改用新 id（后端决定，前端只提交引用）；
- * - 国际版 IDE（`CodeBuddy.app`）本轮不接入会话复制，不进本弹窗。
+ * - 复制默认沿用会话 id，仅目标已有同 id 时改用新 id（后端决定，前端只提交引用）。
  */
-export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, ideStatus, onDone }: Props) {
+export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, variant, ideStatus, onDone }: Props) {
+  /** 国际版档位：会话列表 / 关联预览 / 切换接口都走 `codebuddy-ide` 通道。 */
+  const intl = variantUsesIntlCodebuddyIde(variant);
   const [sessions, setSessions] = useState<VscodeSession[]>([]);
   const [sourceUid, setSourceUid] = useState<string | null>(null);
   /** IDE 数据根目录：`null` = 未找到（与「有目录但无会话」区分）；`undefined` = 后端未返回该字段。 */
@@ -88,8 +99,8 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, i
     setDataRoot(undefined);
     setError("");
     setLoadingSessions(true);
-    api
-      .listCodebuddyIdeSessions()
+    const fetchSessions = intl ? api.listCodebuddyIntlIdeSessions : api.listCodebuddyIdeSessions;
+    fetchSessions()
       .then((res) => {
         setSessions(res.sessions);
         setSourceUid(res.sourceUid);
@@ -101,7 +112,7 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, i
         setDataRoot(undefined);
       })
       .finally(() => setLoadingSessions(false));
-  }, [open, account]);
+  }, [open, account, intl]);
 
   const groups = useMemo(() => buildGroups(sessions), [sessions]);
   const sessionById = useMemo(() => {
@@ -155,12 +166,19 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, i
         : undefined;
 
       // IDE 切换固定「关闭 + 写入 + 重开」；勾选绑定预览凭据，执行前后端会重新校验。
-      const res = await api.switchCodebuddyCnIdeAccount(
-        account.id,
-        true,
-        refs,
-        syncSelections.length > 0 ? syncSelections : undefined,
-      );
+      const res = intl
+        ? await api.switchCodebuddyIdeAccount(
+            account.id,
+            true,
+            refs,
+            syncSelections.length > 0 ? syncSelections : undefined,
+          )
+        : await api.switchCodebuddyCnIdeAccount(
+            account.id,
+            true,
+            refs,
+            syncSelections.length > 0 ? syncSelections : undefined,
+          );
       const nickname = account.nickname || account.email || account.uid || "该账号";
       const copied = res.sessionCopy?.copied.length ?? 0;
       const errors = res.sessionCopy?.errors ?? [];
@@ -233,6 +251,7 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, i
   const overwriteCount = syncSelections.filter((item) => item.mode === "overwrite").length;
   /** 关联会话 tab 是否可用：区块不可用（能力判定不通过）时回落到仅复制会话。 */
   const linksAvailable = linksMeta?.available ?? true;
+  const running = ideStatus?.running === true;
   const summaryMain =
     copyCount > 0 && syncCount > 0
       ? `将复制 ${copyCount} 个、同步 ${syncCount} 个关联会话`
@@ -241,17 +260,22 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, i
         : syncCount > 0
           ? `将同步 ${syncCount} 个关联会话`
           : "本次仅切换账号";
+  // 国际版不再有独立确认框，不勾选时由底部摘要承担「将重启 IDE」的说明。
+  // 国内版文案保持原句，不在这里改。
   const summarySub =
     overwriteCount > 0
       ? `其中 ${overwriteCount} 个会替换目标账号的完整内容`
       : copyCount === 0 && syncCount === 0
-        ? "未选择复制或同步会话"
+        ? intl
+          ? running
+            ? "未选择复制或同步会话，确认后将关闭并重启 IDE"
+            : "未选择复制或同步会话，确认后将打开 IDE"
+          : "未选择复制或同步会话"
         : copyCount === 0
           ? "未选择复制会话"
           : syncCount === 0
             ? "未选择同步会话"
             : null;
-  const running = ideStatus?.running === true;
   /** IDE 未登录（`loggedIn === false`）：按新登录写入，仅影响提示文案。 */
   const notLoggedIn = ideStatus?.loggedIn === false;
   /** 未登录时的追加说明（tooltip 第二段）。 */
@@ -397,7 +421,12 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, i
                   account={account}
                   loggedIn={!notLoggedIn}
                   disabled={busy}
-                  fetchPreview={api.codebuddyIdeSessionLinksPreview}
+                  // 两个 IDE 共用展示件，只有预览通道按档位分流（稳定引用：模块级函数）。
+                  fetchPreview={
+                    intl
+                      ? api.codebuddyIntlIdeSessionLinksPreview
+                      : api.codebuddyIdeSessionLinksPreview
+                  }
                   loggedOutHint="未检测到 CodeBuddy IDE 当前登录账号，请先在 CodeBuddy IDE 中登录后再切换。"
                   onChange={(state) => {
                     setSyncSelections(state.selections);
