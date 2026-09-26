@@ -14,6 +14,7 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyMark } from "@/components/product-marks";
+import type { ToolId } from "@/lib/supported-tools";
 import { cn } from "@/lib/utils";
 import { creditResourceName } from "@/lib/credit-package-names";
 import { demoModeEnabled } from "@/lib/demo-mode";
@@ -335,6 +336,11 @@ interface Props {
   /** 当前卡片是否为正在切换的目标账号。 */
   jetbrainsLoading?: boolean;
   onSwitchJetbrains?: (a: AccountMeta) => void;
+  /**
+   * 支持工具开关（设置页「支持工具」）：关闭的端不渲染入口（按钮与激活徽标）。
+   * 缺省 / 缺失键视为开启，与 `src/lib/supported-tools.ts` 的默认值一致。
+   */
+  enabledTools?: Partial<Record<ToolId, boolean>>;
   featuresDisabled?: boolean;
   /** 紧凑模式：头部缩成一条、按钮图标化、无 footer */
   compact?: boolean;
@@ -423,7 +429,9 @@ function CreditResourceRow({ resource, compact, placeholderLabel }: { resource?:
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch, todayCheckedIn, autoCheckinAllowed, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, featuresDisabled = true, compact = false }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch, todayCheckedIn, autoCheckinAllowed, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, enabledTools, featuresDisabled = true, compact = false }: Props) {
+  /** 支持工具开关：关闭的端整块不渲染（缺省视为开启）。 */
+  const toolEnabled = (id: ToolId) => enabledTools?.[id] !== false;
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   /**
@@ -584,7 +592,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
             <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5" title={name}>{name}</h3>
             <div className="hidden shrink-0 items-center gap-1 min-[420px]:flex">{statusChips}</div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
-              {workbuddyActive ? (
+              {toolEnabled("workbuddy") && (workbuddyActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
@@ -611,8 +619,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">设为 WorkBuddy 当前账号（会重启 WorkBuddy）</TooltipContent>
                 </Tooltip>
-              )}
-              {codebuddyCnIdeActive ? (
+              ))}
+              {toolEnabled("codebuddyIde") && (codebuddyCnIdeActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
@@ -633,8 +641,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy IDE（会重启 IDE）" : "未检测到 CodeBuddy IDE"}</TooltipContent>
                 </Tooltip>
-              )}
-              {vscodeExtActive ? (
+              ))}
+              {toolEnabled("vscodeExt") && (vscodeExtActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
@@ -661,8 +669,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">{vscodeExtTooltip(vscodeExtInstalled, vscodeExtExtensionInstalled)}</TooltipContent>
                 </Tooltip>
-              )}
-              {jetbrainsActive ? (
+              ))}
+              {toolEnabled("jetbrains") && (jetbrainsActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
@@ -689,8 +697,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">{jetbrainsTooltip(jetbrainsInstalled, jetbrainsPluginInstalled)}</TooltipContent>
                 </Tooltip>
-              )}
-              {codebuddyCliActive ? (
+              ))}
+              {toolEnabled("codebuddyCli") && (codebuddyCliActive ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="relative inline-flex size-7 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
@@ -711,7 +719,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
                   </TooltipTrigger>
                   <TooltipContent side="top">{codebuddyCliConfigured ? "设为 CodeBuddy CLI 当前账号" : "请先接入 CodeBuddy CLI"}</TooltipContent>
                 </Tooltip>
-              )}
+              ))}
             </div>
           </div>
         ) : (
@@ -790,7 +798,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
 
       {!compact && (
         <footer className="flex flex-wrap items-center gap-2.5 border-t px-5 py-2.5">
-          {workbuddyActive ? <ProductCurrentState product="workbuddy" compact /> : demoModeEnabled ? (
+          {toolEnabled("workbuddy") && (workbuddyActive ? <ProductCurrentState product="workbuddy" compact /> : demoModeEnabled ? (
             <DemoAction>
               <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="设为 WorkBuddy 当前账号">
                 <WorkBuddyMark size={18} /><span>设为当前</span>
@@ -805,8 +813,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               </TooltipTrigger>
               <TooltipContent side="top">设为 WorkBuddy 当前账号（会重启 WorkBuddy）</TooltipContent>
             </Tooltip>
-          )}
-          {codebuddyCnIdeActive ? <ProductCurrentState product="codebuddy-cn" compact /> : (
+          ))}
+          {toolEnabled("codebuddyIde") && (codebuddyCnIdeActive ? <ProductCurrentState product="codebuddy-cn" compact /> : (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy} onClick={() => onSwitchCodebuddyCnIde?.(account)} aria-label={codebuddyCnIdeLoading ? "正在切换 CodeBuddy IDE" : "切换到 CodeBuddy IDE"} aria-busy={codebuddyCnIdeLoading}>
@@ -815,8 +823,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               </TooltipTrigger>
               <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy IDE（会重启 IDE）" : "未检测到 CodeBuddy IDE"}</TooltipContent>
             </Tooltip>
-          )}
-          {vscodeExtActive ? <ProductCurrentState product="vscode-ext" compact /> : demoModeEnabled ? (
+          ))}
+          {toolEnabled("vscodeExt") && (vscodeExtActive ? <ProductCurrentState product="vscode-ext" compact /> : demoModeEnabled ? (
             <DemoAction>
               <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="切换到 VS Code CodeBuddy 插件（可复制会话）">
                 <VscodeExtMark size={18} /><span>VS Code</span>
@@ -831,8 +839,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               </TooltipTrigger>
               <TooltipContent side="top">{vscodeExtTooltip(vscodeExtInstalled, vscodeExtExtensionInstalled)}</TooltipContent>
             </Tooltip>
-          )}
-          {jetbrainsActive ? <ProductCurrentState product="jetbrains" compact /> : demoModeEnabled ? (
+          ))}
+          {toolEnabled("jetbrains") && (jetbrainsActive ? <ProductCurrentState product="jetbrains" compact /> : demoModeEnabled ? (
             <DemoAction>
               <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="切换到 JetBrains IDE CodeBuddy 插件">
                 <JetbrainsMark size={18} /><span>JetBrains</span>
@@ -847,8 +855,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               </TooltipTrigger>
               <TooltipContent side="top">{jetbrainsTooltip(jetbrainsInstalled, jetbrainsPluginInstalled)}</TooltipContent>
             </Tooltip>
-          )}
-          {codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : (
+          ))}
+          {toolEnabled("codebuddyCli") && (codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCliConfigured || !onSwitchCodebuddyCli || codebuddyCliBusy} onClick={() => onSwitchCodebuddyCli?.(account)} aria-label={codebuddyCliLoading ? "正在切换 CodeBuddy CLI 当前账号" : "设为 CodeBuddy CLI 当前账号"} aria-busy={codebuddyCliLoading}>
@@ -857,7 +865,7 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onSwitch,
               </TooltipTrigger>
               <TooltipContent side="top">{codebuddyCliConfigured ? "设为 CodeBuddy CLI 当前账号" : "请先接入 CodeBuddy CLI"}</TooltipContent>
             </Tooltip>
-          )}
+          ))}
         </footer>
       )}
       </article>
