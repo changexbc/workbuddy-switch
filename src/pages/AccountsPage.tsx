@@ -15,11 +15,13 @@ import {
 } from "lucide-react";
 
 import { AccountCard } from "@/components/account-card";
+import { JetbrainsSwitchDialog } from "@/components/jetbrains-switch-dialog";
 import { DemoAction } from "@/components/demo-action";
 import {
   CodeBuddyAiIdeMark,
   CodeBuddyCnIdeMark,
   CodeBuddyMark,
+  JetbrainsMark,
   VscodeExtMark,
   WorkBuddyAiMark,
   WorkBuddyMark,
@@ -56,7 +58,8 @@ import {
   variantSupportsTravel,
   variantUsesIntlCodebuddyIde,
 } from "@/lib/variant";
-import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, RateLimitEntry, TravelConfig, TravelStatus, VscodeExtStatus } from "@/lib/types";
+import { useSupportedTools } from "@/lib/supported-tools";
+import type { AccountMeta, AppStatus, CheckinConfig, CodeBuddyCliStatus, CodeBuddyCnIdeStatus, CreditExpiry, JetbrainsStatus, RateLimitEntry, TravelConfig, TravelStatus, VscodeExtStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -203,6 +206,9 @@ export default function AccountsPage() {
   const [vscodeExt, setVscodeExt] = useState<VscodeExtStatus | null>(null);
   /** VS Code 扩展切换弹窗目标（null=关闭）；切换与可选会话复制在弹窗内完成。 */
   const [vscodeSwitchAccount, setVscodeSwitchAccount] = useState<AccountMeta | null>(null);
+  const [jetbrains, setJetbrains] = useState<JetbrainsStatus | null>(null);
+  /** JetBrains 切换弹窗目标（null=关闭）；切换与目标 IDE 选择在弹窗内完成。 */
+  const [jetbrainsSwitchTarget, setJetbrainsSwitchTarget] = useState<AccountMeta | null>(null);
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
   /** 刷新按钮触发的批量签到进行中 */
   const [checkinAllRunning, setCheckinAllRunning] = useState(false);
@@ -244,6 +250,12 @@ export default function AccountsPage() {
       return true;
     }
   });
+
+  /**
+   * 支持工具开关（设置页）：关闭的端不渲染入口、不轮询状态。
+   * 缺省 = 现有四端开、JetBrains 关（与 `src/lib/supported-tools.ts` 的默认值一致）。
+   */
+  const enabledTools = useSupportedTools();
 
   function toggleCompact() {
     setCompact((value) => {
@@ -324,36 +336,57 @@ export default function AccountsPage() {
     }
   }
 
+  async function refreshJetbrainsStatus() {
+    try {
+      setJetbrains(await api.getJetbrainsStatus());
+    } catch {
+      setJetbrains(null);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
-    void refreshCodebuddyCliStatus();
+    // 支持工具关闭的端：既不探测也不轮询（与入口隐藏保持一致，省掉无谓请求）。
+    if (enabledTools.codebuddyCli) void refreshCodebuddyCliStatus();
     void (async () => {
       if (!api.isDemoMode()) {
-        try {
-          // 国际版探测 CodeBuddy.app 钥匙串；国内版探测 CodeBuddy CN。不要交叉读。
-          if (variantUsesIntlCodebuddyIde(variant)) {
-            await api.detectCodebuddyIdeAccount();
-          } else {
-            await api.detectCodebuddyCnIdeAccount();
+        if (enabledTools.codebuddyIde) {
+          try {
+            // 国际版探测 CodeBuddy.app 钥匙串；国内版探测 CodeBuddy CN。不要交叉读。
+            if (variantUsesIntlCodebuddyIde(variant)) {
+              await api.detectCodebuddyIdeAccount();
+            } else {
+              await api.detectCodebuddyCnIdeAccount();
+            }
+          } catch {
+            /* 未登录或钥匙串拒绝时静默，下面仍拉安装/运行状态 */
           }
-        } catch {
-          /* 未登录或钥匙串拒绝时静默，下面仍拉安装/运行状态 */
         }
-        try {
-          await api.detectVscodeExtAccount();
-        } catch {
-          /* VS Code 未登录或 Safe Storage 不可用时静默 */
+        if (enabledTools.vscodeExt) {
+          try {
+            await api.detectVscodeExtAccount();
+          } catch {
+            /* VS Code 未登录或 Safe Storage 不可用时静默 */
+          }
+        }
+        if (enabledTools.jetbrains) {
+          try {
+            await api.detectJetbrainsAccount();
+          } catch {
+            /* JetBrains 插件未登录时静默 */
+          }
         }
       }
       if (!cancelled) {
-        await refreshCodebuddyCnIdeStatus();
-        await refreshVscodeExtStatus();
+        if (enabledTools.codebuddyIde) await refreshCodebuddyCnIdeStatus();
+        if (enabledTools.vscodeExt) await refreshVscodeExtStatus();
+        if (enabledTools.jetbrains) await refreshJetbrainsStatus();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [accounts.length, variant]);
+  }, [accounts.length, variant, enabledTools]);
 
   // 配置就绪后查询未关闭自动签到的账号；国际版没有签到接口，不查询状态。
   useEffect(() => {
@@ -750,6 +783,10 @@ export default function AccountsPage() {
   const vscodeExtCurrentName = vscodeExt?.installed
     ? vscodeExt.activeAccountName || "未检测到"
     : "未接入";
+  const jetbrainsCurrentAccountId = jetbrains?.activeAccountId;
+  const jetbrainsCurrentName = jetbrains?.installed
+    ? jetbrains.activeAccountName || "未检测到"
+    : "未接入";
   const codebuddyUsesSettingsEnv = codebuddyCli?.authMode === "settings-env";
   return (
     <div className="mx-auto w-full max-w-[1180px] px-6 py-8 sm:px-8 sm:py-9">
@@ -773,6 +810,7 @@ export default function AccountsPage() {
           </div>
           <div className="flex shrink-0 items-center gap-4 pt-1">
             <div className="flex items-center gap-2.5">
+{enabledTools.workbuddy && (
               <span className="group relative inline-flex cursor-default">
                 <span
                   className={
@@ -787,6 +825,8 @@ export default function AccountsPage() {
                   {appName}：{status?.running ? "运行中" : "未运行"} · 当前账号：{workbuddyCurrentName}
                 </span>
               </span>
+            )}
+{enabledTools.codebuddyIde && (
               <span className="group relative inline-flex cursor-default">
                 <span
                   className={
@@ -805,6 +845,8 @@ export default function AccountsPage() {
                   {variantCodebuddyIdeName(variant)}：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
                 </span>
               </span>
+            )}
+{enabledTools.vscodeExt && (
               <span className="group relative inline-flex cursor-default">
                 <span
                   className={
@@ -819,6 +861,24 @@ export default function AccountsPage() {
                   VS Code CodeBuddy 插件：{!vscodeExt?.installed ? "未检测到 VS Code" : !vscodeExt.extensionInstalled ? "未安装插件" : vscodeExt.running ? "运行中" : "已接入"} · 当前账号：{vscodeExtCurrentName}
                 </span>
               </span>
+            )}
+{enabledTools.jetbrains && (
+              <span className="group relative inline-flex cursor-default">
+                <span
+                  className={
+                    jetbrains?.installed && jetbrains?.pluginInstalled
+                      ? "inline-flex rounded-[22%] bg-primary p-[2px] shadow-sm shadow-primary/40"
+                      : "inline-flex rounded-[22%] bg-muted-foreground/30 p-[2px]"
+                  }
+                >
+                  <JetbrainsMark size={28} />
+                </span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
+                  JetBrains IDE 插件：{!jetbrains?.installed ? "未检测到 JetBrains IDE" : !jetbrains.pluginInstalled ? "未安装插件" : jetbrains.running ? "运行中" : "已接入"} · 当前账号：{jetbrainsCurrentName}
+                </span>
+              </span>
+            )}
+{enabledTools.codebuddyCli && (
               <span className="group relative inline-flex cursor-default">
                 <span
                   className={
@@ -833,6 +893,7 @@ export default function AccountsPage() {
                   CodeBuddy CLI：{codebuddyCli?.migrationRequired ? "需升级" : codebuddyCli?.configured ? "已接入" : "未接入"} · 当前账号：{codebuddyCurrentName}
                 </span>
               </span>
+            )}
             </div>
           </div>
         </div>
@@ -1021,23 +1082,30 @@ export default function AccountsPage() {
                 creditLoading={creditLoadingMap[a.id]}
                 creditUpdatedAt={creditUpdatedAtMap[a.id]}
                 creditPriority={a.id === priorityAccountId}
-                workbuddyActive={isWorkbuddyCurrent(a, current)}
+                workbuddyActive={enabledTools.workbuddy && isWorkbuddyCurrent(a, current)}
                 codebuddyCliConfigured={codebuddyCli?.configured && !codebuddyCli.migrationRequired && !codebuddyCli.syncPending}
-                codebuddyCliActive={a.id === cliCurrentAccountId}
+                codebuddyCliActive={enabledTools.codebuddyCli && a.id === cliCurrentAccountId}
                 codebuddyCliBusy={codebuddyCliSwitchingId !== null}
                 onSwitchCodebuddyCli={onSwitchCodebuddyCli}
                 codebuddyCliLoading={codebuddyCliSwitchingId === a.id}
                 codebuddyCnIdeAvailable={Boolean(codebuddyCnIde?.installed)}
-                codebuddyCnIdeActive={a.id === cnIdeCurrentAccountId}
+                codebuddyCnIdeActive={enabledTools.codebuddyIde && a.id === cnIdeCurrentAccountId}
                 codebuddyCnIdeBusy={codebuddyCnIdeSwitchingId !== null}
                 codebuddyCnIdeLoading={codebuddyCnIdeSwitchingId === a.id}
                 onSwitchCodebuddyCnIde={onSwitchCodebuddyCnIde}
                 vscodeExtInstalled={Boolean(vscodeExt?.installed)}
                 vscodeExtExtensionInstalled={Boolean(vscodeExt?.extensionInstalled)}
                 vscodeExtAvailable={Boolean(vscodeExt?.installed && vscodeExt?.extensionInstalled)}
-                vscodeExtActive={a.id === vscodeExtCurrentAccountId}
+                vscodeExtActive={enabledTools.vscodeExt && a.id === vscodeExtCurrentAccountId}
                 vscodeExtBusy={vscodeSwitchAccount !== null}
                 onSwitchVscodeExt={setVscodeSwitchAccount}
+                jetbrainsInstalled={Boolean(jetbrains?.installed)}
+                jetbrainsPluginInstalled={Boolean(jetbrains?.pluginInstalled)}
+                jetbrainsAvailable={Boolean(jetbrains?.installed && jetbrains?.pluginInstalled)}
+                jetbrainsActive={enabledTools.jetbrains && a.id === jetbrainsCurrentAccountId}
+                jetbrainsBusy={jetbrainsSwitchTarget !== null}
+                onSwitchJetbrains={setJetbrainsSwitchTarget}
+                enabledTools={enabledTools}
                 featuresDisabled={false}
               />
             ))}
@@ -1079,6 +1147,17 @@ export default function AccountsPage() {
         vscodeExtStatus={vscodeExt}
         onDone={() => {
           void refreshVscodeExtStatus();
+        }}
+      />
+      <JetbrainsSwitchDialog
+        open={jetbrainsSwitchTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setJetbrainsSwitchTarget(null);
+        }}
+        account={jetbrainsSwitchTarget}
+        jetbrainsStatus={jetbrains}
+        onDone={() => {
+          void refreshJetbrainsStatus();
         }}
       />
 

@@ -9,6 +9,7 @@ pub mod credit_usage;
 pub mod credits;
 pub mod error_log;
 pub mod export_import;
+pub mod jetbrains;
 pub mod limits;
 #[cfg(target_os = "linux")]
 pub mod linux_keyring;

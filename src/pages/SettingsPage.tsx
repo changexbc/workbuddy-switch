@@ -33,6 +33,7 @@ import { TimePicker } from "@/components/ui/time-picker";
 import * as api from "@/lib/api";
 import { canPersistErrorLog } from "@/lib/error-report";
 import { getThemePreference, setThemePreference, type ThemePreference } from "@/lib/theme";
+import { SUPPORTED_TOOLS, setToolEnabled, useSupportedTools } from "@/lib/supported-tools";
 import type {
   AccountMeta,
   AppNotification,
@@ -1835,6 +1836,40 @@ function AppearanceCard() {
   );
 }
 
+/**
+ * 支持工具：控制各客户端入口是否在界面上出现。
+ *
+ * 关闭只隐藏入口（账号卡片按钮、页顶状态徽标）并跳过该端的状态轮询，
+ * 不动账号库、不影响其它工具，重新打开即恢复。JetBrains 端默认关闭
+ * （新增端先灰度），打开后才出现对应入口。
+ */
+function SupportedToolsCard() {
+  const enabled = useSupportedTools();
+
+  return (
+    <SettingsGroup id="settings-tools" title="支持工具">
+      <CardContent className="space-y-0 p-0">
+        {SUPPORTED_TOOLS.map((tool, index) => (
+          <SettingsFieldRow
+            key={tool.id}
+            className={index === SUPPORTED_TOOLS.length - 1 ? "border-b-0" : undefined}
+            label={tool.label}
+            description={tool.description}
+            htmlFor={`tools-${tool.id}`}
+          >
+            <Switch
+              id={`tools-${tool.id}`}
+              checked={enabled[tool.id]}
+              onCheckedChange={(on) => setToolEnabled(tool.id, on)}
+              aria-label={tool.label}
+            />
+          </SettingsFieldRow>
+        ))}
+      </CardContent>
+    </SettingsGroup>
+  );
+}
+
 /** 限额监听：总开关 + hook 接入状态（CLI / WorkBuddy 实时上报，IDE 仍走日志扫描）。 */
 function RateLimitCard() {
   const [config, setConfig] = useState<RateLimitConfig | null>(null);
@@ -2039,6 +2074,7 @@ export default function SettingsPage() {
 
       <div className="min-w-0 space-y-12">
         <AppearanceCard />
+        <SupportedToolsCard />
         <PermissionCheckCard />
         {api.isDemoMode() ? null : <AutoCheckinCard />}
         <AutoRotateCard />

@@ -44,9 +44,11 @@ xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
 | CodeBuddy CLI | 与 WorkBuddy 复用同一账号库，默认账号独立；切换后立即生效，无需重启 CLI |
 | CodeBuddy IDE | 支持切换 CodeBuddy IDE 桌面客户端账号，与 CodeBuddy CLI 相互独立 |
 | VS Code CodeBuddy 插件 | 支持切换 VS Code 内的 CodeBuddy 插件账号；VS Code 运行时可自动关闭并在写入后重新打开 |
+| JetBrains IDE 插件 | 支持切换 IntelliJ IDEA / PyCharm 内的 CodeBuddy 插件账号，一次切换写入所有装了插件的 IDE；IDE 运行时可自动关闭并在写入后重新打开 |
 | 插件会话复制 | 切换插件账号时，可把当前插件账号的会话复制给目标账号（加法，源账号不变） |
 | 自动轮换 | 后台把积分最紧迫的账号设为 CodeBuddy CLI 后续启动账号；检测到 CLI 会话运行时会跳过 |
 | 自动更新 | 从 GitHub Releases 检查新版本，整包更新经签名校验 |
+| 支持工具开关 | 设置页可按客户端逐个开启 / 关闭支持的工具；关闭后该端入口与状态轮询一并隐藏，不影响账号库与其它端。JetBrains 端默认关闭 |
 | 权限检测 | macOS 授权引导（App 管理 / 完全磁盘访问拖拽授权 + 自动检测） |
 
 ## 使用

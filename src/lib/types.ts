@@ -755,6 +755,48 @@ export interface VscodeExtSwitchResult {
   sessionSync?: VscodeSessionSyncReport;
 }
 
+/** JetBrains IDE 的一条配置目录状态（IDEA / PyCharm 各自独立）。 */
+export interface JetbrainsTargetStatus {
+  /** 配置目录名（如 "PyCharm2026.2"）。 */
+  configDir: string;
+  /** 是否安装了 CodeBuddy 插件（plugins/coding-copilot* 目录存在）。 */
+  pluginInstalled: boolean;
+  running: boolean;
+  /** 是否存在插件登录态（secret-storage.xml 里有会话 secret）。 */
+  loggedIn: boolean;
+  secretPath: string;
+}
+
+export interface JetbrainsStatus {
+  /** 是否存在任一受支持的 JetBrains 配置目录。 */
+  installed: boolean;
+  /** 是否至少一个配置目录安装了 CodeBuddy 插件。 */
+  pluginInstalled: boolean;
+  /** 是否有「装了插件」的 IDE 正在运行。 */
+  running: boolean;
+  /** 是否任一装了插件的目标存在登录态。 */
+  loggedIn: boolean;
+  configRoot: string | null;
+  targets: JetbrainsTargetStatus[];
+  activeAccountId: string | null;
+  activeAccountName: string | null;
+  detectedFrom?: string;
+  statePath?: string;
+}
+
+export interface JetbrainsSwitchResult {
+  ok: boolean;
+  account: string;
+  accountId: string;
+  /** 本次写入的配置目录名列表（一次切换覆盖所有装了插件的 IDE）。 */
+  written?: string[];
+  /** 本次是否真的执行了「关闭并重新打开 IDE」。 */
+  restarted?: boolean;
+  /** 本次切换是否由 wb-switch 关闭了 IDE。 */
+  closedByUs?: boolean;
+  message?: string;
+}
+
 /** VS Code 扩展的一条可复制会话。 */
 export interface VscodeSession {
   /** 会话 id（32 位小写 hex）。 */

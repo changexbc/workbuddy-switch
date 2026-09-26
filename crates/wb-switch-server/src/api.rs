@@ -19,9 +19,9 @@ use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide, config,
-    credit_usage, credits, export_import, limits, notifications, oauth, process, rate_limit_events,
-    rate_limit_hook, refresh, rotate, session, switch, token_stats, travel, update,
-    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
+    credit_usage, credits, export_import, jetbrains, limits, notifications, oauth, process,
+    rate_limit_events, rate_limit_hook, refresh, rotate, session, switch, token_stats, travel,
+    update, variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
@@ -81,6 +81,9 @@ pub fn router() -> Router {
         .route("/api/codebuddy-ide/status", get(api_codebuddy_ide_status))
         .route("/api/codebuddy-ide/switch", post(api_codebuddy_ide_switch))
         .route("/api/codebuddy-ide/detect", post(api_codebuddy_ide_detect))
+        .route("/api/jetbrains/status", get(api_jetbrains_status))
+        .route("/api/jetbrains/switch", post(api_jetbrains_switch))
+        .route("/api/jetbrains/detect", post(api_jetbrains_detect))
         .route("/api/vscode-ext/status", get(api_vscode_ext_status))
         .route("/api/vscode-ext/sessions", get(api_vscode_ext_sessions))
         .route("/api/vscode-ext/switch", post(api_vscode_ext_switch))
@@ -398,6 +401,44 @@ async fn api_vscode_ext_detect() -> Response {
 
 async fn api_codebuddy_ide_detect() -> Response {
     match codebuddy_ide::detect_current_account() {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_jetbrains_status() -> Response {
+    json_ok(jetbrains::status())
+}
+
+async fn api_jetbrains_switch(Json(body): Json<Value>) -> Response {
+    let account_id = body
+        .get("accountId")
+        .or_else(|| body.get("account_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let restart = body
+        .get("restart")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    // 可选：目标配置目录名列表（如 ["PyCharm2026.2"]）。缺省 / 空数组 = 全部装了插件的 IDE。
+    let config_dirs: Option<Vec<String>> = body
+        .get("configDirs")
+        .and_then(|v| v.as_array())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .filter(|list| !list.is_empty());
+    match jetbrains::switch_account(account_id, restart, config_dirs.as_deref()) {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_jetbrains_detect() -> Response {
+    match jetbrains::detect_current_account() {
         Ok(v) => json_ok(v),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
     }
