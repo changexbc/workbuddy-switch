@@ -1,8 +1,13 @@
 // WorkBuddy is event-driven via Claude Code-compatible command hooks.
 // Permissions stay in WorkBuddy's native GUI; this adapter never gates them.
+// Sandbox approvals do not emit any hook event (see README known limits), so a
+// best-effort watcher below detects them from WorkBuddy's own run logs.
 use super::*;
 use crate::{content, merge, question, question_tool, questions};
+use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub const WORKBUDDY_HOOK_EVENTS: [&str; 10] = [
     "SessionStart",
@@ -16,6 +21,103 @@ pub const WORKBUDDY_HOOK_EVENTS: [&str; 10] = [
     "Notification",
     "PreCompact",
 ];
+
+// ---- 沙箱审批日志观察 ----
+// 沙箱类审批（敏感凭证/沙箱写/HTTP 拦截/批量删除）不发送任何 hook 事件，
+// 但会写进 WorkBuddy 的会话级运行日志。这里做增量扫描，把弹框/处理事件
+// 转成 hub 事件（wait / resolve），使悬浮窗显示「待确认」。
+// 只匹配审批行，其余内容读入即弃；不读取会话文件、数据库或 transcript。
+
+// 扫描节流：WorkBuddy 会话日志本身有 10–25 秒的应用层缓冲（实测），
+// 端到端延迟由它支配；本侧节流放宽到 10 秒以降低目录扫描开销。
+const LOG_SCAN_INTERVAL_MS: i64 = 10_000;
+const LOG_ACTIVE_WINDOW_MS: i64 = 10 * 60_000;
+
+#[derive(Debug, PartialEq)]
+pub enum ApprovalEvent {
+    Request {
+        tool: String,
+        call_id: String,
+        session: String,
+    },
+    Settled {
+        call_id: String,
+    },
+}
+
+/// 解析一行 WorkBuddy 运行日志；不是审批行则返回 None（纯函数，便于测试）。
+/// 超时行（Sandbox approval timed out）不解析：超时后工具以失败结束，
+/// 真实的 PostToolUseFailure hook 会兜底清理 pending。
+pub fn parse_approval_line(line: &str) -> Option<ApprovalEvent> {
+    if let Some(rest) = line
+        .split_once("[enqueueSandboxApproval] Enqueued sandbox approval: ")
+        .map(|(_, rest)| rest)
+    {
+        let tool = field(rest, "tool=")?;
+        let call_id = field(rest, ", id=")?;
+        let session = field(rest, ", session=")?;
+        if tool.is_empty() || call_id.is_empty() || session.is_empty() {
+            return None;
+        }
+        return Some(ApprovalEvent::Request {
+            tool,
+            call_id,
+            session,
+        });
+    }
+    for marker in [
+        "[Approve] User approved tool: ",
+        "[Reject] User rejected tool: ",
+    ] {
+        if let Some(rest) = line.split_once(marker).map(|(_, rest)| rest) {
+            let (tool, tail) = rest.split_once(", id: ")?;
+            let call_id = tail.split(',').next().unwrap_or("").trim().to_owned();
+            if tool.trim().is_empty() || call_id.is_empty() {
+                return None;
+            }
+            return Some(ApprovalEvent::Settled { call_id });
+        }
+    }
+    None
+}
+
+fn field(rest: &str, key: &str) -> Option<String> {
+    Some(rest.split_once(key)?.1.split(',').next()?.trim().to_owned())
+}
+
+/// 增量扫描状态：文件 offset、审批 callId→会话 映射、节流与首次扫描标记。
+#[derive(Default)]
+pub struct LogWatch {
+    pub offsets: HashMap<PathBuf, u64>,
+    pub call_sessions: HashMap<String, String>,
+    pub primed: bool,
+    pub last_scan: i64,
+}
+
+fn collect_log_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Ok(inner) = std::fs::read_dir(&path) {
+                for entry in inner.flatten() {
+                    let file = entry.path();
+                    if is_log_file(&file) {
+                        out.push(file);
+                    }
+                }
+            }
+        } else if is_log_file(&path) {
+            out.push(path);
+        }
+    }
+}
+
+fn is_log_file(path: &Path) -> bool {
+    path.is_file() && path.extension().map(|e| e == "log").unwrap_or(false)
+}
 
 fn wait_text(p: &Value) -> String {
     let message = content(&p["message"]);
@@ -384,6 +486,7 @@ impl Collector {
     }
 
     pub fn poll_workbuddy(&mut self) -> Result<(), String> {
+        self.poll_workbuddy_log_watch();
         if self.workbuddy_presence.observe() == crate::host_process::Presence::Gone {
             crate::host_process::end_host_sessions(&mut self.hub, "workbuddy", None);
             self.hub.health(
@@ -399,9 +502,181 @@ impl Collector {
             if self.workbuddy_hook_count == 0 {
                 "等待新的 WorkBuddy Hook；不恢复历史会话"
             } else {
-                "已连接 WorkBuddy Hook（不读取会话文件）"
+                "已连接 WorkBuddy Hook 与审批日志（不读取会话文件）"
             },
         );
         Ok(())
+    }
+
+    pub fn poll_workbuddy_log_watch(&mut self) {
+        if self.settings["sources"]["workbuddy"]["logWatch"] == false {
+            return;
+        }
+        // 审批只会发生在回合进行中的会话上；没有活跃会话时不必扫日志
+        // （此时候选注入目标也不存在，扫了也无处可用）。
+        let active = self.hub.sessions.values().any(|s| {
+            s["source"] == "workbuddy"
+                && matches!(text(&s["status"]).as_str(), "running" | "wait")
+        });
+        if !active {
+            return;
+        }
+        let time = now();
+        if self.workbuddy_log_watch.primed
+            && time - self.workbuddy_log_watch.last_scan < LOG_SCAN_INTERVAL_MS
+        {
+            return;
+        }
+        self.workbuddy_log_watch.last_scan = time;
+        let mut files = Vec::new();
+        for root in [
+            self.home.join(".workbuddy-ai").join("logs"),
+            self.home.join(".workbuddy").join("logs"),
+        ] {
+            collect_log_files(&root, &mut files);
+        }
+        let prime_only = !self.workbuddy_log_watch.primed;
+        for path in files {
+            self.consume_approval_log(&path, time, prime_only);
+        }
+        self.workbuddy_log_watch.primed = true;
+    }
+
+    fn consume_approval_log(&mut self, path: &Path, time: i64, prime_only: bool) {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return;
+        };
+        let size = meta.len();
+        if prime_only {
+            // 首次扫描只登记 offset：历史内容一律不看，只跟踪此后的新行。
+            self.workbuddy_log_watch
+                .offsets
+                .insert(path.to_path_buf(), size);
+            return;
+        }
+        let offset = self
+            .workbuddy_log_watch
+            .offsets
+            .get(path)
+            .copied()
+            .unwrap_or(0);
+        let offset = if size < offset { 0 } else { offset };
+        if size <= offset {
+            self.workbuddy_log_watch
+                .offsets
+                .insert(path.to_path_buf(), offset);
+            return;
+        }
+        let active = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64 > time - LOG_ACTIVE_WINDOW_MS)
+            .unwrap_or(false);
+        if !active {
+            self.workbuddy_log_watch
+                .offsets
+                .insert(path.to_path_buf(), offset);
+            return;
+        }
+        let Ok(mut file) = std::fs::File::open(path) else {
+            return;
+        };
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            return;
+        }
+        let mut buffer = Vec::new();
+        if file.take(1 << 20).read_to_end(&mut buffer).is_err() {
+            return;
+        }
+        self.workbuddy_log_watch
+            .offsets
+            .insert(path.to_path_buf(), offset + buffer.len() as u64);
+        for line in String::from_utf8_lossy(&buffer).lines() {
+            match parse_approval_line(line) {
+                Some(ApprovalEvent::Request {
+                    tool,
+                    call_id,
+                    session,
+                }) => {
+                    self.workbuddy_log_watch
+                        .call_sessions
+                        .insert(call_id.clone(), session.clone());
+                    self.apply_approval_wait(&session, &tool, &call_id, time);
+                }
+                Some(ApprovalEvent::Settled { call_id }) => {
+                    if let Some(session) = self.workbuddy_log_watch.call_sessions.remove(&call_id)
+                    {
+                        self.apply_approval_settled(&session, &call_id, time);
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
+    fn apply_approval_wait(&mut self, session: &str, tool: &str, call_id: &str, ts: i64) {
+        if !self.hub.sessions.contains_key(&format!("workbuddy:{session}")) {
+            return; // 只为已跟踪的会话补充信号，不创建幽灵会话
+        }
+        self.hub.ingest(json!({
+            "source":"workbuddy",
+            "sessionId":session,
+            "type":"wait",
+            "callId":call_id,
+            "tool":tool,
+            "text":format!("WorkBuddy 沙箱审批待确认：{tool}"),
+            "ts":ts
+        }));
+    }
+
+    fn apply_approval_settled(&mut self, session: &str, call_id: &str, ts: i64) {
+        if !self.hub.sessions.contains_key(&format!("workbuddy:{session}")) {
+            return;
+        }
+        self.hub.ingest(json!({
+            "source":"workbuddy",
+            "sessionId":session,
+            "type":"resolve",
+            "callId":call_id,
+            "ts":ts
+        }));
+    }
+}
+
+#[cfg(test)]
+mod approval_log_tests {
+    use super::*;
+
+    #[test]
+    fn parses_approval_and_settle_lines() {
+        let request = "[9/26/2026, 2:44:29 AM.430] [Info] [pid=79853] [enqueueSandboxApproval] Enqueued sandbox approval: tool=Bash, id=chatcmpl-tool-b76a22bd4ea6be30, session=90b92496-4265-46dc-a497-10b119927240, mainSession=90b92496-4265-46dc-a497-10b119927240, queueSize=1";
+        assert_eq!(
+            parse_approval_line(request),
+            Some(ApprovalEvent::Request {
+                tool: "Bash".into(),
+                call_id: "chatcmpl-tool-b76a22bd4ea6be30".into(),
+                session: "90b92496-4265-46dc-a497-10b119927240".into(),
+            })
+        );
+        let approved = "[9/26/2026, 2:44:45 AM.120] [Info] [pid=79853] [Approve] User approved tool: Bash, id: chatcmpl-tool-b76a22bd4ea6be30, alwaysApprove: false, scope: session";
+        assert_eq!(
+            parse_approval_line(approved),
+            Some(ApprovalEvent::Settled {
+                call_id: "chatcmpl-tool-b76a22bd4ea6be30".into()
+            })
+        );
+        let rejected = "[9/26/2026, 2:32:01 AM.719] [Info] [pid=70427] [Reject] User rejected tool: Bash, id: chatcmpl-tool-cfc21a572fa2488a815a1f792f807d16";
+        assert_eq!(
+            parse_approval_line(rejected),
+            Some(ApprovalEvent::Settled {
+                call_id: "chatcmpl-tool-cfc21a572fa2488a815a1f792f807d16".into()
+            })
+        );
+        assert_eq!(parse_approval_line("[Info] unrelated line"), None);
+        assert_eq!(
+            parse_approval_line("Sandbox approval timed out after 1800000ms, denying"),
+            None
+        );
     }
 }

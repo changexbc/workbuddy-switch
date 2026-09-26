@@ -17,6 +17,8 @@ export type SeatAssignment = 'auto' | SourceId;
 export interface SourceConfig {
   enabled: boolean;
   path: string;
+  /** WorkBuddy only: watch run logs for sandbox approvals (they emit no hook events). */
+  logWatch?: boolean;
 }
 
 export interface MonitorSettings {

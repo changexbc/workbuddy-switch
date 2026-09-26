@@ -22,3 +22,10 @@ objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSEvent", "NSApplica
 objc2-foundation = "0.3"
 block2 = "0.6"
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfiguration"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",                 # POINT / ERROR_SUCCESS
+  "Win32_System_Registry",            # HKCU Run: RegSetKeyValueW / RegGetValueW / RegDeleteKeyValueW
+  "Win32_UI_WindowsAndMessaging",     # GetCursorPos
+  "Win32_UI_Input_KeyboardAndMouse",  # GetAsyncKeyState / VK_*
+] }

@@ -73,13 +73,19 @@
 
 2026-09-24 更新：完成态现与待确认态一样自动显示悬浮卡。浏览器回归验证了完成卡可见、重复快照不产生重复卡、关闭后不再弹出，并检查了 `artifacts/ui/done.png` 的实际渲染。`npm test`、类型检查、lint、构建和 `npm run test:ui` 均通过。
 
+## Windows 悬浮栏穿透已手工验证（2026-09-26）
+
+悬浮栏透明区域的鼠标穿透此前只有 macOS 实现，Windows 上整块 368x600 窗口都命中，透明部分照样吃掉下层窗口的点击与滚轮（见 PR #1）。用户在自己的 Windows 机器上安装 CI 产物（`Build desktop app` run 36174445604 的 `win-x64` 安装包）验收，4/4 通过：透明区单击/右键/滚轮穿透到下层窗口且悬浮栏自身不动；悬停头像弹出卡片、头像与卡片按钮交互正常；拖动手柄跟手，松手后透明区立即恢复穿透；卡片弹出/收起与欢迎动画结束后无残留死区，没有出现透明区变黑或闪烁。
+
+改动本身的本地证据：`cargo test --workspace --locked`（108 passed，含 4 个新增单测）、把真实 `hit_test.rs` 挂进临时 crate 的 `cargo check --target x86_64-pc-windows-msvc`、以及 CI 的 windows-latest `--locked` 测试。Windows 运行时的等价性判断（视觉、滚轮路由）只有这次实机结论，没有自动化覆盖。
+
 ## 仍待人工确认
 
 - **用户对迁移后外观的确认**：逐张看 `artifacts/ui/*.png` 与 `artifacts/frontend-migration/rail-shots-built/*-after*.png`。
 - **Portal 挂载的表面被测量**：悬浮栏当前没有 Portal，没有可运行的反例。注册表是显式注册而不是子树遍历，这是它在结构上可行的原因；引入第一个 Portal 弹层时补上断言。
 - **冷启动到「悬浮栏可交互」的原生耗时**：没有埋点。
 - **屏幕阅读器能否读到悬浮栏**：AX 读取对两个窗口都拿不到任何 web 内容（悬浮栏窗口 1 个元素，设置窗口 145 个但全是窗口按钮与应用菜单栏），因此无法区分「这个 app 整体没有暴露 web 内容」与「这种读法看不到 WebKit 的 web area」。需要真实 VoiceOver 走查。
-- **Windows / Linux、签名、公证、发布**：不在本次范围。
+- **Linux、签名、公证、发布**：不在本次范围。Windows 目前只验收了悬浮栏穿透，以及设置窗口能打开并渲染各项设置；Hooks / Webhook 接入、托盘、通知与应用内更新仍未在 Windows 上走查；开机自启在 Windows 上尚未实现（`rail_settings.rs` 只有 macOS 的 LaunchAgent 路径，设置页显示的是嵌入宿主用的兜底文案）。
 
 ## 两项先于本次迁移的既有行为
 

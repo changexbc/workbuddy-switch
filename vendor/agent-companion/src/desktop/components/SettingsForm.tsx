@@ -3,7 +3,7 @@ import { IntegrationManager } from './IntegrationManager.js';
 import { UpdateSettings } from './UpdateSettings.js';
 import { BOT_AVATAR_COUNT, createAvatar } from '../avatar.js';
 import { desktopCommand, isDesktop } from '../host.js';
-import { agents, loadListening, saveListening } from '../listening.js';
+import { agents, loadListening, saveListening, saveWorkbuddyLogWatch } from '../listening.js';
 import { defaultPreferences, loadPreferences, savePreferencePatch } from '../preferences.js';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -26,11 +26,11 @@ const allEnabled = () => Object.fromEntries(agents.map(([id]) => [id, true])) as
 const enabledOf = (sources: Record<SourceId, SourceConfig>) =>
   Object.fromEntries(agents.map(([id]) => [id, sources[id]?.enabled !== false])) as Record<SourceId, boolean>;
 
-type Values = RailPreferencesState & { enabled: Record<SourceId, boolean> };
+type Values = RailPreferencesState & { enabled: Record<SourceId, boolean>; workbuddyLogWatch: boolean };
 
 // Placeholder values stay hidden until the first read has settled.
 const initialEnabled = allEnabled();
-const initialValues: Values = {...defaultPreferences(), animation: false, autostart: false, autostartSupported: true, autostartManaged: true, enabled: initialEnabled};
+const initialValues: Values = {...defaultPreferences(), animation: false, autostart: false, autostartSupported: true, autostartManaged: true, enabled: initialEnabled, workbuddyLogWatch: true};
 
 /**
  * Reproduces the old `.styles button` rules, including the 1px inset that the
@@ -92,7 +92,7 @@ export function SettingsForm() {
   const [saveState, setSaveState] = React.useState<SaveState>({busy: false, error: null, pending: false});
   const [integrationRevision, setIntegrationRevision] = React.useState(0);
   const [autosave] = React.useState(() => createSettingsAutosave({
-    preferences: savePreferencePatch, listening: saveListening, changed: setSaveState,
+    preferences: savePreferencePatch, listening: saveListening, logWatch: saveWorkbuddyLogWatch, changed: setSaveState,
     listeningSaved: () => setIntegrationRevision(revision => revision + 1),
   }));
   const busy = saveState.busy;
@@ -121,7 +121,7 @@ export function SettingsForm() {
       const [preferences, sources] = await Promise.all([loadPreferences(), loadListening()]);
       if (id !== readId.current) return;
       const enabled = enabledOf(sources);
-      setValues({...preferences, enabled});
+      setValues({...preferences, enabled, workbuddyLogWatch: sources.workbuddy?.logWatch !== false});
       setReady(true);
       setFailed(false);
       setStatus('设置保存在本机');
@@ -223,6 +223,21 @@ export function SettingsForm() {
               autosave.editListening({[source]: enabled});
             }}
           /></section>}
+          {ready && values.enabled.workbuddy && <section>
+            <h2>WorkBuddy 沙箱审批</h2>
+            <div className="settings-group">
+            <ToggleRow
+              field="workbuddy-logwatch"
+              title="读取审批日志"
+              hint="沙箱审批不发送 Hook；从 WorkBuddy 运行日志补充「待确认」提示"
+              checked={values.workbuddyLogWatch}
+              onChange={workbuddyLogWatch => {
+                setValues(current => ({...current, workbuddyLogWatch}));
+                autosave.editLogWatch(workbuddyLogWatch);
+              }}
+            />
+            </div>
+          </section>}
           {/* 入口暂未开放（见文件头说明）：如需临时启用，恢复下面一行。
           {ready && <section><CustomIntegrationManager disabled={busy || saveState.pending} acquire={autosave.acquire} release={autosave.release} /></section>}
           */}
@@ -232,7 +247,7 @@ export function SettingsForm() {
             <ToggleRow
               field="autostart"
               title="开机自启"
-              hint={values.autostartSupported ? '登录电脑后自动显示悬浮窗' : '请在独立桌面应用中设置'}
+              hint={values.autostartSupported ? '登录电脑后自动显示悬浮窗' : isDesktop() ? '当前环境不支持开机自启，安装正式版后可开启' : '请在独立桌面应用中设置'}
               hintId="login-hint"
               checked={values.autostart}
               disabled={!values.autostartSupported}

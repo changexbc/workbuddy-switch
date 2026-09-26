@@ -144,6 +144,8 @@ fn set_hit_regions(
         app.run_on_main_thread(move || hit_test::refresh(pointer, &regions))
             .map_err(|e| e.to_string())?;
     }
+    #[cfg(target_os = "windows")]
+    hit_test::refresh();
     Ok(())
 }
 #[tauri::command]
@@ -306,7 +308,7 @@ pub fn init(config: Config) -> tauri::plugin::TauriPlugin<tauri::Wry> {
                         *c = None;
                     }
                 }
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 hit_test::remove();
             }
             _ => {}
@@ -442,6 +444,11 @@ fn create_rail(app: &tauri::AppHandle, config: &Config) -> Result<(), Box<dyn st
                 let _ = window.emit("agent-studio-pointer", payload);
             }
         },
+    );
+    #[cfg(target_os = "windows")]
+    hit_test::install(
+        rail.clone(),
+        app.state::<hit_test::Regions>().inner().clone(),
     );
     Ok(())
 }

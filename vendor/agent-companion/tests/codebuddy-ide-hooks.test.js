@@ -52,10 +52,12 @@ test('IDE installer writes international and domestic editions when both homes e
 });
 test('IDE host exit ends unfinished work but leaves completed rounds alone',async()=>{
  const hub=new Hub();let mode='alive';
+ // 时间戳取「虚构基准」与真实时钟的较大值：endHostSessions 会用 Date.now() 盖合成时间，
+ // 虚构时间戳若落后于它会被 hub 的防回退逻辑丢弃（负载高时曾致 flaky）。
  const presence={noteHook(){mode='alive';},async observe(){return mode;}};
  const unseen={noteHook(){},async observe(){return 'unknown';}};
  const p=new CodeBuddyIdePoller(hub,{hostPresence:presence,vscodePresence:unseen}),t=Date.now();let seq=0;
- const hook=(sid,event,extra={})=>p.ingestHook({client:'CodeBuddyIDE',session_id:sid,cwd:'/project',timestamp:t+(++seq),hook_event_name:event,...extra});
+ const hook=(sid,event,extra={})=>p.ingestHook({client:'CodeBuddyIDE',session_id:sid,cwd:'/project',timestamp:Math.max(t+(++seq),Date.now()),hook_event_name:event,...extra});
  hook('x','UserPromptSubmit',{generation_id:'g',prompt:'work'});
  hook('y','UserPromptSubmit',{generation_id:'g',prompt:'quick'});
  hook('y','Stop');
@@ -81,7 +83,7 @@ test('VS Code plugin hooks drive their own host kind',async()=>{
  const idePresence={noteHook(){ide='alive';},async observe(){return ide;}};
  const vscodePresence={noteHook(){vscode='alive';},async observe(){return vscode;}};
  const p=new CodeBuddyIdePoller(hub,{hostPresence:idePresence,vscodePresence}),t=Date.now();let seq=0;
- const hook=(client,sid,event,extra={})=>p.ingestHook({client,session_id:sid,cwd:'/project',timestamp:t+(++seq),hook_event_name:event,...extra});
+ const hook=(client,sid,event,extra={})=>p.ingestHook({client,session_id:sid,cwd:'/project',timestamp:Math.max(t+(++seq),Date.now()),hook_event_name:event,...extra});
  assert.equal(hook('VSCode','code','UserPromptSubmit',{generation_id:'g',prompt:'work'}),true);
  hook('CodeBuddyIDE','ide','UserPromptSubmit',{generation_id:'g',prompt:'work'});
  assert.equal(hub.sessions.get('codebuddy-ide:code').hostKind,'vscode');

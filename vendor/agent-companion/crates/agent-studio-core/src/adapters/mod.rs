@@ -74,6 +74,7 @@ pub struct Collector {
     pub ide_hook_count: u64,
     pub workbuddy_live: HashMap<String, Value>,
     pub workbuddy_hook_count: u64,
+    pub workbuddy_log_watch: workbuddy::LogWatch,
     /// Ignore completion events after a user closes a task, until new activity arrives.
     pub closed_monitor_sessions: HashSet<String>,
     pub workbuddy_presence: crate::host_process::HostPresence,
@@ -125,6 +126,7 @@ impl Collector {
             ide_hook_count: 0,
             workbuddy_live: HashMap::new(),
             workbuddy_hook_count: 0,
+            workbuddy_log_watch: Default::default(),
             closed_monitor_sessions: HashSet::new(),
             workbuddy_presence: crate::host_process::HostPresence::for_host("workbuddy"),
             ide_presence: crate::host_process::HostPresence::for_host("codebuddy-ide"),

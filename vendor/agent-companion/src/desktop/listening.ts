@@ -24,3 +24,10 @@ export async function saveListening(changes: Partial<Record<SourceId, boolean>>)
   }
   return (await request({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(latest)})).sources;
 }
+
+export async function saveWorkbuddyLogWatch(logWatch: boolean): Promise<Record<SourceId, SourceConfig>> {
+  if (typeof logWatch !== 'boolean') throw Error('监听配置无效');
+  const latest = await request();
+  latest.sources.workbuddy = { ...latest.sources.workbuddy, logWatch };
+  return (await request({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(latest)})).sources;
+}

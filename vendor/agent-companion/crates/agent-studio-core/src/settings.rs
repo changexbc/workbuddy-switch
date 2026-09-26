@@ -2,7 +2,15 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 pub const SOURCES: [&str; 4] = ["codex", "workbuddy", "codebuddy-ide", "codeg"];
 pub fn defaults() -> Value {
-    json!({"version":1,"sources":SOURCES.iter().map(|s|(s.to_string(),json!({"enabled":true,"path":""}))).collect::<serde_json::Map<_,_>>(),"monitor":{"avatarStyle":"animal","railVisibleCount":8,"autoDiscover":true,"retentionHours":0.5,"assignment":"auto","seats":["auto","auto","auto","auto","auto","auto","auto","auto"]},"scene":{"light":"day","weather":"clear","lightning":true,"door":false,"ceiling":false,"playing":true,"speed":1,"maxFps":60,"renderResolution":"native","showPerformance":false,"reducedMotion":false,"defaultView":"program"},"notifications":{"desktop":false,"wait":true,"error":true,"done":true,"sound":false},"general":{"mode":"live","rememberView":true},"schedule":{"enabled":false,"start":"09:00","end":"18:00","deferBusy":true}})
+    let mut sources: serde_json::Map<String, Value> = SOURCES
+        .iter()
+        .map(|s| (s.to_string(), json!({"enabled":true,"path":""})))
+        .collect();
+    // WorkBuddy 沙箱审批不发送 hook；默认经由运行日志观察补充「待确认」信号。
+    if let Some(workbuddy) = sources.get_mut("workbuddy") {
+        workbuddy["logWatch"] = json!(true);
+    }
+    json!({"version":1,"sources":sources,"monitor":{"avatarStyle":"animal","railVisibleCount":8,"autoDiscover":true,"retentionHours":0.5,"assignment":"auto","seats":["auto","auto","auto","auto","auto","auto","auto","auto"]},"scene":{"light":"day","weather":"clear","lightning":true,"door":false,"ceiling":false,"playing":true,"speed":1,"maxFps":60,"renderResolution":"native","showPerformance":false,"reducedMotion":false,"defaultView":"program"},"notifications":{"desktop":false,"wait":true,"error":true,"done":true,"sound":false},"general":{"mode":"live","rememberView":true},"schedule":{"enabled":false,"start":"09:00","end":"18:00","deferBusy":true}})
 }
 pub fn validate(v: &Value) -> Result<Value, String> {
     let mut d = defaults();
@@ -20,7 +28,15 @@ pub fn validate(v: &Value) -> Result<Value, String> {
         {
             return Err("Agent 配置无效".into());
         }
-        d["sources"][id] = json!({"enabled":v["sources"][id]["enabled"],"path":p.trim()});
+        let mut entry = json!({"enabled":v["sources"][id]["enabled"],"path":p.trim()});
+        if id == "workbuddy" {
+            let log_watch = &v["sources"][id]["logWatch"];
+            if !log_watch.is_null() && !log_watch.is_boolean() {
+                return Err("Agent 配置无效".into());
+            }
+            entry["logWatch"] = json!(log_watch.as_bool().unwrap_or(true));
+        }
+        d["sources"][id] = entry;
     }
     for group in ["monitor", "scene", "notifications", "general", "schedule"] {
         for (key, default) in defaults()[group].as_object().unwrap() {
@@ -151,5 +167,25 @@ mod frame_rate_tests {
             paths(home, &defaults(), "workbuddy"),
             vec![home.join(".workbuddy-ai"), home.join(".workbuddy")]
         );
+    }
+    #[test]
+    fn workbuddy_log_watch_defaults_on_and_validates_boolean() {
+        let mut value = defaults();
+        assert_eq!(value["sources"]["workbuddy"]["logWatch"], true);
+        value["sources"]["workbuddy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("logWatch");
+        assert_eq!(
+            validate(&value).unwrap()["sources"]["workbuddy"]["logWatch"],
+            true
+        );
+        value["sources"]["workbuddy"]["logWatch"] = json!(false);
+        assert_eq!(
+            validate(&value).unwrap()["sources"]["workbuddy"]["logWatch"],
+            false
+        );
+        value["sources"]["workbuddy"]["logWatch"] = json!("yes");
+        assert!(validate(&value).is_err());
     }
 }
