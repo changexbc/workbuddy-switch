@@ -203,6 +203,8 @@ pub fn run() {
             commands::vscode_session_links_preview,
             commands::get_codebuddy_ide_status,
             commands::switch_codebuddy_ide_account,
+            commands::list_codebuddy_intl_ide_sessions,
+            commands::codebuddy_intl_ide_session_links_preview,
             commands::detect_codebuddy_ide_account,
             commands::get_jetbrains_status,
             commands::switch_jetbrains_account,

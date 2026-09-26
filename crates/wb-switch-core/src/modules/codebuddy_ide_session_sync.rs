@@ -1,14 +1,15 @@
 //! CodeBuddy IDE「关联会话」：复制后登记、切换预览与增量同步。
 //!
-//! 与 VS Code 插件侧**共用同一份实现**（`vscode_session_sync` 的 `*_in` 变体），本模块只做三件
-//! 与目标相关的事：解析数据根与来源身份（当前 IDE 登录 uid）、检查 IDE 运行态、固定
-//! [`SessionPaths::for_codebuddy_ide`] 命名空间。存储隔离与判定语义见 `session-links.md`。
+//! 与 VS Code 插件侧**共用同一份实现**（`vscode_session_sync` 的 `*_in` 变体）；国内版与国际版
+//! IDE 也共用同一份（档位差异只有「来源身份读法」与「运行态判定」，见
+//! [`codebuddy_ide_session::IdeFlavor`]）。本模块只做三件与目标相关的事：解析数据根与来源身份
+//! （当前 IDE 登录 uid）、检查 IDE 运行态、固定 [`SessionPaths::for_codebuddy_ide`] 命名空间。
+//! 存储隔离与判定语义见 `session-links.md`。
 
 use serde_json::{json, Value};
 use std::path::Path;
 
-use crate::modules::codebuddy_cn_ide;
-use crate::modules::codebuddy_ide_session;
+use crate::modules::codebuddy_ide_session::{self, IdeFlavor};
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::variant::WbVariant;
 use crate::modules::vscode_session::CODEBUDDY_IDE_STORE;
@@ -23,7 +24,8 @@ pub fn register_copied_sessions(
     variant: WbVariant,
     report: &Value,
 ) -> Vec<Value> {
-    vscode_session_sync::register_copied_sessions_in(
+    // 两个 IDE 共用一张关联表：只复用同 variant 的组，不把国际版登记并进国内版的组。
+    vscode_session_sync::register_copied_sessions_isolated(
         CODEBUDDY_IDE_STORE,
         root,
         paths,
@@ -32,28 +34,44 @@ pub fn register_copied_sessions(
     )
 }
 
-/// 预览「当前 IDE 账号 → 目标账号」可同步的关联会话（只读，不写任何会话正文）。
+/// 预览「当前国内版 IDE 账号 → 目标账号」可同步的关联会话（只读，不写任何会话正文）。
 pub fn links_preview(target_acc: &Value) -> Result<Value, String> {
+    links_preview_for(IdeFlavor::Cn, target_acc)
+}
+
+/// 预览「当前国际版 IDE 账号 → 目标账号」可同步的关联会话（语义与国内版一致）。
+pub fn links_preview_intl(target_acc: &Value) -> Result<Value, String> {
+    links_preview_for(IdeFlavor::Intl, target_acc)
+}
+
+fn links_preview_for(flavor: IdeFlavor, target_acc: &Value) -> Result<Value, String> {
     let root = codebuddy_ide_session::ide_data_root()
         .ok_or_else(|| "未找到 CodeBuddy IDE 数据目录，无法同步会话".to_string())?;
-    let source_uid = active_source_uid()?;
-    vscode_session_sync::links_preview_in(
+    let source_uid = active_source_uid(flavor)?;
+    // 共用 `codebuddy_ide_session_links.json`：按组的 variant 过滤，国内版组不进国际版预览。
+    vscode_session_sync::links_preview_in_for_variant(
         CODEBUDDY_IDE_STORE,
         &root,
         &SessionPaths::for_codebuddy_ide(),
         &source_uid,
         target_acc,
+        link_variant(flavor),
     )
 }
 
-/// 执行勾选的同步项；返回 `{synced, skipped, errors}` 报告。
+/// 执行勾选的同步项（两个 IDE 共用；国内版 / 国际版只差来源 uid 与运行态判定）。
 ///
+/// 由切换编排调用（同步只随切换发生，没有独立的宿主入口）。
 /// **前提**：调用方已确认 IDE 完全退出（写入会被运行中的客户端覆盖）；本函数自行复查一次。
-pub fn sync_selected(target_acc: &Value, selections: &[SyncSelection]) -> Result<Value, String> {
+pub(crate) fn sync_selected_for(
+    flavor: IdeFlavor,
+    target_acc: &Value,
+    selections: &[SyncSelection],
+) -> Result<Value, String> {
     if selections.is_empty() {
         return Ok(json!({ "synced": [], "skipped": [], "errors": [] }));
     }
-    if codebuddy_cn_ide::is_codebuddy_cn_running() {
+    if flavor.is_running() {
         return Err(
             "检测到 CodeBuddy IDE 正在运行，请先完全退出后再同步会话，否则写入会被 CodeBuddy IDE 覆盖。"
                 .to_string(),
@@ -61,25 +79,32 @@ pub fn sync_selected(target_acc: &Value, selections: &[SyncSelection]) -> Result
     }
     let root = codebuddy_ide_session::ide_data_root()
         .ok_or_else(|| "未找到 CodeBuddy IDE 数据目录，无法同步会话".to_string())?;
-    let source_uid = active_source_uid()?;
-    vscode_session_sync::sync_selected_in(
+    let source_uid = active_source_uid(flavor)?;
+    vscode_session_sync::sync_selected_in_for_variant(
         CODEBUDDY_IDE_STORE,
         &root,
         &SessionPaths::for_codebuddy_ide(),
         &source_uid,
         target_acc,
         selections,
+        link_variant(flavor),
     )
 }
 
+/// 档位对应的关联组 variant：国内版 `cn`，国际版 `ai`。
+fn link_variant(flavor: IdeFlavor) -> WbVariant {
+    match flavor {
+        IdeFlavor::Cn => WbVariant::Cn,
+        IdeFlavor::Intl => WbVariant::Ai,
+    }
+}
+
 /// 来源账号 uid：当前 IDE 登录 secret（回退本地状态文件）；非法 uid（`default` / `Public` / 路径穿越）视为未登录。
-fn active_source_uid() -> Result<String, String> {
-    codebuddy_cn_ide::active_cn_ide_uid()
-        .filter(|uid| crate::modules::vscode_session::is_safe_uid(uid))
-        .ok_or_else(|| {
-            "未检测到 CodeBuddy IDE 当前登录账号，无法同步会话。请先在 CodeBuddy IDE 中登录后重试。"
-                .to_string()
-        })
+fn active_source_uid(flavor: IdeFlavor) -> Result<String, String> {
+    flavor.active_uid().ok_or_else(|| {
+        "未检测到 CodeBuddy IDE 当前登录账号，无法同步会话。请先在 CodeBuddy IDE 中登录后重试。"
+            .to_string()
+    })
 }
 
 #[cfg(test)]
@@ -398,6 +423,110 @@ mod tests {
         let preview = preview_of(&fixture);
         assert_eq!(preview["groups"][0]["verdict"], "identical");
         assert_eq!(preview["groups"][0]["availableModes"], json!([]));
+    }
+
+    /// 同一张关联表里国内版 / 国际版各一组：预览与同步都不得把另一档的组混进来。
+    #[test]
+    fn shared_namespace_filters_groups_by_variant() {
+        let fixture = Fixture::new("variant-split");
+        seed_source(&fixture);
+        let report = copy_once(&fixture);
+        let cn_errors =
+            register_copied_sessions(&fixture.root, &fixture.paths(), WbVariant::Cn, &report);
+        let ai_errors =
+            register_copied_sessions(&fixture.root, &fixture.paths(), WbVariant::Ai, &report);
+        assert!(cn_errors.is_empty(), "{cn_errors:?}");
+        assert!(ai_errors.is_empty(), "{ai_errors:?}");
+
+        let store = match session_link::load_store(&fixture.paths()) {
+            StoreState::Ready(store) => store,
+            other => panic!("关联表不可用：{other:?}"),
+        };
+        assert_eq!(
+            store.groups.len(),
+            2,
+            "同 variant 才复用组，cn 与 ai 必须各一组"
+        );
+        assert!(store
+            .groups
+            .iter()
+            .any(|group| group.variant == WbVariant::Cn));
+        assert!(store
+            .groups
+            .iter()
+            .any(|group| group.variant == WbVariant::Ai));
+
+        append_round(&fixture, MSG_3, MSG_4, REQ_2, "新增内容");
+
+        let preview_for = |variant: WbVariant| {
+            vscode_session_sync::links_preview_in_for_variant(
+                CODEBUDDY_IDE_STORE,
+                &fixture.root,
+                &fixture.paths(),
+                SRC_UID,
+                &target_acc(),
+                variant,
+            )
+            .unwrap()
+        };
+        let cn_groups = preview_for(WbVariant::Cn)["groups"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let ai_groups = preview_for(WbVariant::Ai)["groups"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(cn_groups.len(), 1, "国内版预览不得带上国际版组");
+        assert_eq!(ai_groups.len(), 1, "国际版预览不得带上国内版组");
+        assert_ne!(cn_groups[0]["groupId"], ai_groups[0]["groupId"]);
+        assert_eq!(cn_groups[0]["verdict"], "fastForward");
+        assert_eq!(ai_groups[0]["verdict"], "fastForward");
+
+        // 国际版凭据交给国内版同步：拒绝，且不改目标正文。
+        let rejected = vscode_session_sync::sync_selected_in_for_variant(
+            CODEBUDDY_IDE_STORE,
+            &fixture.root,
+            &fixture.paths(),
+            SRC_UID,
+            &target_acc(),
+            &[selection(
+                ai_groups[0]["groupId"].as_str().unwrap(),
+                ai_groups[0]["previewToken"].as_str().unwrap(),
+                SyncMode::FastForward,
+            )],
+            WbVariant::Cn,
+        )
+        .unwrap();
+        assert!(
+            rejected["synced"].as_array().unwrap().is_empty(),
+            "{rejected}"
+        );
+        assert_eq!(
+            rejected["errors"].as_array().unwrap().len(),
+            1,
+            "{rejected}"
+        );
+        let target_conv = report["copied"][0]["newId"].as_str().unwrap();
+        let unchanged = read_json(&fixture.dst_conv_dir(target_conv).join("index.json")).unwrap();
+        assert_eq!(unchanged["messages"].as_array().unwrap().len(), 2);
+
+        let synced = vscode_session_sync::sync_selected_in_for_variant(
+            CODEBUDDY_IDE_STORE,
+            &fixture.root,
+            &fixture.paths(),
+            SRC_UID,
+            &target_acc(),
+            &[selection(
+                cn_groups[0]["groupId"].as_str().unwrap(),
+                cn_groups[0]["previewToken"].as_str().unwrap(),
+                SyncMode::FastForward,
+            )],
+            WbVariant::Cn,
+        )
+        .unwrap();
+        assert_eq!(synced["synced"].as_array().unwrap().len(), 1, "{synced}");
+        assert!(synced["errors"].as_array().unwrap().is_empty(), "{synced}");
     }
 
     /// 关联表不存在时预览为 missing（前端据此提示「先复制一次」）。

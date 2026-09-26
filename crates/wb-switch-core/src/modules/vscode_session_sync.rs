@@ -124,6 +124,9 @@ struct SyncContext<'a> {
     target_uid: &'a str,
     source_index: &'a BTreeMap<String, ConversationLocator>,
     target_index: &'a BTreeMap<String, ConversationLocator>,
+    /// `Some` 时只处理该档位的关联组。IDE 两侧共用一份表，必须带上；
+    /// VS Code 插件跨档位复制，保持 `None`（不过滤）。
+    variant_filter: Option<WbVariant>,
 }
 
 impl SyncContext<'_> {
@@ -208,13 +211,36 @@ pub fn register_copied_sessions(
     register_copied_sessions_in(VSCODE_STORE, root, paths, variant, report)
 }
 
-/// [`register_copied_sessions`] 的数据仓参数化版本（VS Code 插件 / CodeBuddy IDE 共用）。
+/// [`register_copied_sessions`] 的数据仓参数化版本（VS Code 插件用：不按 variant 拆组）。
 pub fn register_copied_sessions_in(
     spec: SessionStoreSpec,
     root: &Path,
     paths: &SessionPaths,
     variant: WbVariant,
     report: &Value,
+) -> Vec<Value> {
+    // 插件侧同一扩展数据仓可跨档位复制，登记时不按 variant 拆组。
+    register_copied_sessions_inner(spec, root, paths, variant, report, false)
+}
+
+/// IDE 两侧共用一份关联表时的登记：只复用同 `variant` 的组，不并入另一档已有的组。
+pub(crate) fn register_copied_sessions_isolated(
+    spec: SessionStoreSpec,
+    root: &Path,
+    paths: &SessionPaths,
+    variant: WbVariant,
+    report: &Value,
+) -> Vec<Value> {
+    register_copied_sessions_inner(spec, root, paths, variant, report, true)
+}
+
+fn register_copied_sessions_inner(
+    spec: SessionStoreSpec,
+    root: &Path,
+    paths: &SessionPaths,
+    variant: WbVariant,
+    report: &Value,
+    isolate_variant: bool,
 ) -> Vec<Value> {
     let source_uid = uid_of(report, "sourceUid");
     let target_uid = uid_of(report, "targetUid");
@@ -231,6 +257,7 @@ pub fn register_copied_sessions_in(
         target_uid: &target_uid,
         source_index: &source_index,
         target_index: &target_index,
+        variant_filter: None,
     };
     let mut errors: Vec<Value> = Vec::new();
     let copied = report
@@ -248,7 +275,7 @@ pub fn register_copied_sessions_in(
             errors.push(json!({ "error": "复制报告条目缺少会话信息，未能建立会话关联" }));
             continue;
         };
-        let outcome = register_one(&context, variant, source_id, target_id);
+        let outcome = register_one(&context, variant, isolate_variant, source_id, target_id);
         if let Err(reason) = outcome {
             errors.push(json!({
                 "workspaceHash": workspace_hash,
@@ -264,6 +291,7 @@ pub fn register_copied_sessions_in(
 fn register_one(
     context: &SyncContext<'_>,
     variant: WbVariant,
+    isolate_variant: bool,
     source_id: &str,
     target_id: &str,
 ) -> Result<(), String> {
@@ -283,13 +311,16 @@ fn register_one(
     let (source_uid, target_uid) = (source_uid.to_string(), target_uid.to_string());
     let (source_id, target_id) = (source_id.to_string(), target_id.to_string());
     session_link::with_link_store_write(paths, move |store| {
-        // 同一逻辑会话复用同一组：按「源身份」找组，找不到才新建（不按 variant 过滤，
-        // 因为同一扩展数据仓可跨档位复制，design §2）。
+        // 同一逻辑会话复用同一组：按「源身份」找组，找不到才新建。
+        // 插件路径不按 variant 过滤（同一扩展数据仓可跨档位复制）。
+        // IDE 路径 `isolate_variant`：只复用同档位的组，避免国内版 / 国际版并成一组。
         let index = match store.groups.iter().position(|group| {
-            group
-                .members
-                .iter()
-                .any(|member| member.uid == source_uid && member.session_id == source_id)
+            let same_variant = !isolate_variant || group.variant == variant;
+            same_variant
+                && group
+                    .members
+                    .iter()
+                    .any(|member| member.uid == source_uid && member.session_id == source_id)
         }) {
             Some(index) => index,
             None => {
@@ -413,13 +444,36 @@ pub fn links_preview_at(
     links_preview_in(VSCODE_STORE, root, paths, source_uid, target_acc)
 }
 
-/// [`links_preview`] 的数据仓参数化版本（VS Code 插件 / CodeBuddy IDE 共用）。
+/// [`links_preview`] 的数据仓参数化版本（VS Code 插件：不按 variant 过滤）。
 pub fn links_preview_in(
     spec: SessionStoreSpec,
     root: &Path,
     paths: &SessionPaths,
     source_uid: &str,
     target_acc: &Value,
+) -> Result<Value, String> {
+    links_preview_in_filtered(spec, root, paths, source_uid, target_acc, None)
+}
+
+/// IDE 共用关联表时的预览：只列出 `variant` 与当前档位一致的组。
+pub(crate) fn links_preview_in_for_variant(
+    spec: SessionStoreSpec,
+    root: &Path,
+    paths: &SessionPaths,
+    source_uid: &str,
+    target_acc: &Value,
+    variant: WbVariant,
+) -> Result<Value, String> {
+    links_preview_in_filtered(spec, root, paths, source_uid, target_acc, Some(variant))
+}
+
+fn links_preview_in_filtered(
+    spec: SessionStoreSpec,
+    root: &Path,
+    paths: &SessionPaths,
+    source_uid: &str,
+    target_acc: &Value,
+    variant_filter: Option<WbVariant>,
 ) -> Result<Value, String> {
     let target_uid = target_uid_of(target_acc)?;
     if source_uid == target_uid {
@@ -450,12 +504,15 @@ pub fn links_preview_in(
                 target_uid: &target_uid,
                 source_index: &source_index,
                 target_index: &target_index,
+                variant_filter,
             };
             let groups: Vec<Value> = store
                 .groups
                 .iter()
                 .filter(|group| {
-                    has_member_for(group, source_uid) && has_member_for(group, &target_uid)
+                    passes_variant_filter(variant_filter, group.variant)
+                        && has_member_for(group, source_uid)
+                        && has_member_for(group, &target_uid)
                 })
                 .map(|group| preview_group_item(&context, group))
                 .collect();
@@ -471,6 +528,14 @@ fn target_uid_of(target_acc: &Value) -> Result<String, String> {
         .map(|uid| uid.trim().to_string())
         .filter(|uid| !uid.is_empty())
         .ok_or_else(|| "目标账号缺少 uid，无法同步会话".to_string())
+}
+
+/// `None` 表示不过滤（插件路径）；`Some` 时组档位必须一致（IDE 共用命名空间）。
+fn passes_variant_filter(filter: Option<WbVariant>, variant: WbVariant) -> bool {
+    match filter {
+        Some(expected) => variant == expected,
+        None => true,
+    }
 }
 
 /// 组内是否存在该账号的成员（任意状态）：双方都有成员才谈得上「共同参与」。
@@ -701,7 +766,7 @@ pub fn sync_selected_at(
     )
 }
 
-/// [`sync_selected`] 的数据仓参数化版本（VS Code 插件 / CodeBuddy IDE 共用）。
+/// [`sync_selected`] 的数据仓参数化版本（VS Code 插件：不按 variant 过滤）。
 pub fn sync_selected_in(
     spec: SessionStoreSpec,
     root: &Path,
@@ -709,6 +774,39 @@ pub fn sync_selected_in(
     source_uid: &str,
     target_acc: &Value,
     selections: &[SyncSelection],
+) -> Result<Value, String> {
+    sync_selected_in_filtered(spec, root, paths, source_uid, target_acc, selections, None)
+}
+
+/// IDE 共用关联表时的同步：拒绝另一档位的组（即使成员 uid 碰巧相同）。
+pub(crate) fn sync_selected_in_for_variant(
+    spec: SessionStoreSpec,
+    root: &Path,
+    paths: &SessionPaths,
+    source_uid: &str,
+    target_acc: &Value,
+    selections: &[SyncSelection],
+    variant: WbVariant,
+) -> Result<Value, String> {
+    sync_selected_in_filtered(
+        spec,
+        root,
+        paths,
+        source_uid,
+        target_acc,
+        selections,
+        Some(variant),
+    )
+}
+
+fn sync_selected_in_filtered(
+    spec: SessionStoreSpec,
+    root: &Path,
+    paths: &SessionPaths,
+    source_uid: &str,
+    target_acc: &Value,
+    selections: &[SyncSelection],
+    variant_filter: Option<WbVariant>,
 ) -> Result<Value, String> {
     if selections.is_empty() {
         return Ok(empty_report());
@@ -734,6 +832,7 @@ pub fn sync_selected_in(
         target_uid: &target_uid,
         source_index: &source_index,
         target_index: &target_index,
+        variant_filter,
     };
 
     let mut synced: Vec<Value> = Vec::new();
@@ -809,7 +908,9 @@ fn plan_sync_item(
         };
     };
     let binding = &token.binding;
-    if binding.group_id != selection.group_id {
+    if binding.group_id != selection.group_id
+        || !passes_variant_filter(context.variant_filter, binding.variant)
+    {
         return SyncItemOutcome::Rejected {
             message: "检查结果与所选会话不匹配，已拒绝".to_string(),
         };
@@ -821,11 +922,10 @@ fn plan_sync_item(
     if binding.source.uid != context.source_uid || binding.target.uid != context.target_uid {
         return skip("账号已变化，检查结果已失效".to_string());
     }
-    let Some(group) = store
-        .groups
-        .iter()
-        .find(|group| group.id == selection.group_id)
-    else {
+    let Some(group) = store.groups.iter().find(|group| {
+        group.id == selection.group_id
+            && passes_variant_filter(context.variant_filter, group.variant)
+    }) else {
         return skip("会话的关联关系已不存在，检查结果已失效".to_string());
     };
     let (Some(source_member), Some(target_member)) = (

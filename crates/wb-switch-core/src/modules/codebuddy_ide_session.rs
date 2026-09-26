@@ -1,7 +1,10 @@
-//! CodeBuddy IDE（国内版桌面客户端）会话复制：切换账号时把勾选会话复制到目标账号。
+//! CodeBuddy IDE（桌面客户端）会话复制：切换账号时把勾选会话复制到目标账号。
 //!
-//! 会话树与 VS Code 插件同根同构（`<数据根>/<uid>/CodeBuddyIDE/<uid>/history/<工作区目录名>/`），
-//! 复制内核、索引合并与关联登记都复用 `vscode_session` / `vscode_session_sync`，本模块只负责：
+//! 国内版（`CodeBuddy CN.app`）与国际版（`CodeBuddy.app`）**共用同一套会话存储**
+//! （`<数据根>/<uid>/CodeBuddyIDE/<uid>/history/<工作区目录名>/`）、同一份复制内核、索引合并
+//! 与关联登记，也共用同一个关联命名空间（组内 `variant` 区分 cn / ai）。两者的差异只有三处，
+//! 收敛在 [`IdeFlavor`]：来源 uid 从哪个 IDE 的登录 secret 解析、运行态如何判定、关闭/启动
+//! 哪个客户端。本模块因此只负责：
 //!
 //! - 数据根与源账号 uid 的解析（源 uid = 当前 IDE 登录 secret 里的 uid，回退本地状态文件）；
 //! - 「沿用源会话 id、冲突才重随机」的复制策略（[`vscode_session::CopyIdPolicy`]）；
@@ -11,14 +14,102 @@
 //! 在运行时由本模块负责关闭与重开；`restart = false` 时 IDE 正在运行则直接拒绝，不做「假装写入」。
 
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::modules::account::{self, get_str};
 use crate::modules::codebuddy_cn_ide;
+use crate::modules::codebuddy_ide;
 use crate::modules::codebuddy_ide_session_sync;
 use crate::modules::config::{backup_dir, utc_iso};
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::vscode_session::{self, CopyItem, CODEBUDDY_IDE_STORE, IDE_COPY};
+
+/// 会话复制 / 同步的 IDE 档位。
+///
+/// 两个 IDE 写同一棵会话树，复制内核与编排完全共用；档位只决定「来源 uid 解析」「运行态
+/// 判定」与「关闭 / 启动」三个动作落在哪个客户端上（文案与存储均不区分）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IdeFlavor {
+    /// 国内版 `CodeBuddy CN.app`。
+    Cn,
+    /// 国际版 `CodeBuddy.app`。
+    Intl,
+}
+
+impl IdeFlavor {
+    /// 日志用的客户端名（沿用各自模块既有措辞）。
+    fn label(self) -> &'static str {
+        match self {
+            Self::Cn => "CodeBuddy CN",
+            Self::Intl => "CodeBuddy",
+        }
+    }
+
+    /// 当前 IDE 登录账号 uid（来源 uid 的权威读取）；非法 uid 视为未登录。
+    pub(crate) fn active_uid(self) -> Option<String> {
+        let uid = match self {
+            Self::Cn => codebuddy_cn_ide::active_cn_ide_uid(),
+            Self::Intl => codebuddy_ide::active_intl_ide_uid(),
+        };
+        uid.filter(|uid| vscode_session::is_safe_uid(uid))
+    }
+
+    /// IDE 是否正在运行。
+    pub(crate) fn is_running(self) -> bool {
+        match self {
+            Self::Cn => codebuddy_cn_ide::is_codebuddy_cn_running(),
+            Self::Intl => codebuddy_ide::is_codebuddy_ide_running(),
+        }
+    }
+
+    /// 目标校验：账号存在 + 档位匹配 + `access_token` 非空 + 用户数据目录存在。
+    fn validate_switch_target(self, account_id: &str) -> Result<(Value, PathBuf), String> {
+        match self {
+            Self::Cn => codebuddy_cn_ide::validate_switch_target(account_id),
+            Self::Intl => codebuddy_ide::validate_switch_target(account_id),
+        }
+    }
+
+    /// 空参数时的直通切换（行为与现网一致）。
+    fn switch_account(self, account_id: &str, restart: bool) -> Result<Value, String> {
+        match self {
+            Self::Cn => codebuddy_cn_ide::switch_account(account_id, restart),
+            Self::Intl => codebuddy_ide::switch_account(account_id, restart),
+        }
+    }
+
+    fn close(self, timeout_secs: i64) -> Result<(), String> {
+        match self {
+            Self::Cn => codebuddy_cn_ide::close_codebuddy_cn(timeout_secs),
+            Self::Intl => codebuddy_ide::close_codebuddy_ide(timeout_secs),
+        }
+    }
+
+    fn launch(self) -> Result<(), String> {
+        match self {
+            Self::Cn => codebuddy_cn_ide::launch_codebuddy_cn(),
+            Self::Intl => codebuddy_ide::launch_codebuddy_ide(),
+        }
+    }
+
+    /// 注入凭证并收尾（记录当前账号 → 按需重启）；关闭动作由编排负责。
+    fn inject_and_finish(
+        self,
+        account_id: &str,
+        acc: &Value,
+        data_dir: &Path,
+        restart: bool,
+    ) -> Result<Value, String> {
+        match self {
+            Self::Cn => {
+                codebuddy_cn_ide::inject_session_and_finish(account_id, acc, data_dir, restart)
+            }
+            Self::Intl => {
+                codebuddy_ide::inject_session_and_finish(account_id, acc, data_dir, restart)
+            }
+        }
+    }
+}
 
 /// IDE 会话树的数据根（`…/CodeBuddyExtension/Data`）；目录不存在时 `None`。
 pub fn ide_data_root() -> Option<PathBuf> {
@@ -35,12 +126,22 @@ pub fn list_codebuddy_ide_sessions(uid: &str) -> Value {
     }
 }
 
-/// 列出**当前 IDE 登录账号**可复制的会话（宿主列表入口）。
+/// 列出**当前国内版 IDE 登录账号**可复制的会话（宿主列表入口）。
+pub fn list_current_codebuddy_ide_sessions() -> Value {
+    list_current_ide_sessions(IdeFlavor::Cn)
+}
+
+/// 列出**当前国际版 IDE 登录账号**可复制的会话（宿主列表入口）。
+pub fn list_current_intl_ide_sessions() -> Value {
+    list_current_ide_sessions(IdeFlavor::Intl)
+}
+
+/// 列出当前 IDE 登录账号可复制的会话。
 ///
 /// 未登录 / uid 非法时 `sourceUid` 为 `null`；数据根不存在时 `dataRoot` 为 `null`。
 /// 两个字段独立出现，前端据此区分「请先登录」与「未找到数据目录」。
-pub fn list_current_codebuddy_ide_sessions() -> Value {
-    match codebuddy_cn_ide::active_cn_ide_uid().filter(|uid| vscode_session::is_safe_uid(uid)) {
+fn list_current_ide_sessions(flavor: IdeFlavor) -> Value {
+    match flavor.active_uid() {
         Some(uid) => list_codebuddy_ide_sessions(&uid),
         None => empty_session_list(None, ide_data_root().as_deref()),
     }
@@ -59,17 +160,15 @@ fn empty_session_list(uid: Option<&str>, data_root: Option<&std::path::Path>) ->
 /// 解析复制源端：数据根 + 当前 IDE 登录账号 uid。
 ///
 /// 两个都会在关闭 IDE **之前**校验，避免「注定失败却已关掉用户的 IDE」。
-pub(crate) fn copy_source() -> Result<(PathBuf, String), String> {
+pub(crate) fn copy_source(flavor: IdeFlavor) -> Result<(PathBuf, String), String> {
     let root = ide_data_root().ok_or_else(|| {
         "未找到 CodeBuddy IDE 数据目录，无法复制会话。请先打开 CodeBuddy IDE 并登录一次。"
             .to_string()
     })?;
-    let uid = codebuddy_cn_ide::active_cn_ide_uid()
-        .filter(|uid| vscode_session::is_safe_uid(uid))
-        .ok_or_else(|| {
-            "未检测到 CodeBuddy IDE 当前登录账号，无法定位源会话。请先在 CodeBuddy IDE 中登录后重试。"
-                .to_string()
-        })?;
+    let uid = flavor.active_uid().ok_or_else(|| {
+        "未检测到 CodeBuddy IDE 当前登录账号，无法定位源会话。请先在 CodeBuddy IDE 中登录后重试。"
+            .to_string()
+    })?;
     Ok((root, uid))
 }
 
@@ -108,35 +207,59 @@ pub(crate) fn copy_codebuddy_ide_sessions_in(
     )
 }
 
-/// 切换 CodeBuddy IDE 账号，可选「先复制会话」与「把关联会话的新增内容同步过去」。
+/// 切换**国内版** CodeBuddy IDE 账号，可选「先复制会话」与「把关联会话的新增内容同步过去」。
 ///
-/// 时序：空参数直通 [`codebuddy_cn_ide::switch_account`]（行为与现网一致）→ 校验目标
-/// （账号 / `access_token` / 数据目录；复制则再校验数据根，能读到 uid 时挡源=目标）
-/// → 关闭（仅 `restart = true` **且当时在运行**）→ 再读源 uid 并复制、登记关联
-/// → 执行勾选的同步 → 注入凭证 → 重启（`restart = true` 时）。
-///
-/// 复制与同步都逐条隔离：单条失败不影响其余条目与后续切换，失败原因写在报告里
-/// （`errors` / `linkErrors`）。复制本身致命失败（如数据根缺失、目标不可写）时：IDE 是本次
-/// 由我们关闭的就 best-effort 开回来，再返回错误，避免「IDE 关了、会话也没复制成」的双输。
+/// 语义见 [`switch_ide_with_copy`]。
 pub fn switch_codebuddy_cn_ide_with_copy(
     account_id: &str,
     restart: bool,
     items: &[CopyItem],
     sync_selections: &[SyncSelection],
 ) -> Result<Value, String> {
+    switch_ide_with_copy(IdeFlavor::Cn, account_id, restart, items, sync_selections)
+}
+
+/// 切换**国际版** CodeBuddy IDE（`CodeBuddy.app`）账号；语义与国内版完全一致
+/// （同一套会话存储与关联命名空间，组内 `variant = ai` 区分），见 [`switch_ide_with_copy`]。
+pub fn switch_codebuddy_intl_ide_with_copy(
+    account_id: &str,
+    restart: bool,
+    items: &[CopyItem],
+    sync_selections: &[SyncSelection],
+) -> Result<Value, String> {
+    switch_ide_with_copy(IdeFlavor::Intl, account_id, restart, items, sync_selections)
+}
+
+/// 切换 CodeBuddy IDE 账号（两个 IDE 共用的编排内核），可选「先复制会话」与「同步关联会话」。
+///
+/// 时序：空参数直通对应档位的 `switch_account`（行为与现网一致）→ 校验目标
+/// （账号 / 档位 / `access_token` / 数据目录；复制则再校验数据根，能读到 uid 时挡源=目标）
+/// → 关闭（仅 `restart = true` **且当时在运行**）→ 再读源 uid 并复制、登记关联
+/// → 执行勾选的同步 → 注入凭证 → 重启（`restart = true` 时）。
+///
+/// 复制与同步都逐条隔离：单条失败不影响其余条目与后续切换，失败原因写在报告里
+/// （`errors` / `linkErrors`）。复制本身致命失败（如数据根缺失、目标不可写）时：IDE 是本次
+/// 由我们关闭的就 best-effort 开回来，再返回错误，避免「IDE 关了、会话也没复制成」的双输。
+fn switch_ide_with_copy(
+    flavor: IdeFlavor,
+    account_id: &str,
+    restart: bool,
+    items: &[CopyItem],
+    sync_selections: &[SyncSelection],
+) -> Result<Value, String> {
     if items.is_empty() && sync_selections.is_empty() {
-        return codebuddy_cn_ide::switch_account(account_id, restart);
+        return flavor.switch_account(account_id, restart);
     }
     let acc =
         account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
     let target_uid = get_str(&acc, "uid")
         .ok_or_else(|| "账号缺少 uid，无法定位 CodeBuddy IDE 会话目录".to_string())?;
 
-    // 与 [`codebuddy_cn_ide::switch_account`] 同序：先把「注定失败」的目标挡在关闭之前。
-    let (_, data_dir) = codebuddy_cn_ide::validate_switch_target(account_id)?;
+    // 与对应档位的 `switch_account` 同序：先把「注定失败」的目标挡在关闭之前。
+    let (_, data_dir) = flavor.validate_switch_target(account_id)?;
 
     // 复制与同步都拒绝「IDE 正在运行」：手动模式（`restart = false`）直接报错，不假装写入。
-    let ide_running = codebuddy_cn_ide::is_codebuddy_cn_running();
+    let ide_running = flavor.is_running();
     if !restart && ide_running {
         return Err(
             "检测到 CodeBuddy IDE 正在运行，请先完全退出后再操作，否则写入会被 IDE 覆盖。"
@@ -153,7 +276,7 @@ pub fn switch_codebuddy_cn_ide_with_copy(
                     .to_string(),
             );
         }
-        match codebuddy_cn_ide::active_cn_ide_uid().filter(|uid| vscode_session::is_safe_uid(uid)) {
+        match flavor.active_uid() {
             Some(uid) if uid == target_uid => {
                 return Err("源账号与目标账号相同，无需复制会话".to_string());
             }
@@ -171,22 +294,22 @@ pub fn switch_codebuddy_cn_ide_with_copy(
     // 失败才负责开回来；`restart = true` 但本来没运行，失败路径不得把没开过的 IDE 拉起来。
     let closed = restart && ide_running;
     if closed {
-        eprintln!("[codebuddy-ide-session] closing CodeBuddy CN…");
-        codebuddy_cn_ide::close_codebuddy_cn(20)?;
+        eprintln!("[codebuddy-ide-session] closing {}…", flavor.label());
+        flavor.close(20)?;
     }
 
     let copy_report = if items.is_empty() {
         None
     } else {
-        let (root, source_uid) = match copy_source() {
+        let (root, source_uid) = match copy_source(flavor) {
             Ok(source) => source,
             Err(error) => {
-                relaunch_if_closed(closed);
+                relaunch_if_closed(flavor, closed);
                 return Err(error);
             }
         };
         if source_uid == target_uid {
-            relaunch_if_closed(closed);
+            relaunch_if_closed(flavor, closed);
             return Err("源账号与目标账号相同，无需复制会话".to_string());
         }
         match copy_codebuddy_ide_sessions(&root, &source_uid, &target_uid, items) {
@@ -204,7 +327,7 @@ pub fn switch_codebuddy_cn_ide_with_copy(
                 Some(report)
             }
             Err(error) => {
-                relaunch_if_closed(closed);
+                relaunch_if_closed(flavor, closed);
                 return Err(error);
             }
         }
@@ -215,7 +338,7 @@ pub fn switch_codebuddy_cn_ide_with_copy(
     } else {
         // 同步失败不阻断切换：报告形状与成功路径一致，错误挂在 `errors` 里。
         Some(
-            match codebuddy_ide_session_sync::sync_selected(&acc, sync_selections) {
+            match codebuddy_ide_session_sync::sync_selected_for(flavor, &acc, sync_selections) {
                 Ok(report) => report,
                 Err(error) => json!({
                     "synced": [],
@@ -235,7 +358,7 @@ pub fn switch_codebuddy_cn_ide_with_copy(
         .map(|report| count_items(report, "synced"))
         .unwrap_or(0);
 
-    match codebuddy_cn_ide::inject_session_and_finish(account_id, &acc, &data_dir, restart) {
+    match flavor.inject_and_finish(account_id, &acc, &data_dir, restart) {
         Ok(mut result) => {
             if let Some(report) = copy_report {
                 result["sessionCopy"] = report;
@@ -263,7 +386,7 @@ pub fn switch_codebuddy_cn_ide_with_copy(
             };
             // 注入失败且 IDE 是本次我们关闭的：best-effort 开回来再报错，别让用户两头落空。
             if closed {
-                match codebuddy_cn_ide::launch_codebuddy_cn() {
+                match flavor.launch() {
                     Ok(()) => Err(error),
                     Err(launch_error) => Err(format!("{error}\n\n{launch_error}")),
                 }
@@ -284,9 +407,9 @@ fn count_items(report: &Value, key: &str) -> usize {
 }
 
 /// 失败兜底：只在本次确实关掉 IDE 时才 best-effort 开回来。
-fn relaunch_if_closed(closed: bool) {
+fn relaunch_if_closed(flavor: IdeFlavor, closed: bool) {
     if closed {
-        let _ = codebuddy_cn_ide::launch_codebuddy_cn();
+        let _ = flavor.launch();
     }
 }
 
@@ -779,6 +902,36 @@ mod tests {
         }];
         let error =
             switch_codebuddy_cn_ide_with_copy(&missing, true, &[], &selections).unwrap_err();
+        assert!(error.contains("账号不存在"), "{error}");
+    }
+
+    /// 国际版入口与国内版共用同一编排内核：账号不存在时同样在关闭 IDE **之前**失败
+    /// （复制与仅同步两条入口都断言）。
+    #[test]
+    fn intl_switch_with_copy_validates_before_closing_ide() {
+        let missing = format!("no-such-account-{}", uuid::Uuid::new_v4().simple());
+        let items = [CopyItem {
+            workspace_hash: WS.to_string(),
+            conversation_id: CONV_OLD.to_string(),
+        }];
+        let error = switch_codebuddy_intl_ide_with_copy(&missing, true, &items, &[]).unwrap_err();
+        assert!(error.contains("账号不存在"), "{error}");
+
+        let selections = [SyncSelection {
+            group_id: "group-1".to_string(),
+            preview_token: "00000000-0000-4000-8000-000000000000".to_string(),
+            mode: crate::modules::session_link::SyncMode::FastForward,
+        }];
+        let error =
+            switch_codebuddy_intl_ide_with_copy(&missing, true, &[], &selections).unwrap_err();
+        assert!(error.contains("账号不存在"), "{error}");
+    }
+
+    /// 空参数（既不复制的也不同步）直通国际版 `switch_account`，不进入复制编排。
+    #[test]
+    fn intl_switch_without_selection_passes_through() {
+        let missing = format!("no-such-account-{}", uuid::Uuid::new_v4().simple());
+        let error = switch_codebuddy_intl_ide_with_copy(&missing, true, &[], &[]).unwrap_err();
         assert!(error.contains("账号不存在"), "{error}");
     }
 

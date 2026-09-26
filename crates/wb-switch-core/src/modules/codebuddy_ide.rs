@@ -21,9 +21,10 @@ use crate::modules::variant::{codebuddy_domain_for, WbVariant};
 use crate::modules::process;
 use crate::modules::process::run_cmd_timeout as run_cmd;
 use crate::modules::vscode_cn_inject::{
-    codebuddy_ide_data_dir, inject_codebuddy_ide_secret, read_codebuddy_ide_secret,
-    CodeBuddyIdeFlavor,
+    codebuddy_ide_data_dir, has_secret_row_for, inject_codebuddy_ide_secret,
+    read_codebuddy_ide_secret, CodeBuddyIdeFlavor, CODEBUDDY_INTL_TARGET,
 };
+use crate::modules::vscode_session::is_safe_uid;
 
 fn intl_data_dir() -> Option<PathBuf> {
     codebuddy_ide_data_dir(CodeBuddyIdeFlavor::Intl)
@@ -200,6 +201,38 @@ fn parse_token_from_secret(secret: &str) -> Option<(Option<String>, String)> {
         }
     }
     Some((None, trimmed.to_string()))
+}
+
+/// 当前国际版 IDE 登录账号的 uid（用于定位可复制的会话目录）。
+///
+/// 与国内版 [`crate::modules::codebuddy_cn_ide::active_cn_ide_uid`] 同序：本机 IDE 登录
+/// secret 解析 uid → 回退本地状态文件记录的账号 id → 账号库 uid。非法 uid（`default` /
+/// `Public` / 路径穿越）视为未登录（返回 `None`），**不回退顶替**——否则会复制错账号树。
+pub fn active_intl_ide_uid() -> Option<String> {
+    resolve_active_uid(
+        read_intl_secret(None).ok().flatten(),
+        active_account_id_from_state(),
+        |id| account::find_account(id).and_then(|acc| get_str(&acc, "uid")),
+    )
+}
+
+/// [`active_intl_ide_uid`] 的可测内核：secret → 状态文件账号 id → 账号库。
+///
+/// 回退链收敛在一处，调用方不再各写一份；`uid_of_account` 由调用方注入（生产走账号库，
+/// 单测传桩），使单测无需读取钥匙串、也不触碰真实 `~/.wb-switch`。
+fn resolve_active_uid(
+    secret: Option<String>,
+    state_account_id: Option<String>,
+    uid_of_account: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    secret
+        .as_deref()
+        .and_then(parse_token_from_secret)
+        .and_then(|(uid, _token)| uid)
+        .map(|uid| uid.trim().to_string())
+        .filter(|uid| !uid.is_empty())
+        .or_else(|| state_account_id.and_then(|id| uid_of_account(&id)))
+        .filter(|uid| is_safe_uid(uid))
 }
 
 fn match_account_for_token(uid: Option<&str>, token: &str) -> Option<Value> {
@@ -987,6 +1020,10 @@ pub fn status() -> Value {
     let installed = codebuddy_ide_app_path().is_some();
     let db_exists = db_path.as_ref().map(|p| p.exists()).unwrap_or(false);
     let running = is_codebuddy_ide_running();
+    // 登录态 = `state.vscdb` 里是否存在会话 secret 行：只查 key、不解密（macOS 解密会弹
+    // 钥匙串授权，绝不能进这条轮询路径）。查询失败/文件不存在一律 false，仅用于文案与入口判定。
+    let logged_in =
+        has_secret_row_for(&CODEBUDDY_INTL_TARGET, data_dir.as_deref()).unwrap_or(false);
 
     let mut active_account_id = active_account_id_from_state();
     let mut active_account_name: Option<String> = None;
@@ -1003,6 +1040,7 @@ pub fn status() -> Value {
     json!({
         "installed": installed,
         "running": running,
+        "loggedIn": logged_in,
         "dataDir": data_dir.map(|p| p.to_string_lossy().to_string()),
         "dbPath": db_path.map(|p| p.to_string_lossy().to_string()),
         "dbExists": db_exists,
@@ -1016,6 +1054,21 @@ pub fn status() -> Value {
 
 /// 切换 CodeBuddy IDE 账号：关进程 → 注入 secret → 启动。
 pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> {
+    let (acc, data_dir) = validate_switch_target(account_id)?;
+
+    if restart {
+        eprintln!("[codebuddy-ide] closing CodeBuddy…");
+        close_codebuddy_ide(20)?;
+    }
+
+    inject_session_and_finish(account_id, &acc, &data_dir, restart)
+}
+
+/// 切换前置校验：账号存在 + 是国际版（WorkBuddy AI）账号 + `access_token` 非空 + 用户数据目录存在。
+///
+/// 必须在关闭 IDE **之前**执行：账号不存在、档位不符、token 为空、数据目录缺失这类「无论
+/// 怎么关都注定失败」的目标，不该让用户的 IDE 被关掉。幂等且廉价，注入前会再次使用返回的数据目录。
+pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf), String> {
     let acc =
         account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
     if WbVariant::from_account(&acc) != WbVariant::Ai {
@@ -1034,15 +1087,21 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
             data_dir.display()
         ));
     }
+    Ok((acc, data_dir))
+}
 
-    if restart {
-        eprintln!("[codebuddy-ide] closing CodeBuddy…");
-        close_codebuddy_ide(20)?;
-    }
-
-    let session = build_session_json(&acc);
+/// 「已可切换」后执行：注入 secret → 记录当前账号 → 按需重启（关闭动作由调用方负责）。
+///
+/// 会话复制等前置写入完成后调用的就是这一步，因此它不碰进程关闭逻辑。
+pub(crate) fn inject_session_and_finish(
+    account_id: &str,
+    acc: &Value,
+    data_dir: &Path,
+    restart: bool,
+) -> Result<Value, String> {
+    let session = build_session_json(acc);
     eprintln!("[codebuddy-ide] injecting secret…");
-    let db_path = inject_intl_secret(&session, Some(&data_dir)).map_err(|err| {
+    let db_path = inject_intl_secret(&session, Some(data_dir)).map_err(|err| {
         if err.contains("Safe Storage") || err.contains("Keychain") {
             format!(
                 "注入登录状态失败：{err}\n\n请先手动打开 CodeBuddy 并登录一次，确保 Keychain 中存在「CodeBuddy Safe Storage」条目后再试。"
@@ -1061,14 +1120,14 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
 
     Ok(json!({
         "ok": true,
-        "account": account::account_display_name(&acc),
+        "account": account::account_display_name(acc),
         "accountId": account_id,
         "dbPath": db_path.to_string_lossy(),
         "restarted": restart,
         "message": if restart {
-            format!("已切换 CodeBuddy IDE 到 {} 并重启", account::account_display_name(&acc))
+            format!("已切换 CodeBuddy IDE 到 {} 并重启", account::account_display_name(acc))
         } else {
-            format!("已写入 CodeBuddy IDE 凭证（{}）；请手动重启 CodeBuddy 生效", account::account_display_name(&acc))
+            format!("已写入 CodeBuddy IDE 凭证（{}）；请手动重启 CodeBuddy 生效", account::account_display_name(acc))
         },
     }))
 }
@@ -1286,5 +1345,59 @@ mod tests {
             process::filter_ps_rows(&stdout, &macos_ide_bundle_patterns(None), self_pid);
         let bundle_pids: Vec<u32> = bundle_kept.iter().map(|(pid, _)| *pid).collect();
         assert_eq!(bundle_pids, vec![6001, 6004]);
+    }
+
+    /// secret 命中：`accessToken` 为 `uid+token` 形态时取前缀作为 uid。
+    #[test]
+    fn active_uid_prefers_secret() {
+        let secret = Some(r#"{"accessToken":"uid-secret+TOKEN"}"#.to_string());
+        let uid = resolve_active_uid(secret, Some("acc-from-state".to_string()), |_| {
+            Some("uid-from-account".to_string())
+        });
+        assert_eq!(uid.as_deref(), Some("uid-secret"));
+    }
+
+    /// secret 读不出 uid（或没有 secret）时回退状态文件记录的账号 id → 账号库 uid。
+    #[test]
+    fn active_uid_falls_back_to_state_then_account_library() {
+        let state_only = resolve_active_uid(None, Some("acc-from-state".to_string()), |id| {
+            (id == "acc-from-state").then(|| "uid-from-account".to_string())
+        });
+        assert_eq!(state_only.as_deref(), Some("uid-from-account"));
+
+        // secret 存在但没有可解析的 uid：同样走回退链（与国内版 `active_cn_ide_uid` 同序）。
+        let no_uid_in_secret = resolve_active_uid(
+            Some(r#"{"token":"T1"}"#.to_string()),
+            Some("acc-from-state".to_string()),
+            |_| Some("uid-from-account".to_string()),
+        );
+        assert_eq!(no_uid_in_secret.as_deref(), Some("uid-from-account"));
+
+        // 状态文件指向的账号已不在账号库：视为未登录。
+        assert_eq!(
+            resolve_active_uid(None, Some("acc-gone".to_string()), |_| None),
+            None
+        );
+    }
+
+    /// 非法 uid 一律视为未登录，且**不得**回退到状态文件顶替（否则会复制错账号树）。
+    #[test]
+    fn active_uid_rejects_unsafe_uid_without_fallback() {
+        for uid in ["default", "Public", "a/b", "a\\b", ".."] {
+            // 用 json! 序列化，保证反斜杠等字符按 JSON 规则转义（手拼字符串会变成 \b 转义符）。
+            let secret = json!({ "accessToken": format!("{uid}+TOKEN") }).to_string();
+            let from_secret =
+                resolve_active_uid(Some(secret), Some("acc-from-state".to_string()), |_| {
+                    Some("uid-from-account".to_string())
+                });
+            assert_eq!(from_secret, None, "secret uid={uid:?} 应视为未登录");
+        }
+        // 账号库回退拿到非法 uid 时同样拒绝。
+        assert_eq!(
+            resolve_active_uid(None, Some("acc".to_string()), |_| Some(
+                "default".to_string()
+            )),
+            None
+        );
     }
 }

@@ -342,16 +342,69 @@ pub async fn detect_jetbrains_account() -> Result<Value, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// POST /api/codebuddy-ide/switch —— 注入凭证到 CodeBuddy IDE（国际版），可选复制 / 同步会话。
+///
+/// `copySessions` 非空时，切换前先把勾选的会话复制到目标账号（默认沿用会话 id，
+/// 目标已有同 id 时才重随机）并登记关联；`syncSelections` 非空时，再把关联会话的
+/// 新增内容同步过去（只同步不复制同样可用）。两者都为空时行为与纯切换逐字一致。
+///
+/// async + spawn_blocking：切换会关闭并重启 CodeBuddy，可能阻塞数十秒，
+/// 与 WorkBuddy 切换同理，若在同步 command（主线程）执行会卡死整个 UI。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn switch_codebuddy_ide_account(
     account_id: String,
     restart: Option<bool>,
+    copy_sessions: Option<Vec<vscode_session::CopyItem>>,
+    sync_selections: Option<Value>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
         return Err("缺少 accountId".to_string());
     }
+    let restart = restart.unwrap_or(true);
+    let items = copy_sessions.unwrap_or_default();
+    // 入参形状由 core 校验（缺 groupId / previewToken / mode 一律拒绝）；这里只做透传。
+    let sync_selections = session::parse_sync_selections(sync_selections.as_ref())?;
     tauri::async_runtime::spawn_blocking(move || {
-        codebuddy_ide::switch_account(&account_id, restart.unwrap_or(true))
+        if items.is_empty() && sync_selections.is_empty() {
+            codebuddy_ide::switch_account(&account_id, restart)
+        } else {
+            codebuddy_ide_session::switch_codebuddy_intl_ide_with_copy(
+                &account_id,
+                restart,
+                &items,
+                &sync_selections,
+            )
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GET /api/codebuddy-ide/sessions —— 列出当前国际版 IDE 账号可复制的会话。
+///
+/// async + spawn_blocking：会扫描 IDE 会话目录（可能较大）并读取本机登录 secret，
+/// 避免阻塞主线程。未登录/未安装时返回空列表而非报错（供前端渲染空态）。
+#[tauri::command]
+pub async fn list_codebuddy_intl_ide_sessions() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(codebuddy_ide_session::list_current_intl_ide_sessions)
+        .await
+        .map_err(|error| format!("列出 CodeBuddy IDE 会话失败: {error}"))
+}
+
+/// POST /api/codebuddy-ide/session-links —— 预览「当前国际版 IDE 账号 → 目标账号」可同步的关联会话。
+///
+/// 只读：每组的 `defaultChecked` 与 `availableModes` 是前端勾选权限的唯一来源。
+/// async + spawn_blocking：会扫描会话目录并读取正文，避免阻塞 UI。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn codebuddy_intl_ide_session_links_preview(
+    target_account_id: String,
+) -> Result<Value, String> {
+    if target_account_id.trim().is_empty() {
+        return Err("缺少 targetAccountId".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        codebuddy_ide_session_sync::links_preview_intl(&target)
     })
     .await
     .map_err(|e| e.to_string())?
