@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { ArrowUp, Loader2, MessagesSquare, Settings, Sparkles, User } from "lucide-react";
+import { ArrowUp, Loader2, MessagesSquare, Play, Settings, Sparkles, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -11,19 +11,15 @@ import TokenStatsPage from "@/pages/TokenStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { CompanionDemoDialog } from "@/components/companion-demo-dialog";
-import { DemoAction } from "@/components/demo-action";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { Badge } from "@/components/ui/badge";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
-  AlertDialogTitle, AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import companionTrayIcon from "@/assets/agent-companion-tray.png";
-import { demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
+import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
 import { changeCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useRotateDeferredNotice } from "@/lib/use-rotate-deferred-notice";
@@ -31,8 +27,20 @@ import { useUpdateState } from "@/lib/use-update-state";
 import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
 import { useAccountsStore } from "@/stores/accounts";
 
+/**
+ * 悬浮窗面板：从 footer 向上滑出，开关与设置同屏。
+ *
+ * footer 只保留一个「图标位」——点图标弹面板，而不是并排第二个按钮：
+ * 开关与设置都在面板里，关掉悬浮窗时也不必留一个灰掉的死图标。
+ * 面板关闭后进入设置的常驻路径仍是：设置页 → Agent Companion → 悬浮窗设置。
+ */
+const COMPANION_MENU_CONTENT = { side: "top", align: "start", sideOffset: 8, className: "w-56" } as const;
+
 function CompanionFooter() {
   const { enabled, busy } = useCompanionEnabled();
+  /** 面板打开时收起 hover tooltip——两者都朝上弹，同时出现会叠在一起。 */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [tipOpen, setTipOpen] = useState(false);
 
   async function onToggle() {
     if (enabled === null) return;
@@ -53,69 +61,89 @@ function CompanionFooter() {
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-1 text-sidebar-foreground">
-      <AlertDialog>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <AlertDialogTrigger asChild>
-              <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗" disabled={enabled === null || busy}>
-                <img src={companionTrayIcon} alt="" className={cn("size-6 object-contain transition-all", !enabled && "grayscale opacity-55")} />
-              </Button>
-            </AlertDialogTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="top">会话悬浮窗</TooltipContent>
-        </Tooltip>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{enabled ? "关闭会话悬浮窗？" : "开启会话悬浮窗？"}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {enabled
-                ? "关闭后悬浮栏将隐藏，并停止 wb-switch 中的会话监听。"
-                : "开启后会显示悬浮栏，并开始监听会话状态。"}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void onToggle()}>{enabled ? "确认关闭" : "确认开启"}</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <Tooltip>
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+      <Tooltip open={tipOpen && !menuOpen} onOpenChange={setTipOpen}>
         <TooltipTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="悬浮窗设置" disabled={!enabled} onClick={() => void openSettings()}>
-            <Settings className="size-4" aria-hidden="true" />
-          </Button>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗" disabled={enabled === null || busy}>
+              <img src={companionTrayIcon} alt="" className={cn("size-6 object-contain transition-all", !enabled && "grayscale opacity-55")} />
+            </Button>
+          </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">悬浮窗设置</TooltipContent>
+        <TooltipContent side="top">会话悬浮窗</TooltipContent>
       </Tooltip>
-    </div>
+      <DropdownMenuContent {...COMPANION_MENU_CONTENT}>
+        {/* 整行即开关（方向键 / Enter 同语义）；行尾 Switch 只作视觉，点击穿透到行上，避免出现两个焦点。 */}
+        <DropdownMenuItem
+          className="gap-3"
+          disabled={enabled === null || busy}
+          onSelect={(event) => {
+            // 面板保持打开：切换是异步的，让用户看到开关落定。
+            event.preventDefault();
+            void onToggle();
+          }}
+        >
+          <span className="min-w-0 flex-1">会话悬浮窗</span>
+          <Switch checked={Boolean(enabled)} tabIndex={-1} aria-hidden className="pointer-events-none" />
+        </DropdownMenuItem>
+        <p className="px-2.5 pb-1 text-xs leading-4 text-muted-foreground">
+          {enabled ? "关闭后悬浮栏将隐藏，并停止 wb-switch 中的会话监听。" : "开启后会显示悬浮栏，并开始监听会话状态。"}
+        </p>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={enabled === null || busy || !enabled} onSelect={() => void openSettings()}>
+          <Settings />悬浮窗设置
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 /**
- * 演示模式的悬浮窗入口：与桌面正式版同形，但点击打开的是只读演示浮层。
- * 设置入口沿用演示模式的禁用约定（`DemoAction`），不触发任何本机命令。
+ * 演示模式的悬浮窗入口：与桌面正式版同形（一个图标位 + 向上弹出的面板），
+ * 但面板里的开关与设置只提示「演示不可用」，不触发任何本机命令；
+ * 多一条「查看悬浮栏演示」，打开只读演示浮层。
  */
 function CompanionDemoFooter() {
   const [open, setOpen] = useState(false);
+  /** 面板打开时收起 hover tooltip，与正式版同一处理。 */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [tipOpen, setTipOpen] = useState(false);
+
+  /** 演示面板里的行：保持可聚焦（键盘也能走一遍），但只说明不可用。 */
+  function unavailable(event: Event) {
+    event.preventDefault();
+    toast.info(DEMO_UNAVAILABLE_MESSAGE);
+  }
 
   return (
-    <div className="flex min-w-0 items-center gap-1 text-sidebar-foreground">
-      <Tooltip>
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+      <Tooltip open={tipOpen && !menuOpen} onOpenChange={setTipOpen}>
         <TooltipTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗" onClick={() => setOpen(true)}>
-            <img src={companionTrayIcon} alt="" className="size-6 object-contain" />
-          </Button>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗">
+              <img src={companionTrayIcon} alt="" className="size-6 object-contain" />
+            </Button>
+          </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent side="top">会话悬浮窗</TooltipContent>
       </Tooltip>
-      <DemoAction>
-        <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="悬浮窗设置">
-          <Settings className="size-4" aria-hidden="true" />
-        </Button>
-      </DemoAction>
+      <DropdownMenuContent {...COMPANION_MENU_CONTENT}>
+        <DropdownMenuItem className="gap-3" onSelect={unavailable}>
+          <span className="min-w-0 flex-1">会话悬浮窗</span>
+          <Switch checked tabIndex={-1} aria-hidden className="pointer-events-none" />
+        </DropdownMenuItem>
+        <p className="px-2.5 pb-1 text-xs leading-4 text-muted-foreground">关闭后悬浮栏将隐藏，并停止 wb-switch 中的会话监听。</p>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={unavailable}>
+          <Settings />悬浮窗设置
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => setOpen(true)}>
+          <Play />查看悬浮栏演示
+        </DropdownMenuItem>
+      </DropdownMenuContent>
       <CompanionDemoDialog open={open} onOpenChange={setOpen} />
-    </div>
+    </DropdownMenu>
   );
 }
 
