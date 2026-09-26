@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
 import {
+  ArrowUpDown,
   CalendarDays,
   CalendarRange,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   Loader2,
@@ -1236,6 +1239,76 @@ function OfficialRequestRow({
   );
 }
 
+/** 请求用量明细每页条数；明细由后端一次性返回，分页只控制单页渲染量 */
+const REQUEST_PAGE_SIZE = 100;
+
+/** 请求用量明细的排序维度：请求时间（默认倒序）与消耗 */
+type RequestSortKey = "time" | "credit";
+type SortDirection = "desc" | "asc";
+
+/** 明细行的时间戳：requestTime 是「YYYY-MM-DD HH:mm:ss」文本，按字典序即时间序 */
+function requestSortValue(request: CreditOfficialUsageRequest, key: RequestSortKey): number | string {
+  if (key === "credit") return request.credit ?? 0;
+  return request.requestTime ?? "";
+}
+
+function compareRequests(
+  left: CreditOfficialUsageRequest,
+  right: CreditOfficialUsageRequest,
+  key: RequestSortKey,
+  direction: SortDirection,
+): number {
+  const leftValue = requestSortValue(left, key);
+  const rightValue = requestSortValue(right, key);
+  let order: number;
+  if (typeof leftValue === "number" && typeof rightValue === "number") {
+    order = leftValue - rightValue;
+  } else {
+    order = String(leftValue).localeCompare(String(rightValue));
+  }
+  if (order === 0) {
+    // 同值时用请求 ID 兜底，保证排序稳定（数组排序在 V8 中稳定，但仍显式保证）
+    order = (left.requestId ?? "").localeCompare(right.requestId ?? "");
+  }
+  return direction === "desc" ? -order : order;
+}
+
+function SortableHeader({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onSort,
+  align = "left",
+}: {
+  label: string;
+  sortKey: RequestSortKey;
+  activeKey: RequestSortKey;
+  direction: SortDirection;
+  onSort: (key: RequestSortKey) => void;
+  align?: "left" | "right";
+}) {
+  const active = activeKey === sortKey;
+  return (
+    <th
+      className={`px-3 py-2.5 font-medium ${align === "right" ? "text-right" : ""}`}
+      aria-sort={active ? (direction === "desc" ? "descending" : "ascending") : "none"}
+    >
+      <button
+        type="button"
+        className={`inline-flex cursor-pointer items-center gap-1 transition-colors hover:text-foreground ${
+          active ? "text-foreground" : ""
+        } ${align === "right" ? "flex-row-reverse" : ""}`}
+        onClick={() => onSort(sortKey)}
+        title={active ? (direction === "desc" ? "当前降序，点击切换升序" : "当前升序，点击切换降序") : "点击排序"}
+      >
+        {label}
+        <ArrowUpDown className={`size-3 shrink-0 ${active ? "opacity-100" : "opacity-40"}`} />
+      </button>
+    </th>
+  );
+}
+
 function OfficialUsageBreakdown({
   officialUsage,
   accountId,
@@ -1243,7 +1316,25 @@ function OfficialUsageBreakdown({
   officialUsage?: CreditOfficialUsage;
   accountId: string | null;
 }) {
+  const [sortKey, setSortKey] = useState<RequestSortKey>("time");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [page, setPage] = useState(0);
   const officialAvailable = isOfficialUsageAvailable(officialUsage);
+
+  // 换账号或换排序都回到第一页；重新采集后数据整体更换，同样重置
+  useEffect(() => {
+    setPage(0);
+  }, [accountId, sortKey, sortDirection, officialUsage?.collectedAt]);
+
+  const toggleSort = (key: RequestSortKey) => {
+    if (key === sortKey) {
+      setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+    setSortKey(key);
+    // 新列默认从「最大」开始看：消耗列先看最高消耗，时间列看最近请求
+    setSortDirection("desc");
+  };
   const account = accountId ? officialAccountFor(officialUsage, accountId) : undefined;
 
   if (!officialAvailable || !officialUsage) {
@@ -1279,13 +1370,21 @@ function OfficialUsageBreakdown({
     : officialUsage.accounts.some((item) => item.detailTruncated);
   const showAccount = !account;
 
+  const sortedRequests = [...requests].sort((left, right) =>
+    compareRequests(left, right, sortKey, sortDirection),
+  );
+  const pageCount = Math.max(1, Math.ceil(sortedRequests.length / REQUEST_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), pageCount - 1);
+  const pageStart = safePage * REQUEST_PAGE_SIZE;
+  const pageRows = sortedRequests.slice(pageStart, pageStart + REQUEST_PAGE_SIZE);
+
   return (
     <div className="min-w-0">
       {detailTruncated && (
         <div className="flex items-start gap-2 border-b bg-amber-500/[0.06] px-4 py-2.5 text-xs text-amber-800 sm:px-5">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           <span>
-            仅展示最近 {officialUsage.detailLimitPerAccount} 条请求明细；合计使用官方返回的全部 {formatCredits(totalRequests)} 条请求。
+            最多展示每账号最近 {officialUsage.detailLimitPerAccount} 条请求明细；合计使用官方返回的全部 {formatCredits(totalRequests)} 条请求。
           </span>
         </div>
       )}
@@ -1298,16 +1397,29 @@ function OfficialUsageBreakdown({
           <table className="w-full min-w-[700px] text-left text-[11px]">
             <thead className="sticky top-0 bg-muted/95 text-muted-foreground">
               <tr>
-                <th className="px-3 py-2.5 font-medium">请求时间</th>
+                <SortableHeader
+                  label="请求时间"
+                  sortKey="time"
+                  activeKey={sortKey}
+                  direction={sortDirection}
+                  onSort={toggleSort}
+                />
                 {showAccount && <th className="px-3 py-2.5 font-medium">账号</th>}
-                <th className="px-3 py-2.5 text-right font-medium">消耗</th>
+                <SortableHeader
+                  label="消耗"
+                  sortKey="credit"
+                  activeKey={sortKey}
+                  direction={sortDirection}
+                  onSort={toggleSort}
+                  align="right"
+                />
                 <th className="px-3 py-2.5 font-medium">模型</th>
                 <th className="px-3 py-2.5 font-medium">客户端</th>
                 <th className="px-3 py-2.5 font-medium">请求 ID</th>
               </tr>
             </thead>
             <tbody>
-              {requests.map((request) => (
+              {pageRows.map((request) => (
                 <OfficialRequestRow
                   key={`${request.requestId}-${request.requestTime}`}
                   request={request}
@@ -1316,6 +1428,39 @@ function OfficialUsageBreakdown({
               ))}
             </tbody>
           </table>
+          {sortedRequests.length > REQUEST_PAGE_SIZE && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+              <span>
+                第 {pageStart + 1}–{Math.min(pageStart + REQUEST_PAGE_SIZE, sortedRequests.length)} 条，共{" "}
+                {sortedRequests.length} 条
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={safePage === 0}
+                  onClick={() => setPage(safePage - 1)}
+                >
+                  <ChevronLeft className="size-3.5" />
+                  上一页
+                </Button>
+                <span className="tabular-nums">
+                  {safePage + 1} / {pageCount}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={safePage >= pageCount - 1}
+                  onClick={() => setPage(safePage + 1)}
+                >
+                  下一页
+                  <ChevronRight className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
