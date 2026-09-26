@@ -33,7 +33,7 @@ import { TimePicker } from "@/components/ui/time-picker";
 import * as api from "@/lib/api";
 import { canPersistErrorLog } from "@/lib/error-report";
 import { getThemePreference, setThemePreference, type ThemePreference } from "@/lib/theme";
-import { SUPPORTED_TOOLS, setToolEnabled, useSupportedTools } from "@/lib/supported-tools";
+import { SUPPORTED_TOOLS, setToolEnabled, useSupportedTools, type ToolId } from "@/lib/supported-tools";
 import type {
   AccountMeta,
   AppNotification,
@@ -52,9 +52,10 @@ import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib
 import { useUpdateState } from "@/lib/use-update-state";
 import { changeCompanionEnabled, reloadCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { cn } from "@/lib/utils";
-import { accountVariant, variantSupportsCheckin, variantSupportsTravel } from "@/lib/variant";
+import { accountVariant, variantSupportsCheckin, variantSupportsTravel, variantUsesIntlCodebuddyIde } from "@/lib/variant";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { DemoAction } from "@/components/demo-action";
+import { CodeBuddyAiIdeMark, CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyAiMark, WorkBuddyMark } from "@/components/product-marks";
 import { useAccountsStore } from "@/stores/accounts";
 
 interface SettingsGroupProps {
@@ -1845,6 +1846,16 @@ function AppearanceCard() {
  */
 function SupportedToolsCard() {
   const enabled = useSupportedTools();
+  const variant = useAccountsStore((s) => s.variant);
+  /** 行内产品图标：与账号页页顶徽标同一套档位规则（国际版用国际版字块）。 */
+  const marks: Record<ToolId, (size: number) => ReactNode> = {
+    workbuddy: (size) => (variant === "ai" ? <WorkBuddyAiMark size={size} /> : <WorkBuddyMark size={size} />),
+    codebuddyIde: (size) =>
+      variantUsesIntlCodebuddyIde(variant) ? <CodeBuddyAiIdeMark size={size} /> : <CodeBuddyCnIdeMark size={size} />,
+    codebuddyCli: (size) => <CodeBuddyMark size={size} />,
+    vscodeExt: (size) => <VscodeExtMark size={size} />,
+    jetbrains: (size) => <JetbrainsMark size={size} />,
+  };
 
   return (
     <SettingsGroup id="settings-tools" title="支持工具">
@@ -1853,7 +1864,12 @@ function SupportedToolsCard() {
           <SettingsFieldRow
             key={tool.id}
             className={index === SUPPORTED_TOOLS.length - 1 ? "border-b-0" : undefined}
-            label={tool.label}
+            label={
+              <span className="flex items-center gap-2.5">
+                {marks[tool.id](20)}
+                <span>{tool.label}</span>
+              </span>
+            }
             description={tool.description}
             htmlFor={`tools-${tool.id}`}
           >
