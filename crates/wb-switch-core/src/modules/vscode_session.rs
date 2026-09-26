@@ -1,8 +1,13 @@
-//! VS Code 内 CodeBuddy 扩展（`tencent-cloud.coding-copilot`）会话复制。
+//! 扩展数据仓（VS Code 内 CodeBuddy 插件 / CodeBuddy IDE 桌面客户端）会话复制。
 //!
-//! 切换 VS Code CodeBuddy 扩展账号时，可把「当前扩展账号」的会话（正文 + 索引）
-//! 复制到「目标账号」目录，使目标账号重新打开 VS Code 后能在对应工作区看到并续聊。
-//! 与桌面版 `session.rs` 同构：**本地目录复制 + 新 id 重写 + 合并工作区索引**。
+//! 两棵树同根同构，只差客户端段目录名（见 [`SessionStoreSpec`]）：
+//! - VS Code 插件：`<root>/<uid>/VSCode/<uid>/history`（[`VSCODE_STORE`]）；
+//! - CodeBuddy IDE：`<root>/<uid>/CodeBuddyIDE/<uid>/history`（[`CODEBUDDY_IDE_STORE`]）。
+//!
+//! 切换账号时，可把「当前账号」的会话（正文 + 索引）复制到「目标账号」目录，
+//! 使目标账号重新打开客户端后能在对应工作区看到并续聊。与桌面版 `session.rs` 同构：
+//! **本地目录复制 + 合并工作区索引**；插件侧副本一律取新 id（[`CopyIdPolicy::AlwaysNew`]），
+//! IDE 侧默认沿用源 id、仅冲突时重随机（[`CopyIdPolicy::KeepUnlessConflict`]）。
 //!
 //! 存储布局（Windows 实测）：
 //! ```text
@@ -43,12 +48,36 @@ use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::vscode_ext;
 use crate::modules::vscode_session_sync;
 
-/// 扩展数据根目录名（`<平台本地数据根>\CodeBuddyExtension\Data`）。
-const EXT_APP_DIR: &str = "CodeBuddyExtension";
-/// IDE 类型目录名。
-const IDE_DIR: &str = "VSCode";
 /// 会话历史目录名。
 const HISTORY_DIR: &str = "history";
+
+/// 扩展数据仓的分段与备份命名：区分「VS Code 插件」与「CodeBuddy IDE」两棵同构的会话树。
+///
+/// 布局：`<平台本地数据根>/<app_dir>/Data/<uid>/<client_dir>/<uid>/history/<工作区目录名>/`。
+/// 工作区目录名是**不透明字符串**（实现只做目录枚举与按名复制，不重算 md5）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionStoreSpec {
+    /// 应用数据目录名（`CodeBuddyExtension`）。
+    pub app_dir: &'static str,
+    /// 客户端段目录名（`VSCode` / `CodeBuddyIDE`）。
+    pub client_dir: &'static str,
+    /// 会话索引备份根目录名：`<工具存储根>/backups/<backup_kind>/<utc_iso>/`。
+    pub backup_kind: &'static str,
+}
+
+/// VS Code 内 CodeBuddy 插件（`tencent-cloud.coding-copilot`）的数据仓。
+pub const VSCODE_STORE: SessionStoreSpec = SessionStoreSpec {
+    app_dir: "CodeBuddyExtension",
+    client_dir: "VSCode",
+    backup_kind: "vscode-sessions",
+};
+
+/// CodeBuddy IDE（国内版桌面客户端）的数据仓：与插件同根，只有客户端段不同。
+pub const CODEBUDDY_IDE_STORE: SessionStoreSpec = SessionStoreSpec {
+    app_dir: "CodeBuddyExtension",
+    client_dir: "CodeBuddyIDE",
+    backup_kind: "codebuddy-ide-sessions",
+};
 
 /// 待复制的会话引用（工作区 hash + 会话 id）。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -60,15 +89,49 @@ pub struct CopyItem {
     pub conversation_id: String,
 }
 
+/// 副本 id 策略：决定复制体沿用源 id 还是取新 id。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyIdPolicy {
+    /// 副本一律取新 id（VS Code 插件：扩展按 id 归类，复制体必须与源区分）。
+    AlwaysNew,
+    /// 默认沿用源 id，仅当目标工作区已存在同 id 时取新 id 并重写引用
+    /// （CodeBuddy IDE：真机实测沿用 id 的目标账号可直接加载；冲突重随机避免覆盖既有会话）。
+    KeepUnlessConflict,
+}
+
+/// 复制策略：id 生成方式与目标工作区索引的写入范围。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CopyOptions {
+    /// 副本 id 策略（见 [`CopyIdPolicy`]）。
+    pub id_policy: CopyIdPolicy,
+    /// 是否把合并后的索引同步写入目标工作区的 `.index_bak.json`。
+    ///
+    /// 插件侧写（扩展自用的索引备份需要与主索引一致）；IDE 侧**不写**——目标侧原有的
+    /// `.index_bak.json` 保持原样，不存在也不新建（见 codebuddy-ide-target 契约）。
+    pub write_workspace_index_backup: bool,
+}
+
+/// VS Code 插件侧的复制策略（历史行为：恒取新 id + 同步工作区索引备份）。
+pub(crate) const VSCODE_COPY: CopyOptions = CopyOptions {
+    id_policy: CopyIdPolicy::AlwaysNew,
+    write_workspace_index_backup: true,
+};
+
+/// CodeBuddy IDE 侧的复制策略（沿用 id，冲突才重随机；不动目标侧索引备份）。
+pub(crate) const IDE_COPY: CopyOptions = CopyOptions {
+    id_policy: CopyIdPolicy::KeepUnlessConflict,
+    write_workspace_index_backup: false,
+};
+
 // ---------------------------------------------------------------------------
 // 路径解析
 // ---------------------------------------------------------------------------
 
 /// 平台候选的扩展数据根目录列表（按优先级，已去重）。
 ///
-/// - Windows：`%LOCALAPPDATA%\CodeBuddyExtension\Data`（**实测**）。
+/// - Windows：`%LOCALAPPDATA%\<app_dir>\Data`（插件侧实测）。
 /// - macOS / Linux：按同一相对布局推导（**未实测**），仅作 best-effort 兜底。
-pub fn ext_data_root_candidates() -> Vec<PathBuf> {
+pub fn store_data_root_candidates(spec: SessionStoreSpec) -> Vec<PathBuf> {
     let bases: Vec<PathBuf> = {
         #[cfg(target_os = "windows")]
         {
@@ -96,7 +159,7 @@ pub fn ext_data_root_candidates() -> Vec<PathBuf> {
     };
     let mut out: Vec<PathBuf> = Vec::new();
     for base in bases {
-        let candidate = base.join(EXT_APP_DIR).join("Data");
+        let candidate = base.join(spec.app_dir).join("Data");
         if !out.contains(&candidate) {
             out.push(candidate);
         }
@@ -105,26 +168,46 @@ pub fn ext_data_root_candidates() -> Vec<PathBuf> {
 }
 
 /// 解析扩展数据根目录：返回第一个真实存在的候选目录；都不存在时返回 `None`。
-pub fn ext_data_root() -> Option<PathBuf> {
-    ext_data_root_candidates()
+pub fn store_data_root(spec: SessionStoreSpec) -> Option<PathBuf> {
+    store_data_root_candidates(spec)
         .into_iter()
         .find(|path| path.is_dir())
 }
 
-/// 账号 uid 的数据目录：`<root>\<uid>\VSCode\<uid>`。
-pub fn uid_data_dir(root: &Path, uid: &str) -> PathBuf {
-    root.join(uid).join(IDE_DIR).join(uid)
+/// VS Code 插件的数据根候选（历史入口，等价于 [`store_data_root_candidates`] 传入 [`VSCODE_STORE`]）。
+pub fn ext_data_root_candidates() -> Vec<PathBuf> {
+    store_data_root_candidates(VSCODE_STORE)
 }
 
-/// 账号 uid 的会话历史根：`<root>\<uid>\VSCode\<uid>\history`。
+/// VS Code 插件的数据根（历史入口）。
+pub fn ext_data_root() -> Option<PathBuf> {
+    store_data_root(VSCODE_STORE)
+}
+
+/// 账号 uid 的数据目录：`<root>/<uid>/<client_dir>/<uid>`。
+pub fn uid_data_dir_in(spec: SessionStoreSpec, root: &Path, uid: &str) -> PathBuf {
+    root.join(uid).join(spec.client_dir).join(uid)
+}
+
+/// 账号 uid 的会话历史根：`<root>/<uid>/<client_dir>/<uid>/history`。
+pub fn history_root_in(spec: SessionStoreSpec, root: &Path, uid: &str) -> PathBuf {
+    uid_data_dir_in(spec, root, uid).join(HISTORY_DIR)
+}
+
+/// VS Code 插件侧的账号数据目录（历史入口）。
+pub fn uid_data_dir(root: &Path, uid: &str) -> PathBuf {
+    uid_data_dir_in(VSCODE_STORE, root, uid)
+}
+
+/// VS Code 插件侧的历史根（历史入口）。
 pub fn history_root(root: &Path, uid: &str) -> PathBuf {
-    uid_data_dir(root, uid).join(HISTORY_DIR)
+    history_root_in(VSCODE_STORE, root, uid)
 }
 
 /// uid 白名单校验：非空、不含路径分隔符 / `..`、且不是 `default` / `Public`。
 ///
 /// 用于杜绝路径穿越与误碰结构不同的兜底目录（`default\` / `Public\`）。
-fn is_safe_uid(uid: &str) -> bool {
+pub(crate) fn is_safe_uid(uid: &str) -> bool {
     let uid = uid.trim();
     !uid.is_empty()
         && uid != "."
@@ -236,8 +319,17 @@ pub fn list_vscode_sessions(uid: &str) -> Value {
     }
 }
 
-/// [`list_vscode_sessions`] 的可测实现：显式传入数据根目录。
+/// [`list_vscode_sessions`] 的可测实现：显式传入数据根目录（VS Code 插件数据仓）。
 pub fn list_sessions_in(root: &Path, uid: &str) -> Value {
+    list_sessions_in_store(VSCODE_STORE, root, uid)
+}
+
+/// 列出某数据仓下某账号可复制的会话（按工作区 hash 分桶）。
+///
+/// 返回 `{ sourceUid, sessions:[{id, workspaceHash, title, updatedAt, type, hasHistory}], skipped, dataRoot }`。
+/// `skipped` 为无法解析（损坏）的工作区索引数量；`dataRoot` 为解析到的扩展数据根目录
+/// （找不到时为 `null`，调用方据此区分「未找到数据目录」与「该账号无会话」）。
+pub fn list_sessions_in_store(spec: SessionStoreSpec, root: &Path, uid: &str) -> Value {
     let mut sessions: Vec<Value> = Vec::new();
     let mut skipped = 0usize;
     let data_root = root.to_string_lossy().to_string();
@@ -251,7 +343,7 @@ pub fn list_sessions_in(root: &Path, uid: &str) -> Value {
         });
     }
 
-    let history = history_root(root, uid);
+    let history = history_root_in(spec, root, uid);
     if let Ok(entries) = std::fs::read_dir(&history) {
         for entry in entries.flatten() {
             let ws_dir = entry.path();
@@ -373,15 +465,36 @@ pub fn copy_vscode_sessions(target_uid: &str, items: &[CopyItem]) -> Result<Valu
     }
     let root = ext_data_root()
         .ok_or_else(|| "未找到 VS Code CodeBuddy 插件数据目录，无法复制会话".to_string())?;
-    let backup_root = backup_dir().join("vscode-sessions").join(utc_iso());
+    let backup_root = backup_dir().join(VSCODE_STORE.backup_kind).join(utc_iso());
     copy_sessions_in(&root, &backup_root, &source_uid, target_uid, items)
 }
 
-/// [`copy_vscode_sessions`] 的可测实现：显式传入数据根与备份根。
+/// [`copy_vscode_sessions`] 的可测实现：显式传入数据根与备份根（VS Code 插件策略）。
+pub fn copy_sessions_in(
+    root: &Path,
+    backup_root: &Path,
+    source_uid: &str,
+    target_uid: &str,
+    items: &[CopyItem],
+) -> Result<Value, String> {
+    copy_sessions_in_with(
+        VSCODE_STORE,
+        VSCODE_COPY,
+        root,
+        backup_root,
+        source_uid,
+        target_uid,
+        items,
+    )
+}
+
+/// 复制内核（两个数据仓共用）：显式传入数据仓、复制策略、数据根与备份根。
 ///
 /// 逐条隔离：单条失败只回退该条（删临时/成品目录 + 回退该工作区索引），
 /// 记入 `errors[]` 后继续处理其余条目，不整体中止。
-pub fn copy_sessions_in(
+pub(crate) fn copy_sessions_in_with(
+    spec: SessionStoreSpec,
+    options: CopyOptions,
     root: &Path,
     backup_root: &Path,
     source_uid: &str,
@@ -398,8 +511,8 @@ pub fn copy_sessions_in(
         return Err("源账号与目标账号相同，无需复制会话".to_string());
     }
 
-    let source_history = history_root(root, source_uid);
-    let target_history = history_root(root, target_uid);
+    let source_history = history_root_in(spec, root, source_uid);
+    let target_history = history_root_in(spec, root, target_uid);
 
     // 先为每个目标工作区建立「磁盘备份 + 内存工作副本」，保证逐条隔离与可回退。
     let mut states: BTreeMap<String, WorkspaceState> = BTreeMap::new();
@@ -443,6 +556,7 @@ pub fn copy_sessions_in(
         };
         let target_dir = target_history.join(workspace_hash);
         match copy_one_conversation(
+            options,
             &source_dir,
             &target_dir,
             workspace_hash,
@@ -653,15 +767,17 @@ impl WorkspaceState {
         })
     }
 
-    /// 把当前工作副本写回磁盘（`index.json` + `.index_bak.json`，均用 `atomic_write`）。
+    /// 把当前工作副本写回磁盘（`index.json`；插件侧同时写 `.index_bak.json`，均用 `atomic_write`）。
     ///
     /// 目标工作区目录在此处按需创建（延迟创建），保证只在确有会话写入时才建目录。
-    fn persist(&self) -> Result<(), String> {
+    fn persist(&self, write_backup: bool) -> Result<(), String> {
         std::fs::create_dir_all(&self.dir).map_err(|error| error.to_string())?;
         let text = self.current.to_string();
         atomic_write(&self.dir.join("index.json"), &text).map_err(|error| error.to_string())?;
-        atomic_write(&self.dir.join(".index_bak.json"), &text)
-            .map_err(|error| error.to_string())?;
+        if write_backup {
+            atomic_write(&self.dir.join(".index_bak.json"), &text)
+                .map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 
@@ -779,7 +895,14 @@ fn insert_new_id(map: &mut BTreeMap<String, String>, used: &mut BTreeSet<String>
 }
 
 /// 复制单个会话：写临时目录 → 原子提交 → 合并目标工作区索引。失败时回退。
+///
+/// 两条路径由 [`CopyOptions::id_policy`] 决定：
+/// - [`CopyIdPolicy::AlwaysNew`]：恒定取新会话 id，并按 [`RemapPlan`] 重写消息 / 请求 id
+///   （VS Code 插件侧历史行为）；
+/// - [`CopyIdPolicy::KeepUnlessConflict`]：整目录按字节复制、沿用源 id，仅当目标工作区
+///   已存在同 id（索引条目或磁盘目录）时重随机会话 id 并改写副本内的旧 id 引用（IDE 侧）。
 fn copy_one_conversation(
+    options: CopyOptions,
     source_dir: &Path,
     target_ws_dir: &Path,
     workspace_hash: &str,
@@ -789,13 +912,27 @@ fn copy_one_conversation(
     let source_index = read_json(&source_dir.join("index.json"))
         .ok_or_else(|| "源会话 index.json 缺失或损坏".to_string())?;
 
-    let new_conversation_id = gen_hex32();
-    let plan = RemapPlan::build(&source_index, source_dir);
+    let plan = match options.id_policy {
+        CopyIdPolicy::AlwaysNew => Some(RemapPlan::build(&source_index, source_dir)),
+        CopyIdPolicy::KeepUnlessConflict => None,
+    };
+    let new_conversation_id = match &plan {
+        Some(_) => gen_hex32(),
+        // 冲突判定把「索引条目」与「磁盘目录」都算上：既不覆盖目标既有会话，也不产生重复条目。
+        None if conversation_exists(target_ws_dir, &state.current, conversation_id) => {
+            unique_hex32(&mut used_conversation_ids(target_ws_dir, &state.current))
+        }
+        None => conversation_id.to_string(),
+    };
 
     // 1) 先写临时目录，避免出现「半个会话」。
     let tmp_dir = target_ws_dir.join(format!(".tmp-{new_conversation_id}"));
     remove_dir_all_if_exists(&tmp_dir);
-    if let Err(error) = write_conversation(source_dir, &tmp_dir, &source_index, &plan) {
+    let write_result = match &plan {
+        Some(plan) => write_conversation(source_dir, &tmp_dir, &source_index, plan),
+        None => copy_conversation_keep(source_dir, &tmp_dir, conversation_id, &new_conversation_id),
+    };
+    if let Err(error) = write_result {
         remove_dir_all_if_exists(&tmp_dir);
         return Err(format!("写入临时会话目录失败：{error}"));
     }
@@ -817,10 +954,10 @@ fn copy_one_conversation(
 
     let before = state.current.clone();
     merge_workspace_index(&mut state.current, entry, &new_conversation_id);
-    if let Err(error) = state.persist() {
+    if let Err(error) = state.persist(options.write_workspace_index_backup) {
         // 回退本条对索引的改动（保留同工作区其它已成功条目的合并结果）。
         state.current = before;
-        if state.persist().is_err() {
+        if state.persist(options.write_workspace_index_backup).is_err() {
             // 二次写入仍失败：磁盘一致性已受损，从备份整体恢复该工作区索引（最后手段）。
             state.restore();
         }
@@ -828,12 +965,135 @@ fn copy_one_conversation(
         return Err(format!("合并工作区索引失败：{error}"));
     }
 
+    let messages = match &plan {
+        Some(plan) => plan.message_total,
+        None => source_index
+            .get("messages")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+    };
     Ok(json!({
         "workspaceHash": workspace_hash,
         "oldId": conversation_id,
         "newId": new_conversation_id,
-        "messages": plan.message_total,
+        "messages": messages,
     }))
+}
+
+/// 「沿用 id」路径的写入器：整目录按字节复制；仅当会话 id 变更（冲突重随机）时，
+/// 改写副本内真正引用旧会话 id 的 JSON 文件，其余文件保持字节不变。
+fn copy_conversation_keep(
+    source_dir: &Path,
+    dest_dir: &Path,
+    old_conversation_id: &str,
+    new_conversation_id: &str,
+) -> std::io::Result<()> {
+    copy_dir_recursive(source_dir, dest_dir)?;
+    if old_conversation_id != new_conversation_id {
+        rewrite_conversation_id_references(dest_dir, old_conversation_id, new_conversation_id);
+    }
+    Ok(())
+}
+
+/// 目标工作区是否已存在该会话：索引里有条目，或磁盘上有同名会话目录。
+fn conversation_exists(target_ws_dir: &Path, index: &Value, conversation_id: &str) -> bool {
+    target_ws_dir.join(conversation_id).is_dir()
+        || find_conversation(index, conversation_id).is_some()
+}
+
+/// 目标工作区已占用的 id 集合（索引条目 id + 磁盘目录名），供冲突重随机避开。
+fn used_conversation_ids(target_ws_dir: &Path, index: &Value) -> BTreeSet<String> {
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    if let Some(conversations) = index.get("conversations").and_then(Value::as_array) {
+        for entry in conversations {
+            if let Some(id) = entry.get("id").and_then(Value::as_str) {
+                used.insert(id.trim().to_string());
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(target_ws_dir) {
+        for entry in entries.flatten() {
+            used.insert(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    used
+}
+
+/// 改写副本内「恰好等于旧会话 id」的引用：只重写确有引用的 JSON 文件，
+/// 未命中的文件保持字节不变（实测会话索引与消息文件都不含自身会话 id 时即零改写）。
+fn rewrite_conversation_id_references(dest_dir: &Path, old_id: &str, new_id: &str) {
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    map.insert(old_id.to_string(), new_id.to_string());
+    for path in json_files(dest_dir) {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        // 先判定「确有引用」再改写：改写会把文件重新序列化为紧凑格式，不该波及无关文件。
+        if !contains_exact_id(&value, old_id) {
+            continue;
+        }
+        let _ = std::fs::write(&path, remap_json_references(&value, &map).to_string());
+    }
+}
+
+/// 递归判断某个 JSON 值里是否存在「恰好等于目标 id」的字符串（含字符串化 JSON 内部）。
+fn contains_exact_id(value: &Value, target: &str) -> bool {
+    match value {
+        Value::String(text) => {
+            if text == target {
+                return true;
+            }
+            // 字符串化 JSON（消息 `extra` 的实测形态）：解析后继续往下找。
+            matches!(
+                serde_json::from_str::<Value>(text),
+                Ok(inner) if inner.is_object() && contains_exact_id(&inner, target)
+            )
+        }
+        Value::Array(items) => items.iter().any(|item| contains_exact_id(item, target)),
+        Value::Object(object) => object.values().any(|item| contains_exact_id(item, target)),
+        _ => false,
+    }
+}
+
+/// 递归收集目录下的 `.json` 文件（会话索引、消息文件与其备份）。
+fn json_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(json_files(&path));
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+/// 与 [`remap_message_file`] 同范围的引用改写：对象各层递归精确匹配 + `extra`
+/// （兼容字符串化 JSON），不改动正文与其它无关字符串。
+fn remap_json_references(value: &Value, map: &BTreeMap<String, String>) -> Value {
+    let mut out = value.clone();
+    match out.as_object_mut() {
+        Some(object) => {
+            for item in object.values_mut() {
+                replace_exact_ids(item, map);
+            }
+            if let Some(extra) = object.get("extra").cloned() {
+                object.insert("extra".to_string(), replace_ids_in_extra(&extra, map));
+            }
+        }
+        None => replace_exact_ids(&mut out, map),
+    }
+    out
 }
 
 /// 在目标目录写全一个会话：重映射后的 `index.json` + `messages/*` + 其余文件/目录原样复制。

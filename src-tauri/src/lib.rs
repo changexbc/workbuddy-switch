@@ -194,6 +194,8 @@ pub fn run() {
             commands::get_codebuddy_cn_ide_status,
             commands::switch_codebuddy_cn_ide_account,
             commands::detect_codebuddy_cn_ide_account,
+            commands::list_codebuddy_ide_sessions,
+            commands::codebuddy_ide_session_links_preview,
             commands::get_vscode_ext_status,
             commands::switch_vscode_ext_account,
             commands::detect_vscode_ext_account,

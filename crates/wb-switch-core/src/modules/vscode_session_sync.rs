@@ -28,20 +28,19 @@ use crate::modules::session_link::{
 use crate::modules::variant::WbVariant;
 use crate::modules::vscode_ext;
 use crate::modules::vscode_session;
+use crate::modules::vscode_session::{SessionStoreSpec, VSCODE_STORE};
 use crate::modules::vscode_session_link;
 
 /// 派生 id 冲突时的 salt 重试上限（design §6.1）。
 const SALT_LIMIT: u32 = 8;
-/// 会话备份根目录名（与复制路径共用 `backups/vscode-sessions/<utc_iso>/`）。
-const BACKUP_KIND: &str = "vscode-sessions";
 /// 整目录备份的后缀：`<utc_iso>/<workspaceHash>/<targetConvId>-overwrite/`。
 const OVERWRITE_SUFFIX: &str = "-overwrite";
 
 // ---------------------------------------------------------------------------
-// 会话定位（插件按 md5(工作区) 分桶，会话 id 不含工作区信息 → 反查一次索引）
+// 会话定位（按 md5(工作区) 分桶，会话 id 不含工作区信息 → 反查一次索引）
 // ---------------------------------------------------------------------------
 
-/// 会话在插件数据里的定位信息：所属工作区 hash 与展示标题。
+/// 会话在客户端数据里的定位信息：所属工作区 hash 与展示标题。
 #[derive(Debug, Clone)]
 struct ConversationLocator {
     workspace_hash: String,
@@ -50,11 +49,15 @@ struct ConversationLocator {
 
 /// 扫某账号的工作区索引，得到 `会话 id → 定位信息`。
 ///
-/// 插件把会话按 `md5(工作区)` 分桶，会话 id 本身无法还原工作区；这里按工作区目录名
+/// 客户端把会话按 `md5(工作区)` 分桶，会话 id 本身无法还原工作区；这里按工作区目录名
 /// 排序处理，同名会话（不该出现）取字典序最小者，保证结果与目录遍历顺序无关。
-fn conversation_index(root: &Path, uid: &str) -> BTreeMap<String, ConversationLocator> {
+fn conversation_index(
+    spec: SessionStoreSpec,
+    root: &Path,
+    uid: &str,
+) -> BTreeMap<String, ConversationLocator> {
     let mut out: BTreeMap<String, ConversationLocator> = BTreeMap::new();
-    let Ok(entries) = std::fs::read_dir(vscode_session::history_root(root, uid)) else {
+    let Ok(entries) = std::fs::read_dir(vscode_session::history_root_in(spec, root, uid)) else {
         return out;
     };
     let workspaces: BTreeSet<PathBuf> = entries
@@ -101,18 +104,20 @@ fn conversation_index(root: &Path, uid: &str) -> BTreeMap<String, ConversationLo
 
 /// 某账号某会话的目录：`history/<workspaceHash>/<conversationId>`。
 fn conversation_dir(
+    spec: SessionStoreSpec,
     root: &Path,
     uid: &str,
     workspace_hash: &str,
     conversation_id: &str,
 ) -> PathBuf {
-    vscode_session::history_root(root, uid)
+    vscode_session::history_root_in(spec, root, uid)
         .join(workspace_hash)
         .join(conversation_id)
 }
 
-/// 一次预览 / 同步内不变的输入：账号、数据根与两侧会话定位索引。
+/// 一次预览 / 同步内不变的输入：数据仓、账号、数据根与两侧会话定位索引。
 struct SyncContext<'a> {
+    spec: SessionStoreSpec,
     paths: &'a SessionPaths,
     root: &'a Path,
     source_uid: &'a str,
@@ -134,7 +139,13 @@ impl SyncContext<'_> {
     /// 某账号某会话的目录（索引里找不到该会话时为 `None`）。
     fn dir_of(&self, uid: &str, conversation_id: &str) -> Option<PathBuf> {
         self.index_of(uid).get(conversation_id).map(|locator| {
-            conversation_dir(self.root, uid, &locator.workspace_hash, conversation_id)
+            conversation_dir(
+                self.spec,
+                self.root,
+                uid,
+                &locator.workspace_hash,
+                conversation_id,
+            )
         })
     }
 
@@ -194,14 +205,26 @@ pub fn register_copied_sessions(
     variant: WbVariant,
     report: &Value,
 ) -> Vec<Value> {
+    register_copied_sessions_in(VSCODE_STORE, root, paths, variant, report)
+}
+
+/// [`register_copied_sessions`] 的数据仓参数化版本（VS Code 插件 / CodeBuddy IDE 共用）。
+pub fn register_copied_sessions_in(
+    spec: SessionStoreSpec,
+    root: &Path,
+    paths: &SessionPaths,
+    variant: WbVariant,
+    report: &Value,
+) -> Vec<Value> {
     let source_uid = uid_of(report, "sourceUid");
     let target_uid = uid_of(report, "targetUid");
     let (Some(source_uid), Some(target_uid)) = (source_uid, target_uid) else {
         return vec![json!({ "error": "复制报告缺少账号信息，未能建立会话关联" })];
     };
-    let source_index = conversation_index(root, &source_uid);
-    let target_index = conversation_index(root, &target_uid);
+    let source_index = conversation_index(spec, root, &source_uid);
+    let target_index = conversation_index(spec, root, &target_uid);
     let context = SyncContext {
+        spec,
         paths,
         root,
         source_uid: &source_uid,
@@ -380,8 +403,19 @@ pub fn links_preview(target_acc: &Value) -> Result<Value, String> {
     )
 }
 
-/// [`links_preview`] 的可测实现：显式传入数据根、存储路径与来源 uid。
+/// [`links_preview`] 的可测实现：显式传入数据根、存储路径与来源 uid（VS Code 插件数据仓）。
 pub fn links_preview_at(
+    root: &Path,
+    paths: &SessionPaths,
+    source_uid: &str,
+    target_acc: &Value,
+) -> Result<Value, String> {
+    links_preview_in(VSCODE_STORE, root, paths, source_uid, target_acc)
+}
+
+/// [`links_preview`] 的数据仓参数化版本（VS Code 插件 / CodeBuddy IDE 共用）。
+pub fn links_preview_in(
+    spec: SessionStoreSpec,
     root: &Path,
     paths: &SessionPaths,
     source_uid: &str,
@@ -391,7 +425,7 @@ pub fn links_preview_at(
     if source_uid == target_uid {
         return Err("当前账号与目标账号相同，无需同步会话".to_string());
     }
-    // 插件侧没有档位能力探测：扩展数据仓只有一份，与 WorkBuddy 的档位无关。
+    // 两侧数据仓都没有档位能力探测：同一数据仓可跨档位复制。
     let mut report = json!({
         "supported": true,
         "sourceUid": source_uid,
@@ -406,9 +440,10 @@ pub fn links_preview_at(
         }
         StoreState::Ready(store) => {
             report["storeStatus"] = json!("ready");
-            let source_index = conversation_index(root, source_uid);
-            let target_index = conversation_index(root, &target_uid);
+            let source_index = conversation_index(spec, root, source_uid);
+            let target_index = conversation_index(spec, root, &target_uid);
             let context = SyncContext {
+                spec,
                 paths,
                 root,
                 source_uid,
@@ -648,8 +683,27 @@ pub fn sync_selected(target_acc: &Value, selections: &[SyncSelection]) -> Result
     )
 }
 
-/// [`sync_selected`] 的可测实现：显式传入数据根、存储路径与来源 uid。
+/// [`sync_selected`] 的可测实现：显式传入数据根、存储路径与来源 uid（VS Code 插件数据仓）。
 pub fn sync_selected_at(
+    root: &Path,
+    paths: &SessionPaths,
+    source_uid: &str,
+    target_acc: &Value,
+    selections: &[SyncSelection],
+) -> Result<Value, String> {
+    sync_selected_in(
+        VSCODE_STORE,
+        root,
+        paths,
+        source_uid,
+        target_acc,
+        selections,
+    )
+}
+
+/// [`sync_selected`] 的数据仓参数化版本（VS Code 插件 / CodeBuddy IDE 共用）。
+pub fn sync_selected_in(
+    spec: SessionStoreSpec,
     root: &Path,
     paths: &SessionPaths,
     source_uid: &str,
@@ -670,9 +724,10 @@ pub fn sync_selected_at(
         }
         StoreState::Unavailable(reason) => return Err(reason),
     };
-    let source_index = conversation_index(root, source_uid);
-    let target_index = conversation_index(root, &target_uid);
+    let source_index = conversation_index(spec, root, source_uid);
+    let target_index = conversation_index(spec, root, &target_uid);
     let context = SyncContext {
+        spec,
         paths,
         root,
         source_uid,
@@ -720,6 +775,8 @@ pub(crate) struct SyncItemPlan {
     source_conversation_id: String,
     target_conversation_id: String,
     target_uid: String,
+    /// 备份根目录名（`<工具存储根>/backups/<backup_kind>/<utc_iso>/`）。
+    backup_kind: &'static str,
     source_content: ContentSnapshot,
     target_content: ContentSnapshot,
 }
@@ -838,6 +895,7 @@ fn plan_sync_item(
         source_conversation_id: source_member.session_id.clone(),
         target_conversation_id: target_member.session_id.clone(),
         target_uid: context.target_uid.to_string(),
+        backup_kind: context.spec.backup_kind,
         source_content: source_snapshot.clone(),
         target_content: target_snapshot.clone(),
     }))
@@ -863,17 +921,17 @@ struct PlannedFile {
 
 // --- 快进（design §6.1） ---------------------------------------------------
 
-/// 备份根目录：`<工具存储根>/backups/vscode-sessions/<utc_iso>/`（与复制路径同布局）。
+/// 备份根目录：`<工具存储根>/backups/<backup_kind>/<utc_iso>/`（与复制路径同布局）。
 ///
 /// 从 [`SessionPaths::backup_root`] 派生（而不是直接取 [`backup_dir`]），
 /// 单测才能注入临时存储根而不污染真实 `~/.wb-switch`。
-fn backup_root(paths: &SessionPaths) -> PathBuf {
-    paths.backup_root().join(BACKUP_KIND).join(utc_iso())
+fn backup_root(paths: &SessionPaths, backup_kind: &str) -> PathBuf {
+    paths.backup_root().join(backup_kind).join(utc_iso())
 }
 
 /// 备份目标会话索引，返回备份目录。
 fn begin_index_backup(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<PathBuf, String> {
-    let dir = backup_root(paths)
+    let dir = backup_root(paths, plan.backup_kind)
         .join(&plan.workspace_hash)
         .join(&plan.target_conversation_id);
     std::fs::create_dir_all(&dir).map_err(|error| format!("创建索引备份目录失败：{error}"))?;
@@ -1234,7 +1292,7 @@ fn overwrite(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String>
     }
 
     // 1) 整目录备份（先备份再动任何东西）。
-    let backup_dir = backup_root(paths)
+    let backup_dir = backup_root(paths, plan.backup_kind)
         .join(&plan.workspace_hash)
         .join(format!("{}{OVERWRITE_SUFFIX}", plan.target_conversation_id));
     vscode_session::remove_dir_all_if_exists(&backup_dir);
@@ -1674,7 +1732,7 @@ mod tests {
     ///
     /// 按目录名反查而不是重新拼 `utc_iso()`，避免断言与备份时刻跨秒时取到别的目录。
     fn find_overwrite_backup(fixture: &Fixture, conv_id: &str) -> PathBuf {
-        let root = fixture.paths().backup_root().join(BACKUP_KIND);
+        let root = fixture.paths().backup_root().join(VSCODE_STORE.backup_kind);
         let mut pending = vec![root];
         let mut found: Vec<PathBuf> = Vec::new();
         while let Some(dir) = pending.pop() {
@@ -2591,6 +2649,7 @@ mod tests {
             source_conversation_id: CONV_SRC.to_string(),
             target_conversation_id: CONV_SRC.to_string(),
             target_uid: DST_UID.to_string(),
+            backup_kind: VSCODE_STORE.backup_kind,
             source_content: snapshot.clone(),
             target_content: snapshot,
         }
