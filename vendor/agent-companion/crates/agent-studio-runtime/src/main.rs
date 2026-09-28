@@ -70,7 +70,22 @@ fn main() {
         std::process::exit(1);
     }
 }
+/// Shell 引号形态（当前安装形态）。
+///
+/// Windows 上 hook 会被两类执行器拉起：CodeBuddy IDE 的 `cmd.exe`，以及
+/// CodeBuddy CLI / Codex 的 MSYS bash。`cmd` 不认 POSIX 单引号（报
+/// “文件名、目录名或卷标语法不正确”），而 bash 里反斜杠又是转义雷区。
+/// 因此 Windows 统一用**正斜杠 + 双引号**：两种执行器都能正确解析。
 fn quote_path(p: &Path) -> String {
+    if cfg!(windows) {
+        format!("\"{}\"", p.to_string_lossy().replace('\\', "/"))
+    } else {
+        format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"))
+    }
+}
+
+/// 旧版（仅 bash 兼容）的引号形态：只用于识别历史上写入过的命令，便于重装时清理。
+fn quote_path_legacy(p: &Path) -> String {
     format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"))
 }
 /// One raw hook payload from a user-configured third-party tool. The source is
@@ -104,11 +119,17 @@ fn custom_hook() -> Result<(), String> {
     }
     Ok(())
 }
-fn hook_command(binary: &Path, home: &Path, source: &str, edition: Option<&str>) -> String {
+fn hook_command_with(
+    binary: &Path,
+    home: &Path,
+    source: &str,
+    edition: Option<&str>,
+    quote: fn(&Path) -> String,
+) -> String {
     let mut command = format!(
         "{} hook --home {} --source {}",
-        quote_path(binary),
-        quote_path(home),
+        quote(binary),
+        quote(home),
         source
     );
     if let Some(edition) = edition {
@@ -116,6 +137,15 @@ fn hook_command(binary: &Path, home: &Path, source: &str, edition: Option<&str>)
         command.push_str(edition);
     }
     command
+}
+
+fn hook_command(binary: &Path, home: &Path, source: &str, edition: Option<&str>) -> String {
+    hook_command_with(binary, home, source, edition, quote_path)
+}
+
+/// 历史形态（POSIX 单引号）：Windows 上是错的，仅用于识别与清理旧安装。
+fn hook_command_legacy(binary: &Path, home: &Path, source: &str, edition: Option<&str>) -> String {
+    hook_command_with(binary, home, source, edition, quote_path_legacy)
 }
 fn ensure_hook_binary(home: &Path) -> Result<PathBuf, String> {
     let binary = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -132,6 +162,9 @@ fn ensure_hook_binary(home: &Path) -> Result<PathBuf, String> {
     std::fs::rename(&temp, &hook_binary).map_err(|e| e.to_string())?;
     Ok(hook_binary)
 }
+/// 「工具开始后多久没有任何反馈」就发一条「需要确认」告警（与前端
+/// `permission-check.ts` 的阈值保持一致）。
+const PERMISSION_HINT_MS: i64 = 45_000;
 struct Notifications {
     seen: VecDeque<String>,
     initialized: bool,
@@ -170,6 +203,43 @@ impl Notifications {
             fresh.push(e.clone());
         }
         self.initialized = true;
+        // CodeBuddy IDE / VS Code 插件在弹「需要你允许」时不会发 Notification hook
+        // （实测客户端里那条链路是死代码），所以这里补一条推断：工具开始后超过阈值
+        // 仍没有任何结果，就当作「可能卡在等人确认」，产出一条 wait 告警——宿主据此
+        // 弹系统通知（含声音），这样全屏时也能收到提醒。
+        if self.initialized {
+            let time = agent_studio_core::now();
+            for session in s["sessions"].as_array().into_iter().flatten() {
+                let checks = session["permissionChecks"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                if checks.is_empty() || session["status"] != "running" || session["stale"] == true {
+                    continue;
+                }
+                for check in checks {
+                    let ts = check["ts"].as_i64().unwrap_or(time);
+                    if time - ts < PERMISSION_HINT_MS {
+                        continue;
+                    }
+                    let id = json!([session["id"], session["roundId"], "prolonged", check["id"]])
+                        .to_string();
+                    if self.seen.contains(&id) {
+                        continue;
+                    }
+                    self.seen.push_back(id.clone());
+                    fresh.push(json!({
+                        "id":id,
+                        "sessionId":session["id"],
+                        "roundId":session["roundId"],
+                        "kind":"prolonged",
+                        "ts":ts,
+                        "historical":false,
+                        "title":session["title"],
+                    }));
+                }
+            }
+        }
         while self.seen.len() > 2000 {
             self.seen.pop_front();
         }

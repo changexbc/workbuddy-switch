@@ -1,10 +1,15 @@
 import type { Session } from '../types/snapshot.js';
 
-export const PERMISSION_CHECK_REMINDER_MS = 90_000;
+export const PERMISSION_CHECK_REMINDER_MS = 45_000;
 
-// This is a slow-request reminder, not evidence that Codex is waiting for a person.
+// Sources whose client never reports a real「需要你允许」hook, so the only signal left
+// is「工具开始后多久没有任何反馈」. Codex 原生会发，CodeBuddy IDE / VS Code 插件那条
+// 链路实测是死代码（`notifyPermissionPrompt` 没有调用点）。
+const SLOW_CHECK_SOURCES = new Set(['codex', 'codebuddy-ide']);
+
+// This is a slow-request reminder, not proof that a person is being asked.
 export function prolongedPermissionCheck(session: Session, now = Date.now()): boolean {
-  return session.source === 'codex' && session.status === 'running' && !session.stale
+  return SLOW_CHECK_SOURCES.has(session.source) && session.status === 'running' && !session.stale
     && !!session.permissionChecks?.some(check =>
       Number.isFinite(check.ts) && check.ts <= now
       && now - check.ts >= PERMISSION_CHECK_REMINDER_MS);

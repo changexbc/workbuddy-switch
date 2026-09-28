@@ -4,8 +4,10 @@ pub mod codex_read_state;
 pub mod custom;
 pub mod host_process;
 pub mod hub;
+pub mod log_watch;
 pub mod settings;
 pub mod tail;
+pub mod workspace_history;
 use serde_json::{json, Value};
 pub fn now() -> i64 {
     std::time::SystemTime::now()

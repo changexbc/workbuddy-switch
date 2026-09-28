@@ -366,9 +366,14 @@ fn start(app: &tauri::AppHandle, config: Config) -> Result<(), Box<dyn std::erro
                         let _ = app.emit("monitor-settings", &previous_settings);
                     }
                     for a in v["notifications"].as_array().into_iter().flatten() {
+                        // 再单独发给 rail：桌面端的声音以前只有系统通知那一条（Windows 上还不生效），
+                        // rail 侧据此播自定义提示音；`sound` 开关由 runtime 随告警一起发下来。
+                        let _ = app.emit("monitor-alert", a.clone());
                         let kind = match a["kind"].as_str() {
                             Some("wait") => "需要确认",
                             Some("error") => "任务失败",
+                            // 客户端不发「需要确认」信号时的兜底推断：工具长时间没有反馈。
+                            Some("prolonged") => "长时间无响应",
                             _ => "任务完成",
                         };
                         let mut n = app
@@ -377,7 +382,9 @@ fn start(app: &tauri::AppHandle, config: Config) -> Result<(), Box<dyn std::erro
                             .title(format!("Agent Companion · {kind}"))
                             .body(a["title"].as_str().unwrap_or("会话状态已更新"));
                         if a["sound"] == true {
+                            // builder 的声音在 Windows 上不生效，所以自己再播一声系统音。
                             n = n.sound("default");
+                            snd::play(sound_alias(a["kind"].as_str().unwrap_or("")));
                         }
                         let _ = n.show();
                     }
@@ -393,6 +400,83 @@ fn start(app: &tauri::AppHandle, config: Config) -> Result<(), Box<dyn std::erro
         }
     });
     Ok(())
+}
+
+/// 按告警类型挑提示音（Windows 的 `PlaySound` 认系统音色别名，也认 wav 文件路径）。
+///
+/// **三种都用具体 wav**：系统别名在不同的声音方案/主题下会指向同一个文件（本机实测
+/// `SystemAsterisk` 与 `SystemExclamation` 听起来一样，用户据此反馈「需要确认和完成音一样」），
+/// 只有指定文件才能保证三者彼此不同。文件缺失时 `snd::play` 会退回系统信息音，不会变哑。
+fn sound_alias(raw_kind: &str) -> &'static str {
+    match raw_kind {
+        // 用户听感：通知音偏小、感叹音更响更明显 ⇒ **需要确认与完成都用感叹音**（要抓得住
+        // 注意力；用户明确要求两者一致）。失败仍用错误音，保持可区分。
+        "error" => r"C:\Windows\Media\Windows Error.wav",
+        _ => r"C:\Windows\Media\Windows Exclamation.wav",
+    }
+}
+
+/// 自己播一声提示音。
+///
+/// Windows 上 `tauri::notification().sound("default")` 实际不生效（toast 的声音由应用的
+/// toast XML / 系统设置决定，builder 的 sound 基本是 macOS/iOS 侧能力），所以这里自己播：
+/// Windows 走 `PlaySoundW` 播系统音色别名（零新依赖、不需要音频文件），macOS 用 `afplay`。
+/// 失败一律静默——提示音绝不能影响主流程。
+#[cfg(target_os = "windows")]
+mod snd {
+    #[link(name = "winmm")]
+    extern "system" {
+        fn PlaySoundW(pszSound: *const u16, hmod: isize, fdwSound: u32) -> i32;
+    }
+
+    const SND_ALIAS: u32 = 0x0001_0000;
+    const SND_FILENAME: u32 = 0x0002_0000;
+    const SND_ASYNC: u32 = 0x0001;
+    const SND_NODEFAULT: u32 = 0x0002;
+
+    /// `spec` 以 `.wav` 结尾就按**文件**播（缺文件时退回系统信息音），否则当系统音色别名播。
+    ///
+    /// 需要具体音色时用文件：系统别名在多数主题里会指向同一个声音（本机实测 `SystemAsterisk`
+    /// 与 `SystemExclamation` 听起来一样），只有指定 wav 才能保证「需要确认」和「完成」不同。
+    pub(super) fn play(spec: &str) {
+        let is_wav = spec.to_ascii_lowercase().ends_with(".wav");
+        let probe = if is_wav && !std::path::Path::new(spec).is_file() {
+            "SystemAsterisk"
+        } else {
+            spec
+        };
+        let flags = if probe.to_ascii_lowercase().ends_with(".wav") {
+            SND_FILENAME
+        } else {
+            SND_ALIAS
+        };
+        let name: Vec<u16> = probe.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            PlaySoundW(name.as_ptr(), 0, flags | SND_ASYNC | SND_NODEFAULT);
+        }
+    }
+}
+
+/// 非 Windows：交给系统播放器（同样是 best-effort）。
+#[cfg(not(target_os = "windows"))]
+mod snd {
+    use std::process::Command;
+
+    pub(super) fn play(_alias: &str) {
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            let mut c = Command::new("afplay");
+            c.arg("/System/Library/Sounds/Glass.aiff");
+            c
+        };
+        #[cfg(not(target_os = "macos"))]
+        let mut command = {
+            let mut c = Command::new("paplay");
+            c.arg("/usr/share/sounds/freedesktop/stereo/complete.oga");
+            c
+        };
+        let _ = command.spawn();
+    }
 }
 
 fn create_rail(app: &tauri::AppHandle, config: &Config) -> Result<(), Box<dyn std::error::Error>> {

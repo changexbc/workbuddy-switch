@@ -7,7 +7,7 @@ import { question, questionDetails } from './codex.js';
 import { HostPresence, endHostSessions } from './host-process.js';
 
 const SOURCE = 'codebuddy-ide';
-export const HOOK_EVENTS = ['SessionStart','SessionEnd','UserPromptSubmit','PreToolUse','PostToolUse','Stop','PreCompact'];
+export const HOOK_EVENTS = ['SessionStart','SessionEnd','UserPromptSubmit','PreToolUse','PostToolUse','Stop','PreCompact','Notification'];
 const native = c => c?.includes('agent-studio-runtime') && c.includes(' hook') && c.includes('--source codebuddy-ide');
 const python = c => c?.includes('astra-office-codebuddy-ide.py');
 export function codeBuddySettingsCandidates(home = os.homedir()) {
@@ -79,11 +79,11 @@ export class CodeBuddyIdePoller {
   ingestHook(p) {
     const sid=p.session_id,event=p.hook_event_name;
     const client=String(p.client||'').toLowerCase();
-    if(!sid || !HOOK_EVENTS.includes(event) || !['codebuddyide','codebuddy','vscode'].includes(client)) return false;
+    if(!sid || !HOOK_EVENTS.includes(event) || !['codebuddyide','codebuddy','vscode','cli'].includes(client)) return false;
     // The shared settings file serves both hosts; the payload client picks one.
     const hostKind = client === 'vscode' ? 'vscode' : SOURCE;
     const ts = Number.isInteger(p.timestamp) && p.timestamp > 0 ? p.timestamp : Date.now();
-    const state = this.live.get(sid) || {roundId:'',cwd:'',calls:new Map(),seq:0,ended:false,ts:0,agentType:''};
+    const state = this.live.get(sid) || {roundId:'',cwd:'',calls:new Map(),seq:0,ended:false,ts:0,agentType:'',notifications:[]};
     if(ts < state.ts) return false;
     const generation = p.generation_id || '', begins = event === 'UserPromptSubmit';
     if(!begins && generation && state.roundId && generation !== state.roundId) return false;
@@ -92,7 +92,12 @@ export class CodeBuddyIdePoller {
     state.agentType = agentType;
     const emit = ev => this.hub.ingest({source:SOURCE,sessionId:sid,roundId:state.roundId,cwd:state.cwd,agentType,hostKind,ts,...ev});
     if(begins || !state.roundId && ['PreToolUse','PostToolUse','PreCompact'].includes(event)) {
-      state.roundId = generation || `turn:${ts}`; state.calls.clear(); state.ended=false; emit({type:'start'});
+      state.roundId = generation || `turn:${ts}`; state.calls.clear(); state.ended=false; state.notifications=[]; emit({type:'start'});
+    }
+    // 权限/交互弹窗一旦有工具真正开始/结束、或本轮结束，就算处理完了。
+    if(['PreToolUse','PostToolUse','Stop'].includes(event) && state.notifications?.length) {
+      for(const id of state.notifications) emit({type:'resolve',callId:id});
+      state.notifications=[];
     }
     const tool=p.tool_name||'',input=p.tool_input??null;
     const ask=/(?:^|__|\.)(ask_followup_question|request_user_input(?:_async)?|AskUserQuestion|ask_user_question|RequestUserInput)$/.test(tool);
@@ -106,8 +111,20 @@ export class CodeBuddyIdePoller {
       const matches=[...state.calls].filter(([id,c])=>p.tool_use_id ? id===p.tool_use_id : c.tool===tool && stable(c.input)===stable(input));
       if(matches.length===1 && !unanswered(p.tool_response)) {const id=matches[0][0];state.calls.delete(id);emit({type:'resolve',callId:id});}
     }
+    // 客户端弹出「需要你允许 / 需要你确认」时的通知。
+    if(event==='Notification' && !state.ended) {
+      const kind=String(p.notification_type||p.notificationType||'').toLowerCase();
+      if(kind==='permission_prompt'||kind==='elicitation_dialog') {
+        const id=p.tool_use_id||`notify:${ts}`;
+        state.notifications ||= [];
+        if(!state.notifications.includes(id)) state.notifications.push(id);
+        emit({type:'wait',callId:id,tool:'permission',text:String(p.message||'').trim()||'需要你允许'});
+      }
+    }
     if(event==='Stop' && !state.ended && state.roundId && !state.calls.size) {emit({type:'end',status:'done'});state.ended=true;}
-    if(event==='SessionEnd' && !state.ended && state.roundId) {emit({type:'end',status:'aborted'});state.calls.clear();state.ended=true;}
+    // SessionEnd 不终止会话：客户端在新建/切换会话时也会发它，且 payload 用的是全局唯一的
+    // sessionId，不能据此判定后台任务已结束（详见 Rust 侧同类注释）。
+
     if(event==='PreCompact' && !state.ended) emit({type:'activity'});
     this.live.set(sid,state);this.hookCount++;(hostKind==='vscode'?this.vscodePresence:this.presence).noteHook();this.poll();return true;
   }

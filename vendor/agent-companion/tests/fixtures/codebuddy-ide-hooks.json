@@ -13,5 +13,5 @@
   {"hook":{"hook_event_name":"Stop","generation_id":"g2"},"status":"done"},
   {"hook":{"hook_event_name":"SessionEnd","reason":"other"},"status":"done"},
   {"hook":{"hook_event_name":"UserPromptSubmit","generation_id":"g3","prompt":"下一轮"},"status":"running"},
-  {"hook":{"hook_event_name":"SessionEnd","reason":"other"},"status":"aborted"}
+  {"hook":{"hook_event_name":"SessionEnd","reason":"other"},"status":"running"}
 ]

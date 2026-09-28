@@ -2,6 +2,13 @@ use crate::{now, text};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 pub const STALE: i64 = 45 * 60 * 1000;
+/// Hook 驱动的客户端（CodeBuddy IDE / CLI / WorkBuddy）没有轮次级心跳：一轮对话被强行
+/// 打断后就不会再有任何事件，等 45 分钟才收敛太慢。一次长工具调用结束时会立刻补上事件，
+/// 误判也会被下一个事件自动纠正，所以这里可以用更短的兜底。
+pub const STALE_IDLE: i64 = 5 * 60 * 1000;
+/// 未被解决的权限等待最长保留时间。客户端弹「需要你允许」后，可能永远等不到那次工具调用
+/// （自动批准/自动拒绝、或弹窗被直接关掉），pending 不清就会一直显示「待确认」。
+pub const WAIT_EXPIRY: i64 = 15 * 60 * 1000;
 pub fn terminal(s: &str) -> bool {
     matches!(s, "done" | "error" | "aborted")
 }
@@ -206,9 +213,13 @@ impl Hub {
             })
             .cloned()
             .map(|mut s| {
+                // Hook 驱动的客户端没有轮次级心跳，长时间没有任何事件基本等于这一轮
+                // 被强行中断了，用更短的兜底停止转圈（Codex 有自己的恢复机制，仍用 STALE）。
+                // 有 pending 的等待**不**参与兜底：权限询问可能真的要等人很久。
+                let idle = if text(&s["source"]) == "codex" { STALE } else { STALE_IDLE };
                 let stale = !terminal(&text(&s["status"]))
                     && s["pending"].as_array().is_some_and(|a| a.is_empty())
-                    && time - s["updatedAt"].as_i64().unwrap_or(0) > STALE;
+                    && time - s["updatedAt"].as_i64().unwrap_or(0) > idle;
                 let cwd = text(&s["cwd"]);
                 s["project"] = json!(std::path::Path::new(&cwd)
                     .file_name()

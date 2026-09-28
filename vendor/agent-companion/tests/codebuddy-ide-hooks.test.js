@@ -8,7 +8,8 @@ import {CodeBuddyIdePoller,mergeCodeBuddyIdeHooks,installCodeBuddyIdeHooks,HOOK_
 
 test('IDE hook fixture covers generation IDs, no tool IDs, unanswered questions and session end',async()=>{
  const hub=new Hub(),p=new CodeBuddyIdePoller(hub),t=Date.now();
- assert.equal(p.ingestHook({client:'cli',session_id:'cli',hook_event_name:'UserPromptSubmit'}),false);
+ // `cli` 现已纳入白名单；用未知来源验证仍会被拒。
+ assert.equal(p.ingestHook({client:'unknown',session_id:'unknown',hook_event_name:'UserPromptSubmit'}),false);
  const cases=JSON.parse(await fs.readFile(new URL('./fixtures/codebuddy-ide-hooks.json',import.meta.url)));
  for(const [i,c] of cases.entries()) {
   assert.equal(p.ingestHook({client:'CodeBuddyIDE',session_id:'x',cwd:'/project',timestamp:t+i,...c.hook}),c.accepted!==false,`case ${i}`);

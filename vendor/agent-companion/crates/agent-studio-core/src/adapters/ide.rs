@@ -3,7 +3,7 @@ use super::*;
 use crate::{content, merge, question, question_tool, questions};
 use std::path::{Path, PathBuf};
 
-pub const CODEBUDDY_IDE_HOOK_EVENTS: [&str; 7] = [
+pub const CODEBUDDY_IDE_HOOK_EVENTS: [&str; 8] = [
     "SessionStart",
     "SessionEnd",
     "UserPromptSubmit",
@@ -11,6 +11,8 @@ pub const CODEBUDDY_IDE_HOOK_EVENTS: [&str; 7] = [
     "PostToolUse",
     "Stop",
     "PreCompact",
+    // 客户端弹「需要你允许」时抛出的通知；是唯一能表达“等待人工授权”的信号。
+    "Notification",
 ];
 
 /// International CodeBuddy uses `~/.codebuddy`; CodeBuddy CN uses `~/.codebuddycn`.
@@ -85,6 +87,14 @@ fn owned_hook(command: &str) -> bool {
         && command.contains("--source codebuddy-ide"))
         || command.contains("astra-office-codebuddy-ide.py")
 }
+/// 权限/交互通知展示文案：优先用客户端给的 message。
+fn permission_text(p: &Value) -> String {
+    let message = content(&p["message"]);
+    if !message.trim().is_empty() {
+        return message;
+    }
+    "需要你允许".into()
+}
 fn unanswered(v: &Value) -> bool {
     if let Some(s) = v.as_str() {
         return serde_json::from_str::<Value>(s)
@@ -112,7 +122,11 @@ impl Collector {
         // the payload client decides which host kind the hook belongs to.
         let client = text(&p["client"]).to_ascii_lowercase();
         if self.settings["sources"]["codebuddy-ide"]["enabled"] != true
-            || !matches!(client.as_str(), "codebuddyide" | "codebuddy" | "vscode")
+            // `cli` = CodeBuddy 独立 CLI（其 hook payload 的 client 值为 "CLI"）。
+            || !matches!(
+                client.as_str(),
+                "codebuddyide" | "codebuddy" | "vscode" | "cli"
+            )
             || sid.is_empty()
             || !CODEBUDDY_IDE_HOOK_EVENTS.contains(&event.as_str())
         {
@@ -131,7 +145,7 @@ impl Collector {
             .ide_live
             .get(&sid)
             .cloned()
-            .unwrap_or(json!({"roundId":"","cwd":"","calls":{},"seq":0,"ended":false,"ts":0,"agentType":""}));
+            .unwrap_or(json!({"roundId":"","cwd":"","calls":{},"seq":0,"ended":false,"ts":0,"agentType":"","notifications":[]}));
         if ts < state["ts"].as_i64().unwrap_or(0) {
             return false;
         }
@@ -146,6 +160,23 @@ impl Collector {
         }
         if !text(&p["cwd"]).is_empty() {
             state["cwd"] = p["cwd"].clone();
+        }
+        // IDE 的 hook `cwd` 不可靠（窗口没开目录时给的是客户端自己的安装目录，实测
+        // `D:\Program Files\CodeBuddy CN`），照它跳转会打开无关目录。这里按会话 id 从
+        // 插件历史里反查真正的工程目录，命中就以它为准（每个会话只查一次）。
+        // VS Code 插件的 cwd 本来就是对的，不动它。
+        if host_kind != "vscode" && state["resolvedFolder"].is_null() {
+            state["resolvedFolder"] = json!(
+                crate::workspace_history::resolve_session_folder(&sid)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            );
+        }
+        if host_kind != "vscode" {
+            let resolved = text(&state["resolvedFolder"]);
+            if !resolved.is_empty() {
+                state["cwd"] = json!(resolved);
+            }
         }
         state["ts"] = json!(ts);
         let edition = p["agent_edition"]
@@ -166,6 +197,8 @@ impl Collector {
             });
             state["calls"] = json!({});
             state["ended"] = json!(false);
+            state["notifications"] = json!([]);
+            state["permChecks"] = json!([]);
             self.hub.ingest(json!({"source":"codebuddy-ide","sessionId":sid,"type":"start","roundId":state["roundId"],"cwd":state["cwd"],"agentType":agent_type,"hostKind":host_kind,"ts":ts}));
         }
         let base = json!({"source":"codebuddy-ide","sessionId":sid,"roundId":state["roundId"],"cwd":state["cwd"],"agentType":agent_type,"hostKind":host_kind,"ts":ts});
@@ -173,6 +206,26 @@ impl Collector {
         let tool = text(&p["tool_name"]);
         let input = p["tool_input"].clone();
         let ask = tool == "ask_followup_question" || question_tool(&tool);
+        // 权限弹窗只要等到工具真正开始/结束、或本轮结束，就算处理完了。
+        if matches!(
+            event.as_str(),
+            "PreToolUse" | "PostToolUse" | "Stop"
+        ) {
+            let pending = state["notifications"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            for call in pending {
+                emit(json!({"type":"resolve","callId":call}));
+            }
+            state["notifications"] = json!([]);
+            // 有工具开始/结束或本轮结束，说明推进了：清掉未决的「可能等人确认」检查点。
+            let checks = state["permChecks"].as_array().cloned().unwrap_or_default();
+            for id in checks {
+                emit(json!({"type":"permission_resolve","callId":id}));
+            }
+            state["permChecks"] = json!([]);
+        }
         match event.as_str() {
             "UserPromptSubmit" => {
                 let title = content(&p["prompt"]);
@@ -195,6 +248,29 @@ impl Collector {
                     );
                 } else {
                     emit(json!({"type":"step","eventId":id,"label":tool}));
+                    // CodeBuddy IDE / VS Code 插件在弹「需要你允许」时**不会**发 Notification
+                    // hook（实测客户端里那条链路是死代码），所以这里额外记一个检查点：工具
+                    // 已经开始、却长时间等不到 PostToolUse，就按「可能卡在等人确认」处理
+                    // （由 permission-check.ts 与 runtime 的告警各自按阈值判定）。
+                    let mut checks = state["permChecks"].as_array().cloned().unwrap_or_default();
+                    if !checks.iter().any(|c| c == &json!(&id)) {
+                        checks.push(json!(&id));
+                    }
+                    state["permChecks"] = json!(checks);
+                    emit(json!({"type":"permission_check","callId":id}));
+                    // 记下这次调用（含命令文本），供客户端日志里的「危险命令」判定回指到本会话。
+                    self.recent_calls.push_back(crate::adapters::RecentToolCall {
+                        ts,
+                        session: sid.clone(),
+                        round: text(&state["roundId"]),
+                        call_id: id.clone(),
+                        command: text(&p["tool_input"]["command"]),
+                        agent_type: agent_type.to_string(),
+                        host_kind: host_kind.to_string(),
+                    });
+                    while self.recent_calls.len() > 64 {
+                        self.recent_calls.pop_front();
+                    }
                 }
             }
             "PostToolUse" if state["ended"] != true && ask => {
@@ -219,6 +295,38 @@ impl Collector {
                     emit(json!({"type":"resolve","callId":id}));
                 }
             }
+            // 客户端弹出「需要你允许 / 需要你确认」时的通知。
+            "Notification" if state["ended"] != true => {
+                let raw = text(&p["notification_type"]);
+                let raw = if raw.is_empty() {
+                    text(&p["notificationType"])
+                } else {
+                    raw
+                };
+                let kind = raw.to_ascii_lowercase();
+                if matches!(kind.as_str(), "permission_prompt" | "elicitation_dialog") {
+                    let id = p["tool_use_id"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("notify:{ts}"));
+                    let key = Value::String(id.clone());
+                    let mut pending = state["notifications"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
+                    if !pending.iter().any(|n| n == &key) {
+                        pending.push(key);
+                    }
+                    state["notifications"] = json!(pending);
+                    emit(json!({
+                        "type":"wait",
+                        "callId":id,
+                        "tool":"permission",
+                        "text":permission_text(p)
+                    }));
+                }
+            }
             "Stop"
                 if state["ended"] != true
                     && !text(&state["roundId"]).is_empty()
@@ -227,12 +335,13 @@ impl Collector {
                 emit(json!({"type":"end","status":"done"}));
                 state["ended"] = json!(true);
             }
-            // Switching/deleting a conversation is not successful task completion.
-            "SessionEnd" if state["ended"] != true && !text(&state["roundId"]).is_empty() => {
-                emit(json!({"type":"end","status":"aborted"}));
-                state["calls"] = json!({});
-                state["ended"] = json!(true);
-            }
+            // 客户端在「新建/切换会话、finalize 会话」时都会发 SessionEnd，而 payload 用的是
+            // SessionHookManager 里**全局唯一**的 sessionId（SessionCoordinator.endSession 传入的
+            // conversationId 并不会进 payload），所以它既可能指向另一个会话，也不代表后台任务真的
+            // 结束：实测「新建对话」会立刻让仍在后台跑的旧会话收到 SessionEnd，前端就显示「已终止」。
+            // 因此不在这里终止——多会话需要并行显示。会话由 Stop（回合结束 → done）收敛，
+            // 长期无更新的会话由 hub 的 45 分钟 stale 兜底。
+            "SessionEnd" => {}
             "PreCompact" if state["ended"] != true => {
                 emit(json!({"type":"activity"}));
             }

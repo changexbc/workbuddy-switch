@@ -663,7 +663,9 @@ fn ide_hooks_only_lifecycle_and_shared_cli_filter() {
     let mut c = home.collector("codebuddy-ide");
     c.poll();
     assert!(c.hub.sessions.is_empty());
-    assert!(!c.ingest_hook(&json!({"agent_source":"codebuddy-ide","session_id":"cli","hook_event_name":"UserPromptSubmit","client":"cli"})));
+    // 未知来源仍被拒；CodeBuddy CLI 的 client("CLI" → 小写 "cli") 现已纳入白名单。
+    assert!(!c.ingest_hook(&json!({"agent_source":"codebuddy-ide","session_id":"unknown","hook_event_name":"UserPromptSubmit","client":"unknown"})));
+    assert!(c.ingest_hook(&json!({"agent_source":"codebuddy-ide","session_id":"cli","hook_event_name":"UserPromptSubmit","client":"cli"})));
     let cases: serde_json::Value = serde_json::from_str(include_str!("../../../tests/fixtures/codebuddy-ide-hooks.json")).unwrap();
     let t = now();
     for (i, case) in cases.as_array().unwrap().iter().enumerate() {
@@ -716,6 +718,92 @@ fn ide_hooks_stamp_international_and_domestic_editions() {
         agent_studio_core::adapters::codebuddy_edition(&home.0.join(".codebuddycn/settings.json")),
         "domestic"
     );
+}
+
+/// 客户端弹权限确认（Notification/permission_prompt）应进入「待确认」，
+/// 工具真正执行后清除；非权限类通知不产生待确认。
+#[test]
+fn ide_permission_notification_maps_to_wait() {
+    let home = Home::new();
+    let mut c = home.collector("codebuddy-ide");
+    let t = now();
+    let hook = |c: &mut Collector, event: &str, extra: serde_json::Value, ts: i64| {
+        c.ingest_hook(&agent_studio_core::merge(
+            json!({
+                "agent_source":"codebuddy-ide","client":"CodeBuddyIDE","session_id":"perm",
+                "cwd":"/project","timestamp":ts,"hook_event_name":event
+            }),
+            extra,
+        ))
+    };
+    assert!(hook(&mut c, "UserPromptSubmit", json!({"prompt":"do it"}), t));
+    assert!(hook(
+        &mut c,
+        "PreToolUse",
+        json!({"tool_name":"Bash","tool_use_id":"call-1"}),
+        t + 1
+    ));
+    assert_eq!(c.hub.sessions["codebuddy-ide:perm"]["status"], "running");
+    assert!(hook(
+        &mut c,
+        "Notification",
+        json!({"notification_type":"permission_prompt","message":"needs your permission to use Bash"}),
+        t + 2
+    ));
+    let session = &c.hub.sessions["codebuddy-ide:perm"];
+    assert_eq!(session["status"], "wait");
+    assert_eq!(
+        session["pending"][0]["text"],
+        "needs your permission to use Bash"
+    );
+    // 工具真正跑起来 → 弹窗已被处理，回到运行中。
+    assert!(hook(
+        &mut c,
+        "PostToolUse",
+        json!({"tool_name":"Bash","tool_use_id":"call-1","tool_response":{}}),
+        t + 3
+    ));
+    let session = &c.hub.sessions["codebuddy-ide:perm"];
+    assert_eq!(session["status"], "running");
+    assert!(session["pending"].as_array().unwrap().is_empty());
+    // 非权限通知（如等待输入）不产生待确认。
+    assert!(hook(
+        &mut c,
+        "Notification",
+        json!({"notification_type":"idle_prompt","message":"waiting for input"}),
+        t + 4
+    ));
+    assert_eq!(c.hub.sessions["codebuddy-ide:perm"]["status"], "running");
+}
+
+/// 客户端新建/切换会话都会发 SessionEnd，但它不该把仍在后台跑的会话置为「已终止」，
+/// 否则多会话无法并行显示。
+#[test]
+fn ide_session_end_does_not_abort_a_running_round() {
+    let home = Home::new();
+    let mut c = home.collector("codebuddy-ide");
+    let t = now();
+    let hook = |c: &mut Collector, sid: &str, event: &str, extra: serde_json::Value, ts: i64| {
+        c.ingest_hook(&agent_studio_core::merge(
+            json!({
+                "agent_source":"codebuddy-ide","client":"vscode","session_id":sid,
+                "cwd":"/project","timestamp":ts,"hook_event_name":event
+            }),
+            extra,
+        ))
+    };
+    assert!(hook(&mut c, "a", "UserPromptSubmit", json!({"prompt":"长任务"}), t));
+    assert!(hook(&mut c, "a", "PreToolUse", json!({"tool_name":"Bash"}), t + 1));
+    assert_eq!(c.hub.sessions["codebuddy-ide:a"]["status"], "running");
+    // 新建另一个会话；客户端会对旧会话（或错发的 id）抛 SessionEnd。
+    assert!(hook(&mut c, "b", "UserPromptSubmit", json!({"prompt":"新会话"}), t + 2));
+    assert!(hook(&mut c, "a", "SessionEnd", json!({"reason":"other"}), t + 3));
+    assert_eq!(c.hub.sessions["codebuddy-ide:a"]["status"], "running");
+    assert_eq!(c.hub.sessions["codebuddy-ide:b"]["status"], "running");
+    // 回合真正结束才收敛为 done，且互不影响。
+    assert!(hook(&mut c, "a", "Stop", json!({}), t + 4));
+    assert_eq!(c.hub.sessions["codebuddy-ide:a"]["status"], "done");
+    assert_eq!(c.hub.sessions["codebuddy-ide:b"]["status"], "running");
 }
 #[test]
 fn ide_hook_merge_preserves_user_handlers_and_is_idempotent() {

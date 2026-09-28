@@ -55,3 +55,4 @@ npm/platform/*/bin/
 .grok/
 /.workbuddy/
 /AGENTS.md
+vendor/agent-companion/dist-embed2/

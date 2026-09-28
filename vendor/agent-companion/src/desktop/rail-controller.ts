@@ -177,6 +177,24 @@ export function createRailController(options: RailControllerOptions = {}) {
 
   function reminders() { return automaticReminderItems(model.items, model.connection, mutedQuestions); }
 
+  /**
+   * ✕ 落在「待确认」卡片上时关掉本轮监听，而不是只静音提醒。
+   *
+   * 「待确认」是活状态而不是已结束的一轮：客户端弹出权限询问后，如果被自动批准/自动
+   * 拒绝、或弹窗被直接关掉，就可能**不会**再补一个能触发 `resolve` 的工具事件。只静音
+   * 提醒的话，卡片会一直挂着「待确认」且再也消不掉（点叉、跳转都没用）。
+   * 关闭失败时退回静音，至少保证点叉有反馈。
+   */
+  async function closePendingRound(item: RailItem) {
+    try {
+      if (await endMonitoring(item.session.source, item.session.sessionId, item.session.roundId)) {
+        model.forgetMonitoring(item.id, item.session.roundId);
+        return;
+      }
+    } catch { /* 退回静音 */ }
+    mutedQuestions.set(item.id, questionKey(item));
+  }
+
   function build(): RailState {
     const items = model.items;
     const connection = model.connection;
@@ -676,7 +694,7 @@ export function createRailController(options: RailControllerOptions = {}) {
     dismiss(id: string) {
       const item = model.items.find(row => row.id === id);
       if (!item) return;
-      if (item.session.status === 'wait') mutedQuestions.set(id, questionKey(item));
+      if (item.session.status === 'wait') void closePendingRound(item);
       else if (prolongedPermissionCheck(item.session)) mutedQuestions.set(id, permissionReminderKey(item.session));
       else model.dismiss(id);
       hide();
