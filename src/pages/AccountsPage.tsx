@@ -69,11 +69,14 @@ import { useAccountsStore } from "@/stores/accounts";
  *
  * - 旅行：后台派发/领取循环最快 15 分钟变一次状态，1 分钟用于及时反映"到期领取"后的显示；
  * - 限额：CLI / WorkBuddy 由后端 hook 信号实时入账并推送（`rate-limits-updated`），
- *   这里只兜底 IDE 日志扫描；后端按同一间隔节流扫描，前端再按 payload 的 `scannedAt`
- *   判断「距上次扫描 ≥ 5 分钟」才发起，避免可见性切换/页面重挂载把扫描打散。
+ *   这里只兜底 IDE 日志扫描。后端命中缓存时这个接口是廉价的（真正的日志扫描在后端按
+ *   5 分钟节流），所以这里按 1 分钟收敛即可，**不能**再按 payload 的 `scannedAt` 跳过请求：
+ *   那样「距上次扫描不足 5 分钟时进页面」会拿不到台账，chip 要等到下一个轮询周期才出现。
  */
 const TRAVEL_REFRESH_INTERVAL_MS = 60 * 1000;
-const RATE_LIMIT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const RATE_LIMIT_REFRESH_INTERVAL_MS = 60 * 1000;
+/** 台账请求的最小间隔：只做防抖（可见性抖动 / 重挂载 / 事件风暴），不参与「要不要显示」。 */
+const RATE_LIMIT_FETCH_FLOOR_MS = 20 * 1000;
 
 function expiringSoonAmount(credit?: CreditExpiry): number {
   return credit?.ok ? credit.expiringSoonRemaining ?? 0 : 0;
@@ -450,29 +453,27 @@ export default function AccountsPage() {
    * 容错：老版本后端没有该命令、或扫描失败时按「无受限模型」处理（清空映射），
    * 不弹错误、不影响账号页其它功能。
    */
-  const lastRateLimitScanRef = useRef(0);
+  const lastRateLimitFetchRef = useRef(0);
 
   async function loadRateLimits(options?: { force?: boolean }) {
     if (rateLimitEnabled !== true) return;
-    const scannedAt = lastRateLimitScanRef.current;
     if (
       !options?.force &&
-      scannedAt > 0 &&
-      Date.now() - scannedAt < RATE_LIMIT_REFRESH_INTERVAL_MS
+      Date.now() - lastRateLimitFetchRef.current < RATE_LIMIT_FETCH_FLOOR_MS
     ) {
       return;
     }
+    lastRateLimitFetchRef.current = Date.now();
     try {
       const payload = await api.getRateLimits();
-      // `scannedAt` 是后端最近一次真实日志扫描的时刻：下一次扫描要等它满 5 分钟。
-      lastRateLimitScanRef.current = payload.scannedAt || Date.now();
       const next: Record<string, RateLimitEntry[]> = {};
       for (const entry of payload.accounts ?? []) {
         if (entry.limited?.length) next[entry.accountId] = entry.limited;
       }
       setRateLimitMap(next);
     } catch {
-      setRateLimitMap({});
+      // 保留上一次的台账：一次瞬时失败（超时 / 旧后端没有该命令）不该把 chip 全部抹掉。
+      // 首次加载时 map 本来就是空的，保留也不会误显示。
     }
   }
 
