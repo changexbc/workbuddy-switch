@@ -1,7 +1,8 @@
 # Agent Companion desktop component
 
-The desktop build includes one pinned Agent Companion source snapshot in
-`vendor/agent-companion/`. Its revision and archive digest are recorded in
+The desktop build includes a pinned Agent Companion source snapshot with a
+tracked host compatibility patch in `vendor/agent-companion/`. Its upstream
+revision, archive digest, and patch digest are recorded in
 `vendor/agent-companion.version.json`. The Rust plugin, embedded pages, and
 monitor runtime all come from that snapshot. The regular WebUI `npm run build`
 does not prepare or start the native component.
@@ -16,10 +17,22 @@ node scripts/vendor-agent-companion.mjs /path/to/agent-companion <full-commit-sh
 
 The script uses `git archive`, so local uncommitted changes do not enter the
 snapshot. Commit the resulting `vendor/` files together with the manifest and
-the host changes. A clean wb-switch checkout then needs no sibling repository.
+the host changes. The script automatically applies
+`patches/agent-companion/host-compatibility.patch` before replacing the snapshot;
+if the patch conflicts with a newer upstream version, it fails without replacing
+the existing snapshot. Refresh the patch against that version before retrying.
+A clean wb-switch checkout then needs no sibling repository.
 The `interfaceVersion` in the manifest is the host/component compatibility
 boundary; changes to native plugin commands or window behavior require a host
 release.
+
+The compatibility patch preserves behavior already present in WB Switch's
+previous snapshot: structured Codex questions (including optional async
+questions, answer matching, and expiry), their regression tests and QA scripts,
+and the macOS non-activating rail panel. These changes are absent from upstream
+0.2.1 and must survive a source refresh. The pinned revision `c69b011` adds the
+memory consolidation session filter and recovery regression coverage on top of
+0.2.1; that commit was present in the local source checkout at refresh time.
 
 ## Build
 

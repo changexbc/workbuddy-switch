@@ -2,5 +2,6 @@
   "# Overview Generate 0 to 3 hyperpersonalized suggestions for what this user can do with Codex",
   "You are an expert at upholding safety and compliance standards for Codex ambient suggestions.",
   "## Memory Writing Agent: Phase 2 (Consolidation) You are a Memory Writing Agent.",
+  "Consolidate the supplied rollout summaries into `memory_summary.md` so another agent understands the user, finds relevant prior work, and continues correctly.",
   "Your task is to generate a very short title for a conversation based on the user's first message. The title must be 3–7 words, sentence case, with no quotation marks and no markdown formatting."
 ]

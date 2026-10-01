@@ -1,0 +1,1467 @@
+diff --git a/collector/lib/codex-live.js b/collector/lib/codex-live.js
+index bd52fd9..a261731 100644
+--- a/collector/lib/codex-live.js
++++ b/collector/lib/codex-live.js
+@@ -1,4 +1,5 @@
+ import { isInternalCodexPrompt } from '../../src/monitor/session-visibility.js';
++import { question, questionDetails, questionReplyIds } from './codex.js';
+ // Codex sessions are driven exclusively by lifecycle hooks.
+ import fs from 'node:fs/promises';
+ import { createHash } from 'node:crypto';
+@@ -107,14 +108,27 @@ export class CodexLivePoller {
+     const emit = ev => this.hub.ingest({source:'codex',sessionId:h.sessionId,cwd:state.cwd,roundId:round,ts:h.ts,...ev});
+     if (!prev || begins) emit({type:'start'});
+     const command = h.input.command == null ? null : createHash('sha256').update(JSON.stringify(h.input.command)).digest('hex');
+-    // Only synchronous questions block the turn; async prompts are ordinary steps.
+-    const isQuestion = /(?:^|__|\.)(request_user_input|AskUserQuestion|ask_user_question|RequestUserInput)$/.test(h.tool);
++    // Async questions wait like synchronous ones; only their own completion
++    // must not clear them.
++    const isQuestion = /(?:^|__|\.)(request_user_input|request_user_input_async|AskUserQuestion|ask_user_question|RequestUserInput)$/.test(h.tool);
+     if (h.event === 'UserPromptSubmit') {
+-      if(h.prompt) emit({type:'meta',title:h.prompt.slice(0,240)});
++      if (h.prompt.startsWith('<send_user_message_question_reply>')) {
++        // Answers clear their exact call and never become a session title.
++        for (const callId of questionReplyIds(h.prompt)) emit({type:'resolve',callId});
++      } else if (h.prompt && !h.prompt.startsWith('<')) {
++        // Real prompts clear Hub optional waits, not just the per-round call
++        // map: PostToolUse marks async calls resolved, and that map is then
++        // pruned, while the question can still be pending.
++        const ids = (this.hub.sessions.get(`codex:${h.sessionId}`)?.pending || [])
++          .filter(item => item.optional === true).map(item => item.id).filter(Boolean);
++        for (const callId of ids) emit({type:'resolve',callId});
++        emit({type:'meta',title:h.prompt.slice(0,240)});
++      }
+     }
+     if (h.event === 'PreToolUse' && h.callId && !state.calls.get(h.callId)?.resolved) {
+-      state.calls.set(h.callId,{tool:h.tool,command,resolved:false,async:h.tool.endsWith('request_user_input_async'),ts:h.ts});
+-      if (isQuestion) emit({type:'wait',callId:h.callId,tool:h.tool,text:'需要你确认'});
++      const optional = h.tool.endsWith('request_user_input_async');
++      state.calls.set(h.callId,{tool:h.tool,command,resolved:false,async:optional,ts:h.ts});
++      if (isQuestion) emit({type:'wait',callId:h.callId,tool:h.tool,text:question(h.input),questions:questionDetails(h.input),...(optional?{optional:true}:{})});
+       else emit({type:'step',eventId:h.callId,label:h.tool});
+     }
+     if (h.event === 'PermissionRequest') {
+diff --git a/collector/lib/codex.js b/collector/lib/codex.js
+index 17be9d0..56562ba 100644
+--- a/collector/lib/codex.js
++++ b/collector/lib/codex.js
+@@ -11,6 +11,25 @@ export function questionDetails(input) {
+   } catch { return []; }
+ }
+ function question(input) { return questionDetails(input).map(q=>q.text).filter(Boolean).join('\n')||'等待用户输入'; }
++// Codex answers arrive as `<send_user_message_question_reply>` plus a JSON array
++// whose `questionItemId` embeds `[tool, callId, index]`. A missing envelope or
++// invalid JSON yields no answer instead of an error.
++export function questionReplyIds(prompt) {
++  const body = typeof prompt === 'string' ? prompt : '';
++  if (!body.includes('<send_user_message_question_reply>')) return [];
++  const start = body.indexOf('['), end = body.lastIndexOf(']');
++  if (start < 0 || end < start) return [];
++  try {
++    const items = JSON.parse(body.slice(start, end + 1));
++    return (Array.isArray(items) ? items : []).flatMap(item => {
++      if (typeof item?.questionItemId !== 'string') return [];
++      try {
++        const ids = JSON.parse(item.questionItemId);
++        return Array.isArray(ids) && typeof ids[1] === 'string' && ids[1] ? [ids[1]] : [];
++      } catch { return []; }
++    });
++  } catch { return []; }
++}
+ export function codexRecord(rec, ctx, emit) {
+   const p = rec.payload || {}, type = p.type, ts = timestamp(rec.timestamp);
+   if (rec.type === 'session_meta') { ctx.sessionId = p.id || p.session_id || ctx.sessionId; ctx.cwd = p.cwd || ctx.cwd; }
+@@ -22,14 +41,24 @@ export function codexRecord(rec, ctx, emit) {
+   else if (['task_complete','task_failed','turn_aborted'].includes(type)) send({ type: 'end', roundId: p.turn_id || ctx.roundId, status: type === 'task_complete' ? 'done' : type === 'turn_aborted' ? 'aborted' : 'error' });
+   else if (type === 'user_message' || type === 'message' && p.role === 'user') {
+     // User messages carry titles; task_started is the sole explicit round boundary.
+-    const text = p.message || contentText(p.content);
+-    if (text.trim() && !text.trim().startsWith('<') && !text.startsWith('The following is the Codex agent history')) send({ type: 'meta', title: text });
++    const text = p.message || contentText(p.content), trimmed = text.trim();
++    if (trimmed.startsWith('<send_user_message_question_reply>')) {
++      // Answers clear their exact call and never become a session title.
++      for (const callId of questionReplyIds(text)) send({ type: 'resolve', callId });
++    } else if (trimmed && !trimmed.startsWith('<') && !text.startsWith('The following is the Codex agent history')) {
++      // A real user message supersedes every unanswered async question.
++      for (const callId of ctx.asyncQuestions || []) send({ type: 'resolve', callId });
++      ctx.asyncQuestions?.clear();
++      send({ type: 'meta', title: text });
++    }
+   } else if (['function_call','custom_tool_call'].includes(type)) {
+     const name = p.name || 'tool', callId = p.call_id || p.id || `${ts}:${rec.ordinal ?? name}`;
+-    // Remember async calls only to suppress resolve events from their outputs.
+-    if (/(?:^|__|\.)request_user_input_async$/.test(name)) (ctx.asyncQuestions ||= new Set()).add(callId);
+-    if (/(?:^|__|\.)(request_user_input|AskUserQuestion|ask_user_question|RequestUserInput)$/.test(name)) {
+-      send({ type: 'wait', callId, tool: name, text: question(p.arguments || p.input), questions: questionDetails(p.arguments || p.input) });
++    // Async calls stay pending until answered; remember them only so their
++    // outputs do not emit a resolve on their behalf.
++    const async = /(?:^|__|\.)request_user_input_async$/.test(name);
++    if (async) (ctx.asyncQuestions ||= new Set()).add(callId);
++    if (async || /(?:^|__|\.)(request_user_input|AskUserQuestion|ask_user_question|RequestUserInput)$/.test(name)) {
++      send({ type: 'wait', callId, tool: name, text: question(p.arguments || p.input), questions: questionDetails(p.arguments || p.input), ...(async ? {optional:true} : {}) });
+     }
+     else send({ type: 'step', eventId: callId, label: name });
+   } else if (['function_call_output','custom_tool_call_output'].includes(type)) {const callId=p.call_id||p.id;if(!ctx.asyncQuestions?.has(callId))send({type:'resolve',callId});}
+diff --git a/collector/lib/hub.js b/collector/lib/hub.js
+index c1af649..d5b5499 100644
+--- a/collector/lib/hub.js
++++ b/collector/lib/hub.js
+@@ -1,6 +1,9 @@
+ import path from 'node:path';
+ export const TERMINAL = new Set(['done', 'error', 'aborted']);
+ export const STALE_MS = 45 * 60 * 1000;
++// Optional waits stop blocking after this window, matching the host app's own
++// 60-second no-interaction auto-resolution.
++export const OPTIONAL_TTL_MS = 60_000;
+ 
+ function asId(value) {
+   return value == null || value === '' ? '' : String(value);
+@@ -68,7 +71,13 @@ export class Hub {
+       s.steps = s.steps.slice(-20); s.status = s.pending.length ? 'wait' : 'running';
+     }
+     if (ev.type === 'wait' && !TERMINAL.has(s.status)) {
+-      if (!s.pending.some(p => p.id === ev.callId)) s.pending.push({ id: ev.callId, tool: ev.tool, text: String(ev.text || '等待用户输入').slice(0, 500), questions: ev.questions || [], ts });
++      if (!s.pending.some(p => p.id === ev.callId)) {
++        const item = { id: ev.callId, tool: ev.tool, text: String(ev.text || '等待用户输入').slice(0, 500), questions: ev.questions || [], ts };
++        // Only async Codex questions are optional; every other source keeps an
++        // item that never expires on its own.
++        if (ev.optional === true) item.optional = true;
++        s.pending.push(item);
++      }
+       s.status = 'wait'; this.event(s, 'wait', ev.callId, ts);
+     }
+     if (ev.type === 'resolve') {
+@@ -100,8 +109,13 @@ export class Hub {
+     const hosted = hostedCodexIds(this.sessions.values());
+     const hidden = s => s.source === 'codex' && this.hiddenCodegCodexIds.has(asId(s.sessionId).replace(/^thr_/, '')) || isCodegHostedCodex(s, hosted);
+     const sessions = [...this.sessions.values()].filter(s => !hidden(s)).map(s => {
+-      const stale = !TERMINAL.has(s.status) && !s.pending.length && now - s.updatedAt > STALE_MS;
+-      return { ...s, project: path.basename(s.cwd) || s.source, status: stale ? 'unknown' : s.status, stale, elapsed: Math.max(0, ((s.endedAt || now) - s.startedAt) / 1000), progress: null };
++      // An optional wait expires lazily on read: the host app hides its own
++      // question card after the user stops interacting, so a stale item must
++      // not keep the session in `wait`.
++      const pending = s.pending.filter(p => !(p.optional === true && now - (p.ts ?? 0) > OPTIONAL_TTL_MS));
++      const status = s.status === 'wait' && !pending.length ? 'running' : s.status;
++      const stale = !TERMINAL.has(status) && !pending.length && now - s.updatedAt > STALE_MS;
++      return { ...s, pending, project: path.basename(s.cwd) || s.source, status: stale ? 'unknown' : status, stale, elapsed: Math.max(0, ((s.endedAt || now) - s.startedAt) / 1000), progress: null };
+     }).sort((a,b) => b.updatedAt - a.updatedAt);
+     // A long replay can evict old events; unresolved requests must stay discoverable.
+     const events = new Map([...this.events].filter(([, event]) => {
+diff --git a/crates/agent-studio-core/src/adapters/codex.rs b/crates/agent-studio-core/src/adapters/codex.rs
+index 85bc54d..3d703ea 100644
+--- a/crates/agent-studio-core/src/adapters/codex.rs
++++ b/crates/agent-studio-core/src/adapters/codex.rs
+@@ -1,6 +1,6 @@
+ // Codex is event-driven: no database, transcript, or persisted-session reads.
+ use super::*;
+-use crate::{content, merge, question_tool};
++use crate::{content, merge, question, question_reply_ids, question_tool, questions, text};
+ use std::hash::{Hash, Hasher};
+ 
+ fn internal_prompt(prompt: &str) -> bool {
+@@ -140,6 +140,31 @@ impl Collector {
+         if let Some(cwd) = p["cwd"].as_str().filter(|s| !s.is_empty()) {
+             state["cwd"] = json!(cwd);
+         }
++        let prompt = content(&p["prompt"]);
++        let trimmed = prompt.trim();
++        // Real prompts clear Hub optional waits, not just the per-round call
++        // map: PostToolUse marks async calls resolved, and that map is then
++        // pruned, while the question can still be pending.
++        let optional_ids: Vec<String> = if event == "UserPromptSubmit"
++            && !trimmed.is_empty()
++            && !trimmed.starts_with('<')
++        {
++            self.hub
++                .sessions
++                .get(&format!("codex:{sid}"))
++                .and_then(|session| session["pending"].as_array())
++                .map(|pending| {
++                    pending
++                        .iter()
++                        .filter(|item| item["optional"] == true)
++                        .map(|item| text(&item["id"]))
++                        .filter(|id| !id.is_empty())
++                        .collect()
++                })
++                .unwrap_or_default()
++        } else {
++            Vec::new()
++        };
+         let base =
+             json!({"source":"codex","sessionId":sid,"cwd":state["cwd"],"roundId":round,"ts":ts});
+         let mut emit = |ev| self.hub.ingest(merge(base.clone(), ev));
+@@ -162,18 +187,34 @@ impl Collector {
+         };
+         match event.as_str() {
+             "UserPromptSubmit" => {
+-                // Prompt text is a hook-provided label, not the database conversation title.
+-                let title = content(&p["prompt"]);
+-                if !title.trim().is_empty() {
+-                    emit(json!({"type":"meta","title":title}));
++                if trimmed.starts_with("<send_user_message_question_reply>") {
++                    // Answers clear their exact call and never become a session title.
++                    for call in question_reply_ids(&prompt) {
++                        emit(json!({"type":"resolve","callId":call}));
++                    }
++                } else if trimmed.starts_with('<') {
++                    // Other internal envelopes (browser context, environment) neither
++                    // title the session nor answer a question.
++                } else if !trimmed.is_empty() {
++                    for call in &optional_ids {
++                        emit(json!({"type":"resolve","callId":call}));
++                    }
++                    // Prompt text is a hook-provided label, not the database conversation title.
++                    emit(json!({"type":"meta","title":prompt}));
+                 }
+             }
+             "PreToolUse" => {
+                 if !id.is_empty() && state["calls"][&id]["resolved"] != true {
+-                    state["calls"][&id] = json!({"tool":tool,"command":command,"resolved":false,"async":tool.ends_with("request_user_input_async"),"ts":ts});
+-                    // Optional async questions do not block the Codex turn.
+-                    if question_tool(&tool) && !tool.ends_with("request_user_input_async") {
+-                        emit(json!({"type":"wait","callId":id,"tool":tool,"text":"需要你确认"}));
++                    let optional = tool.ends_with("request_user_input_async");
++                    state["calls"][&id] = json!({"tool":tool,"command":command,"resolved":false,"async":optional,"ts":ts});
++                    if question_tool(&tool) {
++                        let mut ev = json!({"type":"wait","callId":id,"tool":tool,"text":question(&input),"questions":questions(&input)});
++                        // Async questions never block the Codex turn, so the Hub
++                        // expires them on its own clock.
++                        if optional {
++                            ev["optional"] = json!(true);
++                        }
++                        emit(ev);
+                     } else {
+                         emit(json!({"type":"step","eventId":id,"label":tool}));
+                     }
+@@ -217,8 +258,8 @@ impl Collector {
+                     let is_async = state["calls"][&id]["async"] == true
+                         || tool.ends_with("request_user_input_async");
+                     state["calls"][&id] = json!({"tool":tool,"command":command,"resolved":true,"async":is_async,"ts":ts});
+-                    // Async questions never create waits, so their completion must
+-                    // not resolve any pending synchronous question.
++                    // An async question returns before the user answers, so its
++                    // completion must not resolve any pending question.
+                     if !is_async {
+                         emit(json!({"type":"resolve","callId":id}));
+                     }
+diff --git a/crates/agent-studio-core/src/hub.rs b/crates/agent-studio-core/src/hub.rs
+index 30c0560..8c700a3 100644
+--- a/crates/agent-studio-core/src/hub.rs
++++ b/crates/agent-studio-core/src/hub.rs
+@@ -2,6 +2,9 @@ use crate::{now, text};
+ use serde_json::{json, Value};
+ use std::collections::{BTreeMap, HashSet, VecDeque};
+ pub const STALE: i64 = 45 * 60 * 1000;
++/// Optional waits stop blocking after this window, matching the host app's own
++/// 60-second no-interaction auto-resolution.
++pub const OPTIONAL_TTL_MS: i64 = 60_000;
+ pub fn terminal(s: &str) -> bool {
+     matches!(s, "done" | "error" | "aborted")
+ }
+@@ -133,7 +136,13 @@ impl Hub {
+             "wait" if !terminal(&text(&s["status"])) => {
+                 let a = s["pending"].as_array_mut().unwrap();
+                 if !a.iter().any(|x| x["id"] == ev["callId"]) {
+-                    a.push(json!({"id":ev["callId"],"tool":ev["tool"],"text":text(&ev["text"]).chars().take(500).collect::<String>(),"questions":ev["questions"].as_array().cloned().unwrap_or_default(),"ts":ts}));
++                    let mut item = json!({"id":ev["callId"],"tool":ev["tool"],"text":text(&ev["text"]).chars().take(500).collect::<String>(),"questions":ev["questions"].as_array().cloned().unwrap_or_default(),"ts":ts});
++                    // Only async Codex questions are optional; every other
++                    // source keeps an item that never expires on its own.
++                    if ev["optional"] == true {
++                        item["optional"] = json!(true);
++                    }
++                    a.push(item);
+                 }
+                 s["status"] = json!("wait");
+                 event = Some(("wait".to_owned(), ev["callId"].clone()));
+@@ -206,6 +215,16 @@ impl Hub {
+             })
+             .cloned()
+             .map(|mut s| {
++                // An optional wait expires lazily on read: the host app hides
++                // its own question card after the user stops interacting, so a
++                // stale item must not keep the session in `wait`.
++                s["pending"].as_array_mut().unwrap().retain(|p| {
++                    !(p["optional"] == true
++                        && time - p["ts"].as_i64().unwrap_or(0) > OPTIONAL_TTL_MS)
++                });
++                if s["status"] == "wait" && s["pending"].as_array().unwrap().is_empty() {
++                    s["status"] = json!("running");
++                }
+                 let stale = !terminal(&text(&s["status"]))
+                     && s["pending"].as_array().is_some_and(|a| a.is_empty())
+                     && time - s["updatedAt"].as_i64().unwrap_or(0) > STALE;
+diff --git a/crates/agent-studio-core/src/lib.rs b/crates/agent-studio-core/src/lib.rs
+index 7e1a99b..1814f7c 100644
+--- a/crates/agent-studio-core/src/lib.rs
++++ b/crates/agent-studio-core/src/lib.rs
+@@ -95,6 +95,39 @@ pub fn question(v: &Value) -> String {
+         s
+     }
+ }
++/// Codex answers arrive as `<send_user_message_question_reply>` plus a JSON
++/// array whose `questionItemId` embeds `[tool, callId, index]`. A missing
++/// envelope or invalid JSON yields no answer instead of an error.
++pub fn question_reply_ids(prompt: &str) -> Vec<String> {
++    if !prompt.contains("<send_user_message_question_reply>") {
++        return vec![];
++    }
++    let (Some(start), Some(end)) = (prompt.find('['), prompt.rfind(']')) else {
++        return vec![];
++    };
++    if end < start {
++        return vec![];
++    }
++    serde_json::from_str::<Value>(&prompt[start..=end])
++        .ok()
++        .and_then(|items| {
++            items.as_array().map(|items| {
++                items
++                    .iter()
++                    .filter_map(|item| {
++                        let ids: Value =
++                            serde_json::from_str(item["questionItemId"].as_str()?).ok()?;
++                        ids.as_array()?
++                            .get(1)?
++                            .as_str()
++                            .filter(|id| !id.is_empty())
++                            .map(str::to_owned)
++                    })
++                    .collect()
++            })
++        })
++        .unwrap_or_default()
++}
+ pub fn merge(mut base: Value, extra: Value) -> Value {
+     if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
+         b.extend(e.clone());
+@@ -119,3 +152,26 @@ pub fn atomic_json(path: &std::path::Path, v: &Value) -> Result<(), String> {
+     f.sync_all().map_err(|e| e.to_string())?;
+     std::fs::rename(tmp, path).map_err(|e| e.to_string())
+ }
++
++#[cfg(test)]
++mod question_reply_ids_tests {
++    use super::question_reply_ids;
++
++    fn envelope(items: &str) -> String {
++        format!("<send_user_message_question_reply>\n{items}\n</send_user_message_question_reply>")
++    }
++
++    #[test]
++    fn extracts_every_call_id_and_tolerates_bad_payloads() {
++        let two = serde_json::json!([
++            {"questionItemId": serde_json::json!(["t","a",0]).to_string(), "answer":"A"},
++            {"questionItemId": serde_json::json!(["t","b",1]).to_string(), "answer":"B"},
++        ]);
++        assert_eq!(question_reply_ids(&envelope(&two.to_string())), vec!["a", "b"]);
++        assert!(question_reply_ids("hello").is_empty());
++        assert!(question_reply_ids(&envelope("not json")).is_empty());
++        assert!(question_reply_ids(&envelope("{}")).is_empty());
++        assert!(question_reply_ids(&envelope(r#"[{"questionItemId":["t","x",0]}]"#)).is_empty());
++        assert!(question_reply_ids(&envelope(r#"[{"questionItemId":"[\"t\",\"\",0]"}]"#)).is_empty());
++    }
++}
+diff --git a/crates/agent-studio-core/tests/lifecycle.rs b/crates/agent-studio-core/tests/lifecycle.rs
+index 5d1ff13..d9095f0 100644
+--- a/crates/agent-studio-core/tests/lifecycle.rs
++++ b/crates/agent-studio-core/tests/lifecycle.rs
+@@ -1202,35 +1202,149 @@ fn unhooked_host_kinds_never_conclude_an_exit() {
+ }
+ 
+ #[test]
+-fn codex_async_questions_never_notify_or_clear_synchronous_waits() {
++fn codex_async_questions_wait_and_clear_by_reply_prompt_or_end() {
+     let home = Home::new();
+     let mut c = home.collector("codex");
+     let mut ts = now();
+-    let mut hook = |c: &mut Collector, event: &str, tool: &str, id: &str| {
++    let mut hook = |c: &mut Collector, p: serde_json::Value| {
+         ts += 1;
+-        c.ingest_hook(&json!({"session_id":"x","turn_id":"r","hook_event_name":event,"tool_name":tool,"tool_use_id":id,"timestamp":ts}));
++        c.ingest_hook(&agent_studio_core::merge(
++            json!({"session_id":"x","turn_id":"r","timestamp":ts}),
++            p,
++        ));
+     };
+-    hook(&mut c, "UserPromptSubmit", "", "");
+-    for tool in ["request_user_input_async", "functions.request_user_input_async", "mcp__codex__request_user_input_async"] {
+-        for event in ["PreToolUse", "PostToolUse", "PreToolUse"] {
+-            hook(&mut c, event, tool, tool);
+-            assert_eq!(c.hub.sessions["codex:x"]["status"], "running");
+-            assert_eq!(c.hub.sessions["codex:x"]["pending"], json!([]));
+-            assert_eq!(c.hub.snapshot()["events"], json!([]));
+-        }
+-    }
+-    hook(&mut c, "PreToolUse", "functions.request_user_input", "sync");
+-    assert_eq!(c.hub.snapshot()["events"].as_array().unwrap().len(), 1);
+-    for event in ["PreToolUse", "PostToolUse", "PreToolUse"] {
+-        hook(&mut c, event, "functions.request_user_input_async", "parallel");
++    let reply = |tool: &str| {
++        json!({"hook_event_name":"UserPromptSubmit","prompt":format!(
++            "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",
++            json!([{"questionItemId":json!([tool, tool, 0]).to_string(),"answer":"甲"}]).to_string())})
++    };
++    hook(&mut c, json!({"hook_event_name":"UserPromptSubmit","prompt":"Start"}));
++    // Async questions now notify like synchronous ones, and their own completion
++    // must not clear them.
++    for tool in [
++        "request_user_input_async",
++        "functions.request_user_input_async",
++        "mcp__codex__request_user_input_async",
++    ] {
++        hook(&mut c, json!({
++            "hook_event_name":"PreToolUse","tool_name":tool,"tool_use_id":tool,
++            "tool_input":{"questions":[{"title":"偏好","options":[{"label":"A","description":"甲"}]}]}
++        }));
+         assert_eq!(c.hub.sessions["codex:x"]["status"], "wait");
+-        let pending = c.hub.sessions["codex:x"]["pending"].as_array().unwrap();
++        let pending = c.hub.sessions["codex:x"]["pending"].as_array().unwrap().clone();
+         assert_eq!(pending.len(), 1);
+-        assert_eq!(pending[0]["id"], "sync");
+-        assert_eq!(c.hub.snapshot()["events"].as_array().unwrap().len(), 1);
++        assert_eq!(pending[0]["id"], tool);
++        assert_eq!(pending[0]["optional"], json!(true));
++        assert_eq!(pending[0]["text"], "偏好");
++        assert_eq!(pending[0]["questions"][0]["options"][0]["description"], "甲");
++        hook(&mut c, json!({"hook_event_name":"PostToolUse","tool_name":tool,"tool_use_id":tool}));
++        assert_eq!(
++            c.hub.sessions["codex:x"]["pending"].as_array().unwrap().len(),
++            1
++        );
++        // The answer envelope clears exactly that call and never titles the session.
++        hook(&mut c, reply(tool));
++        assert_eq!(c.hub.sessions["codex:x"]["pending"], json!([]));
++        assert_eq!(c.hub.sessions["codex:x"]["status"], "running");
++        assert_eq!(c.hub.sessions["codex:x"]["title"], "Start");
+     }
+-    hook(&mut c, "PostToolUse", "functions.request_user_input", "sync");
+-    assert_eq!(c.hub.sessions["codex:x"]["status"], "running");
++    // A synchronous question survives an async completion; only a real prompt
++    // clears the unanswered async item, and only it is optional.
++    hook(&mut c, json!({"hook_event_name":"PreToolUse","tool_name":"functions.request_user_input","tool_use_id":"sync"}));
++    hook(&mut c, json!({"hook_event_name":"PreToolUse","tool_name":"functions.request_user_input_async","tool_use_id":"waiting"}));
++    hook(&mut c, json!({"hook_event_name":"PostToolUse","tool_name":"functions.request_user_input_async","tool_use_id":"waiting"}));
++    let pending = c.hub.sessions["codex:x"]["pending"].as_array().unwrap().clone();
++    assert_eq!(pending.len(), 2);
++    assert_eq!(pending[0]["id"], "sync");
++    assert_eq!(pending[0]["optional"], json!(null));
++    assert_eq!(pending[1]["id"], "waiting");
++    assert_eq!(pending[1]["optional"], json!(true));
++    // Another internal envelope is neither a title nor an answer.
++    hook(&mut c, json!({"hook_event_name":"UserPromptSubmit","prompt":"<in-app-browser-context url=\"x\">ctx</in-app-browser-context>"}));
++    assert_eq!(
++        c.hub.sessions["codex:x"]["pending"].as_array().unwrap().len(),
++        2
++    );
++    assert_eq!(c.hub.sessions["codex:x"]["title"], "Start");
++    hook(&mut c, json!({"hook_event_name":"UserPromptSubmit","prompt":"Continue"}));
++    let pending = c.hub.sessions["codex:x"]["pending"].as_array().unwrap().clone();
++    assert_eq!(pending.len(), 1);
++    assert_eq!(pending[0]["id"], "sync");
++    assert_eq!(c.hub.sessions["codex:x"]["title"], "Continue");
++    // Missing tool_input falls back to the generic wait copy.
++    hook(&mut c, json!({"hook_event_name":"PreToolUse","tool_name":"functions.request_user_input_async","tool_use_id":"bare"}));
++    assert_eq!(c.hub.sessions["codex:x"]["pending"][1]["text"], "等待用户输入");
++    // An empty prompt is not a real message: it neither titles nor answers.
++    hook(&mut c, json!({"hook_event_name":"UserPromptSubmit","prompt":"   "}));
++    assert_eq!(c.hub.sessions["codex:x"]["pending"].as_array().unwrap().len(), 2);
++    assert_eq!(c.hub.sessions["codex:x"]["title"], "Continue");
++    // One envelope can clear several call ids at once.
++    hook(
++        &mut c,
++        json!({"hook_event_name":"PreToolUse","tool_name":"functions.request_user_input_async","tool_use_id":"second"}),
++    );
++    let multi = json!([
++        {"questionItemId": json!(["functions.request_user_input_async","bare",0]).to_string(), "answer":"A"},
++        {"questionItemId": json!(["functions.request_user_input_async","second",1]).to_string(), "answer":"B"}
++    ]);
++    hook(&mut c, json!({"hook_event_name":"UserPromptSubmit","prompt":format!(
++        "<send_user_message_question_reply>\n{multi}\n</send_user_message_question_reply>"
++    )}));
++    let pending = c.hub.sessions["codex:x"]["pending"].as_array().unwrap().clone();
++    assert_eq!(pending.len(), 1);
++    assert_eq!(pending[0]["id"], "sync");
++    // Evicting call bookkeeping must not keep an unanswered async wait.
++    hook(&mut c, json!({"hook_event_name":"PreToolUse","tool_name":"functions.request_user_input_async","tool_use_id":"gone"}));
++    c.live.get_mut("x").unwrap()["calls"] = json!({});
++    hook(&mut c, json!({"hook_event_name":"UserPromptSubmit","prompt":"Still here"}));
++    let pending = c.hub.sessions["codex:x"]["pending"].as_array().unwrap().clone();
++    assert_eq!(pending.len(), 1);
++    assert_eq!(pending[0]["id"], "sync");
++    assert_eq!(c.hub.sessions["codex:x"]["title"], "Still here");
++    // The round end clears what is left.
++    hook(&mut c, json!({"hook_event_name":"Stop"}));
++    assert_eq!(c.hub.sessions["codex:x"]["status"], "done");
++    assert_eq!(c.hub.sessions["codex:x"]["pending"], json!([]));
++}
++
++#[test]
++fn optional_waits_expire_lazily_without_clearing_synchronous_items() {
++    let mut h = Hub::new();
++    let t = now();
++    for ev in [
++        json!({"type":"start","roundId":"r","ts":t}),
++        json!({"type":"wait","callId":"expired","tool":"ask","text":"旧问题","optional":true,"roundId":"r","ts":t-61_000}),
++        json!({"type":"wait","callId":"live","tool":"ask","text":"新问题","optional":true,"roundId":"r","ts":t-30_000}),
++        json!({"type":"wait","callId":"sync","tool":"ask","text":"同步问题","roundId":"r","ts":t-90_000}),
++    ] {
++        h.ingest(agent_studio_core::merge(
++            json!({"source":"codex","sessionId":"x"}),
++            ev,
++        ));
++    }
++    let s = h.snapshot()["sessions"][0].clone();
++    assert_eq!(s["status"], "wait");
++    assert_eq!(s["pending"].as_array().unwrap().len(), 2);
++    assert_eq!(s["pending"][0]["id"], "live");
++    assert_eq!(s["pending"][0]["optional"], json!(true));
++    assert_eq!(s["pending"][1]["id"], "sync");
++    assert_eq!(s["pending"][1]["optional"], json!(null));
++    // Expiry is decided on read, so the stored round still holds the old item.
++    assert_eq!(h.sessions["codex:x"]["pending"].as_array().unwrap().len(), 3);
++    let mut only = Hub::new();
++    for ev in [
++        json!({"type":"start","roundId":"r","ts":t}),
++        json!({"type":"wait","callId":"expired","tool":"ask","text":"旧问题","optional":true,"roundId":"r","ts":t-61_000}),
++    ] {
++        only.ingest(agent_studio_core::merge(
++            json!({"source":"codex","sessionId":"y"}),
++            ev,
++        ));
++    }
++    let expired = only.snapshot()["sessions"][0].clone();
++    assert_eq!(expired["status"], "running");
++    assert_eq!(expired["pending"], json!([]));
++    assert_eq!(only.sessions["codex:y"]["pending"].as_array().unwrap().len(), 1);
+ }
+ 
+ const OBSERVED_MEMORY_PROMPT: &str = "Consolidate the supplied rollout summaries into `memory_summary.md` so another agent understands the user, finds relevant prior work, and continues correctly.";
+diff --git a/crates/agent-studio-desktop/Cargo.toml b/crates/agent-studio-desktop/Cargo.toml
+index 2507804..8a24b8e 100644
+--- a/crates/agent-studio-desktop/Cargo.toml
++++ b/crates/agent-studio-desktop/Cargo.toml
+@@ -18,7 +18,7 @@ serde_json = "1"
+ url = "2"
+ [target.'cfg(target_os = "macos")'.dependencies]
+ objc2 = "0.6"
+-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSEvent", "NSApplication", "NSCursor"] }
++objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSPanel", "NSView", "NSEvent", "NSApplication", "NSCursor"] }
+ objc2-foundation = "0.3"
+ block2 = "0.6"
+ objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfiguration"] }
+diff --git a/crates/agent-studio-desktop/src/lib.rs b/crates/agent-studio-desktop/src/lib.rs
+index 2584c2d..773ece2 100644
+--- a/crates/agent-studio-desktop/src/lib.rs
++++ b/crates/agent-studio-desktop/src/lib.rs
+@@ -2,6 +2,8 @@ mod hit_test;
+ mod integration_folder;
+ #[cfg(target_os = "macos")]
+ mod background_cursor;
++#[cfg(target_os = "macos")]
++mod panel;
+ mod rail_settings;
+ mod session;
+ use agent_studio_runtime::Client;
+@@ -434,17 +436,26 @@ fn create_rail(app: &tauri::AppHandle, config: &Config) -> Result<(), Box<dyn st
+         rail.set_position(tauri::LogicalPosition::new(x, y))?;
+     }
+     #[cfg(target_os = "macos")]
+-    hit_test::install(
+-        rail.ns_window()? as usize,
+-        app.state::<hit_test::Regions>().inner().clone(),
+-        {
+-            let window = rail.clone();
+-            move |point| {
+-                let payload = point.map(|(x, y)| json!({ "x": x, "y": y }));
+-                let _ = window.emit("agent-studio-pointer", payload);
+-            }
+-        },
+-    );
++    {
++        let ns_window = rail.ns_window()? as usize;
++        // Clicking the rail must not activate the host application (which
++        // would pull every other host window to the front). A failed
++        // conversion keeps the plain window, which still works.
++        if let Err(error) = panel::convert(ns_window) {
++            eprintln!("Agent Companion rail panel conversion: {error}");
++        }
++        hit_test::install(
++            ns_window,
++            app.state::<hit_test::Regions>().inner().clone(),
++            {
++                let window = rail.clone();
++                move |point| {
++                    let payload = point.map(|(x, y)| json!({ "x": x, "y": y }));
++                    let _ = window.emit("agent-studio-pointer", payload);
++                }
++            },
++        );
++    }
+     #[cfg(target_os = "windows")]
+     hit_test::install(
+         rail.clone(),
+diff --git a/crates/agent-studio-desktop/src/panel.rs b/crates/agent-studio-desktop/src/panel.rs
+new file mode 100644
+index 0000000..7215967
+--- /dev/null
++++ b/crates/agent-studio-desktop/src/panel.rs
+@@ -0,0 +1,338 @@
++//! macOS-only: retarget the rail window to a non-activating panel.
++//!
++//! Clicking any window of an inactive application activates that application,
++//! which brings all of its visible windows to the front - with the rail and
++//! its host in one process, clicking the rail dragged the host window forward.
++//! `NSWindowStyleMaskNonactivatingPanel` is the only official mechanism that
++//! suppresses that activation, and AppKit applies it only to `NSPanel` (or a
++//! subclass). tao 0.35.3 has no panel API - its window class is the internal
++//! `TaoWindow: NSWindow` - so the window's class is swapped after creation,
++//! the same approach the tauri-nspanel crate uses.
++//!
++//! Hard dependency on tao 0.35.3 internals (`platform_impl/macos/window.rs`):
++//! the rail's class is named `TaoWindow` and carries one ivar, `focusable`
++//! (`objc2::runtime::Bool`, encoding "B"), placed after `NSWindow`'s ivars.
++//! `convert` checks the class name, the instance size and the `focusable`
++//! offset before swapping, so a tao upgrade that changes any of them leaves
++//! the rail a normal window instead of corrupting the object. `AgentStudioRailPanel` declares the same ivar
++//! with the same type at the same offset because tao's `set_focusable` and
++//! `is_focusable` read it by name through `get_mut_ivar::<Bool>("focusable")`,
++//! which panics when the ivar is missing. tao's `sendEvent:` override (drag
++//! by window background) is not re-added: the rail never sets that attribute.
++//!
++//! The rail's runtime class is usually *not* `TaoWindow` but the subclass KVO
++//! generates for it (`NSKVONotifying_TaoWindow`). WebKit installs that shim
++//! while its web view is attached, observing the window's `contentLayoutRect`,
++//! so a naive `object_setClass` leaves a live KVO registration pointing at a
++//! class the object no longer has: WebKit's later `removeObserver:` cannot
++//! find it and throws `NSRangeException`, which aborts the process (verified
++//! on macOS 26 with a Swift probe). `convert` therefore detaches the content
++//! view before the swap - WebKit's `viewWillMoveToWindow:` removes the
++//! observer while the shim is still installed - and re-attaches it after, so
++//! WebKit registers again, now against `AgentStudioRailPanel` (whose layout
++//! matches the shim's: same ivar, same instance size).
++//!
++//! Every AppKit call here is main-thread-only; `create_rail` already runs on
++//! the main thread via `run_on_main_thread`.
++use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
++use objc2::{ffi, sel, ClassType};
++use objc2_app_kit::{NSPanel, NSWindow, NSWindowStyleMask};
++use std::ffi::CStr;
++use std::sync::OnceLock;
++
++/// tao 0.35.3's window class name.
++const TAO_WINDOW_CLASS: &CStr = c"TaoWindow";
++/// The prefix KVO gives the subclasses it generates.
++const KVO_CLASS_PREFIX: &[u8] = b"NSKVONotifying_";
++/// Runtime name of the replacement class; registered once per process.
++const PANEL_CLASS_NAME: &CStr = c"AgentStudioRailPanel";
++/// tao's focusability ivar. Name and type are load-bearing.
++const FOCUSABLE_IVAR: &CStr = c"focusable";
++
++/// `b"NSKVONotifying_TaoWindow"` -> `Some(b"TaoWindow")`; names that are not
++/// KVO subclasses -> `None`.
++fn kvo_shim_base(name: &[u8]) -> Option<&[u8]> {
++    name.strip_prefix(KVO_CLASS_PREFIX)
++}
++
++/// Decide from a class name and its superclass's name whether the class may be
++/// swapped to [`PANEL_CLASS_NAME`]: tao's `TaoWindow`, or the shim KVO derived
++/// from it. `Some(is_shim)` means "convertible"; `None` means "leave alone".
++///
++/// The shim only ever wraps the exact class it was generated for, so anything
++/// else - a web view, a different window class, a shim over a different base -
++/// is rejected and the rail stays a plain window.
++fn convertible_class(name: &[u8], superclass_name: Option<&[u8]>) -> Option<bool> {
++    if name == TAO_WINDOW_CLASS.to_bytes() {
++        return Some(false);
++    }
++    (kvo_shim_base(name) == Some(TAO_WINDOW_CLASS.to_bytes())
++        && superclass_name == Some(TAO_WINDOW_CLASS.to_bytes()))
++    .then_some(true)
++}
++
++/// Resolve `class` to tao's `TaoWindow`, tolerating the KVO shim.
++fn tao_window_class(class: &AnyClass) -> Option<(&AnyClass, bool)> {
++    let superclass = class.superclass();
++    let is_shim = convertible_class(
++        class.name().to_bytes(),
++        superclass.map(|class| class.name().to_bytes()),
++    )?;
++    if is_shim {
++        superclass.map(|class| (class, true))
++    } else {
++        Some((class, false))
++    }
++}
++
++/// Read the focusability flag, replicating tao's `is_focusable`.
++///
++/// A missing ivar answers `false`, which is the value the rail is created
++/// with (`focusable(false)`) and the safe direction: the window then never
++/// becomes key or main.
++fn focusable(this: &AnyObject) -> Bool {
++    let Some(ivar) = this.class().instance_variable(FOCUSABLE_IVAR) else {
++        return Bool::NO;
++    };
++    // SAFETY: the ivar is declared as `Bool` before the class is registered,
++    // and `this` is a live instance of that class. The ivar is
++    // interior-mutable main-thread window state, like every property written
++    // in `convert`.
++    unsafe { ivar.load_ptr::<Bool>(this).read() }
++}
++
++/// `-canBecomeKeyWindow` must follow the `focusable` flag: a swapped window
++/// that answered differently from tao's override could steal key status.
++///
++/// The receiver is a raw pointer because a borrowed receiver would make the
++/// function pointer higher-ranked, which `ClassBuilder::add_method` cannot
++/// accept.
++unsafe extern "C-unwind" fn can_become_key_window(this: *mut AnyObject, _cmd: Sel) -> Bool {
++    // SAFETY: AppKit always passes a valid window instance as the receiver.
++    focusable(unsafe { &*this })
++}
++
++/// `-canBecomeMainWindow`, same rule as [`can_become_key_window`].
++unsafe extern "C-unwind" fn can_become_main_window(this: *mut AnyObject, _cmd: Sel) -> Bool {
++    // SAFETY: AppKit always passes a valid window instance as the receiver.
++    focusable(unsafe { &*this })
++}
++
++/// The `AgentStudioRailPanel: NSPanel` class, registered on first use.
++///
++/// `define_class!` cannot express this class: it registers ivars as one
++/// struct behind a single `ivars` slot, while tao looks `focusable` up by
++/// name, so `ClassBuilder` is used directly (the same runtime API tao itself
++/// uses). `None` means the class could not be registered, e.g. because a
++/// class with that name already exists.
++fn rail_panel_class() -> Option<&'static AnyClass> {
++    static CLASS: OnceLock<Option<&'static AnyClass>> = OnceLock::new();
++    *CLASS.get_or_init(|| {
++        let mut builder = ClassBuilder::new(PANEL_CLASS_NAME, NSPanel::class())?;
++        builder.add_ivar::<Bool>(FOCUSABLE_IVAR);
++        // SAFETY: both methods take no arguments and return AppKit's `BOOL`,
++        // matching the signatures they override on NSPanel/NSWindow, and both
++        // only touch the ivar declared above.
++        unsafe {
++            builder.add_method::<AnyObject, _>(
++                sel!(canBecomeKeyWindow),
++                can_become_key_window as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> Bool,
++            );
++            builder.add_method::<AnyObject, _>(
++                sel!(canBecomeMainWindow),
++                can_become_main_window as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> Bool,
++            );
++        }
++        Some(builder.register())
++    })
++}
++
++/// Turn an already created tao rail window into a non-activating panel.
++///
++/// Returns `Err` without touching the window when the pointer is null, the
++/// window is not a tao window of the expected class, or its layout does not
++/// match the replacement class; the caller then keeps the plain window, which
++/// still works (it only activates the application on click).
++pub fn convert(ns_window: usize) -> Result<(), String> {
++    if ns_window == 0 {
++        return Err("悬浮栏窗口句柄为空".into());
++    }
++    // SAFETY: a non-null NSWindow pointer owned by tao for the lifetime of
++    // the application; only the object header is read until the swap below.
++    let object: &AnyObject = unsafe { &*(ns_window as *const AnyObject) };
++    let current = object.class();
++    let Some((tao_class, is_kvo_shim)) = tao_window_class(current) else {
++        return Err(format!(
++            "悬浮栏窗口类为 {}，不是 tao 的 TaoWindow，保持原状",
++            current.name().to_string_lossy()
++        ));
++    };
++    let Some(panel_class) = rail_panel_class() else {
++        return Err("AgentStudioRailPanel 注册失败，保持原状".into());
++    };
++    // The swap keeps the object's memory, so every ivar must land on the same
++    // offset with the same size in both classes. `tao_class` owns the layout
++    // the object was allocated for; the shim, if present, is a KVO subclass
++    // of it and must not have grown either.
++    if current.instance_size() != panel_class.instance_size()
++        || tao_class.instance_size() != panel_class.instance_size()
++    {
++        return Err(format!(
++            "悬浮栏窗口与 AgentStudioRailPanel 的实例大小不一致（{} vs {} 字节），保持原状",
++            current.instance_size(),
++            panel_class.instance_size()
++        ));
++    }
++    // Look the ivar up before the swap: after it, nothing below can fail.
++    let focusable_ivar = panel_class
++        .instance_variable(FOCUSABLE_IVAR)
++        .ok_or("AgentStudioRailPanel 缺少 focusable ivar")?;
++    // Equal instance sizes alone leave room for a smaller ivar hidden in the
++    // tail padding, so require tao's own `focusable` to sit at the same offset
++    // as ours: that is what makes tao's `set_focusable`/`is_focusable` read the
++    // same bytes after the swap.
++    if tao_class
++        .instance_variable(FOCUSABLE_IVAR)
++        .map(|ivar| ivar.offset())
++        != Some(focusable_ivar.offset())
++    {
++        return Err(
++            "AgentStudioRailPanel 的 focusable ivar 与 TaoWindow 不同名或不同偏移，保持原状".into(),
++        );
++    }
++    // SAFETY: the object's class stays a window class and the pointer keeps
++    // pointing at the same live instance; tao owns the only wrapper.
++    let window: &NSWindow = unsafe { &*(ns_window as *const NSWindow) };
++    // A KVO shim means KVO swizzled this class for WebKit's observation of the
++    // window - WebKit registers `contentLayoutRect` as soon as the window hosts
++    // its web view, and the shim stays behind afterwards even once the
++    // observer is gone. Swapping the class breaks that bookkeeping either way:
++    // a later `removeObserver:` throws `NSRangeException` and aborts. Detaching
++    // the content view makes WebKit unregister while the class it registered
++    // against is still installed; re-attaching below registers against the
++    // panel class.
++    //
++    // Nothing may fire a window notification while the content view is gone:
++    // tao's delegate answers `windowDidResize` by unwrapping the window's
++    // content view, and a panic across that call aborts the process. The
++    // style mask below is therefore applied after the re-attach (setting it
++    // here did abort the packaged app's smoke test).
++    let content_view = is_kvo_shim.then(|| window.contentView()).flatten();
++    if let Some(content_view) = &content_view {
++        content_view.removeFromSuperview();
++    }
++    // SAFETY: AgentStudioRailPanel has the same instance layout as TaoWindow
++    // (NSWindow plus one `Bool` ivar), the instance sizes match, and its only
++    // overrides read an ivar both classes declare identically. The raw runtime
++    // call is used instead of `AnyObject::set_class` so that a future layout
++    // change stays an `Err` above rather than an assertion.
++    unsafe { ffi::object_setClass(ns_window as *mut AnyObject, panel_class) };
++    // tao created the rail with `.focusable(false)`; re-assert it as this
++    // class's ivar so `canBecomeKeyWindow`/`canBecomeMainWindow` agree.
++    // SAFETY: the ivar is declared as `Bool` on the class the object belongs
++    // to from here on; the write targets main-thread-only window state.
++    unsafe { focusable_ivar.load_ptr::<Bool>(object).write(Bool::NO) };
++    if let Some(content_view) = &content_view {
++        window.setContentView(Some(content_view));
++    }
++    // Append the non-activating bit - the only AppKit mechanism that stops a
++    // click from activating the application. The rest of the mask (tao's
++    // borderless/resizable combination) has to survive, hence `|=`.
++    window.setStyleMask(window.styleMask() | NSWindowStyleMask::NonactivatingPanel);
++    // A panel built by AppKit hides itself when the application deactivates;
++    // the rail must stay visible while another application is in front.
++    window.setHidesOnDeactivate(false);
++    // Clicks on the rail's controls must not make it key, matching
++    // `focusable = false`.
++    // SAFETY: the object is an NSPanel (subclass) instance after the swap.
++    let panel: &NSPanel = unsafe { &*(ns_window as *const NSPanel) };
++    panel.setBecomesKeyOnlyIfNeeded(true);
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use objc2::encode::Encode;
++    use objc2::rc::Retained;
++    use objc2::runtime::NSObject;
++
++    #[test]
++    fn conversion_is_declined_for_foreign_windows() {
++        // Any object whose class is not tao's TaoWindow must be left alone:
++        // the caller keeps a working, if activating, window.
++        let object = NSObject::new();
++        let pointer = Retained::as_ptr(&object) as usize;
++        let error = convert(pointer).unwrap_err();
++        assert!(error.contains("TaoWindow"), "{error}");
++    }
++
++    #[test]
++    fn conversion_is_declined_for_a_null_pointer() {
++        assert!(convert(0).is_err());
++    }
++
++    #[test]
++    fn only_taos_window_and_its_kvo_shim_are_convertible() {
++        // The rail's real class on a running app: tao's window wrapped by the
++        // KVO shim WebKit installs for `contentLayoutRect`.
++        assert_eq!(
++            convertible_class(b"NSKVONotifying_TaoWindow", Some(b"TaoWindow")),
++            Some(true)
++        );
++        assert_eq!(
++            convertible_class(b"TaoWindow", Some(b"NSWindow")),
++            Some(false)
++        );
++        // A shim over any other base, a shim whose base is itself a shim, and
++        // unrelated classes must all stay untouched.
++        assert_eq!(
++            convertible_class(b"NSKVONotifying_NSWindow", Some(b"NSWindow")),
++            None
++        );
++        assert_eq!(
++            convertible_class(
++                b"NSKVONotifying_TaoWindow",
++                Some(b"NSKVONotifying_NSWindow")
++            ),
++            None
++        );
++        assert_eq!(
++            convertible_class(b"NSKVONotifying_TaoWindow", Some(b"NSWindow")),
++            None
++        );
++        assert_eq!(convertible_class(b"NSWindow", Some(b"NSResponder")), None);
++        // A name that merely contains the shim prefix is not a shim.
++        assert_eq!(
++            convertible_class(b"NotNSKVONotifying_TaoWindow", Some(b"TaoWindow")),
++            None
++        );
++    }
++
++    #[test]
++    fn the_replacement_class_is_an_nspanel_with_taos_ivar_and_overrides() {
++        // Registering the class also verifies - in debug builds - that both
++        // overridden signatures match the ones inherited from NSWindow, and
++        // that the ivar can be added.
++        let class = rail_panel_class().unwrap();
++        assert_eq!(class.superclass().unwrap().name(), NSPanel::class().name());
++        let ivar = class.instance_variable(FOCUSABLE_IVAR).unwrap();
++        // The encoding must be tao's `Bool` encoding on every architecture.
++        let encoding = ivar.type_encoding();
++        assert!(
++            encoding
++                .to_str()
++                .ok()
++                .is_some_and(|encoding| Bool::ENCODING.equivalent_to_str(encoding)),
++            "focusable ivar encoding is {}",
++            encoding.to_string_lossy(),
++        );
++        for selector in [sel!(canBecomeKeyWindow), sel!(canBecomeMainWindow)] {
++            assert_ne!(
++                class.instance_method(selector),
++                NSPanel::class().instance_method(selector),
++                "{selector} is not overridden",
++            );
++        }
++    }
++}
+diff --git a/docs/validation.md b/docs/validation.md
+index e8312be..8258e23 100644
+--- a/docs/validation.md
++++ b/docs/validation.md
+@@ -24,7 +24,7 @@
+ 
+ ## 验证边界
+ 
+-- 原生 Codex 适配器沿用通用“需要你确认”文案，本次未扩展提问文本解析。浏览器完整提问文案检查使用模拟快照。
++- 原生 Codex 适配器已从 `tool_input` 解析提问原文与选项（2026-09-29 起，含异步提问）；原生应用验证断言真实问题原文，完整选项渲染检查仍使用模拟快照。
+ - 原生应用验证使用真实 Rust Hook 通道和隔离会话，未代替用户对日常真实会话、实际跳转、通知授权与开机启动的验收。
+ - 未验证 Windows/Linux，未签名公证、安装、发布或修改旧办公室/WB Switch 的集成。
+ 
+@@ -79,6 +79,21 @@
+ 
+ 改动本身的本地证据：`cargo test --workspace --locked`（108 passed，含 4 个新增单测）、把真实 `hit_test.rs` 挂进临时 crate 的 `cargo check --target x86_64-pc-windows-msvc`、以及 CI 的 windows-latest `--locked` 测试。Windows 运行时的等价性判断（视觉、滚轮路由）只有这次实机结论，没有自动化覆盖。
+ 
++## macOS 悬浮栏不激活宿主（2026-09-29，独立 app 已验证；宿主内嵌待确认）
++
++独立 app 上，点击、拖拽悬浮栏不再激活其所属 App（宿主 wb-switch 内嵌构建的「主窗口层级不变」尚未验证，见本节末尾）。实现：rail 窗口用 `object_setClass` 换成自建 `AgentStudioRailPanel: NSPanel` 子类并追加 `NSWindowStyleMaskNonactivatingPanel`，同时 `setHidesOnDeactivate(false)` + `setBecomesKeyOnlyIfNeeded(true)`；类布局不符（tao 升级）时早退降级，窗口保持普通窗口继续可用。代码：`crates/agent-studio-desktop/src/panel.rs`。
++
++实现过程中由真机验证纠正的两个缺陷（离线单测与代码审查都未发现）：
++
++1. **真机上窗口类不是 `TaoWindow` 而是 `NSKVONotifying_TaoWindow`。** WKWebView 成为 contentView 时，WebKit 的 window-visibility observer 会对窗口做 KVO，类名带 `NSKVONotifying_` 前缀；原先「类名必须等于 `TaoWindow`」的校验在真机永远失败，转换被静默降级、修复完全不生效（隔离实例 stderr：`悬浮栏窗口类为 NSKVONotifying_TaoWindow ... 保持原状`）。现按「KVO 子类 + 直接父类为 `TaoWindow`」放行；KVO 子类不新增 ivar，实例大小与 `TaoWindow` 相同（本机 520 字节）。
++2. **换类前必须先摘除 contentView。** KVO 记账挂在被换掉的类上，换类后 WebKit 调 `removeObserver:forKeyPath:@"contentLayoutRect"` 会抛 `NSRangeException` 并 abort（Swift 探针复现）。现在顺序为：摘除 contentView（WebKit 在旧类仍存在时注销）→ 换类 → 挂回（WebKit 对新类重新注册）→ 再设 styleMask。`setStyleMask` 必须在挂回之后：它触发 `windowDidResize`，而 tao 的代理在该回调里 `contentView().unwrap()`，contentView 为空时 panic 跨 FFI 直接 abort（打包产物冒烟测试复现过一次）。
++
++自动化证据（2026-09-29）：`cargo test --workspace --locked`（desktop 29 passed，其中 `panel::tests` 4 条：空指针与外类窗口的降级、KVO 子类命名规则、替换类的 ivar 与覆盖方法）、`npm run test:rust`、`npm run typecheck`、`npm run lint` 全部通过；`npm run test:rust` 内的快照 parity 通过。`npm run test:native-app`（打包 app + 诊断）通过：rail/settings 两个窗口存在、Hook 问题渲染、无多余窗口、进程正常退出且无崩溃报告。隔离实例（独立 `AGENT_STUDIO_HOME`）stderr 无降级信息，确认转换在真机生效。
++
++真机交互（独立 app，macOS 26，另一 App 处于前台）：手动拖拽 grip 时光标变抓手、拖拽跟手（说明命中区与拖拽链路正常）；该次操作期间按 0.4s 采样 225 次（17:40:14–17:41:48），`Agent Companion` 的 `isActive` 恒为 false、前台 App 全程无变化（ChatGPT）—— 被点击/拖拽的 rail 未激活其所属 App；非激活悬停的光标变化同时确认可用。日志只记录这 90 秒内 app 未被激活，没有逐次手势标注；本轮用驱动工具做的自动化注入点击未能可靠命中 rail 的命中区（驱动移动指针时没有产生 hover 所需的 mouseMoved 事件），未形成可引用证据，本节结论以上述手动操作与采样日志为准。
++
++未覆盖：宿主（wb-switch）内嵌构建的「主窗口层级不变」需宿主同步快照后人工确认（属宿主范围）；透明区穿透、overflow/卡片按钮、托盘打开设置、会话关闭命令沿用 2026-09-22 的手工结论，本次未重测。
++
+ ## 仍待人工确认
+ 
+ - **用户对迁移后外观的确认**：逐张看 `artifacts/ui/*.png` 与 `artifacts/frontend-migration/rail-shots-built/*-after*.png`。
+diff --git a/scripts/qa-native-app.mjs b/scripts/qa-native-app.mjs
+index 41dd51c..7e7ca1d 100644
+--- a/scripts/qa-native-app.mjs
++++ b/scripts/qa-native-app.mjs
+@@ -40,7 +40,7 @@ try {
+  assert.equal(JSON.parse(await fs.readFile(path.join(out,'unsupported-view.json'))),'未知视图');
+  const rail=JSON.parse(await fs.readFile(path.join(out,'agent-studio-rail/report.json')));
+  const preferences=JSON.parse(await fs.readFile(path.join(out,'agent-studio-settings/report.json')));
+- assert.equal(rail.avatars,1);assert.equal(rail.wait,1);assert.match(rail.text,/需要你确认/); // Existing native Codex adapter emits a generic question label.
++ assert.equal(rail.avatars,1);assert.equal(rail.wait,1);assert.match(rail.text,/请选择下一步/); // The native Codex adapter carries the question text from tool_input.
+  assert.equal(rail.connection,'connected');assert.equal(preferences.settingsReady,true);
+  assert.match(preferences.text,/监听与接入/,'real WebView renders integration management');
+  assert.match(preferences.text,/已接入/,'native integration RPC reports installed status while details are collapsed');
+diff --git a/scripts/qa-native-runtime.mjs b/scripts/qa-native-runtime.mjs
+index e9933aa..27b32f0 100644
+--- a/scripts/qa-native-runtime.mjs
++++ b/scripts/qa-native-runtime.mjs
+@@ -55,24 +55,40 @@ try {
+     for(let i=0;i<30;i++){state=await rpc('poll',{client:'wb-switch'});if(state.snapshot.sessions.find(s=>s.sessionId==='question')?.status===status)break;await delay(100);}
+     assert.equal(state.snapshot.sessions.find(s=>s.sessionId==='question').status,status);
+   }
+-  // A trailing step proves the queued async callbacks have reached the collector.
+-  for (const event of ['UserPromptSubmit','PreToolUse','PostToolUse']) {
+-    execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:event,tool_name:'functions.request_user_input_async',tool_use_id:'optional-1',tool_input:{questions:[{title:'Optional preference'}]},tool_response:{accepted:true}})});
+-  }
+-  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:'PreToolUse',tool_name:'Bash',tool_use_id:'after-optional'})});
++  // An async question is a real wait: it notifies once, its own completion
++  // cannot clear it, the answer envelope clears it by call id without touching
++  // the title, and a trailing real prompt clears whatever is still unanswered.
++  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:'UserPromptSubmit',prompt:'Optional run'})});
++  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:'PreToolUse',tool_name:'functions.request_user_input_async',tool_use_id:'optional-1',tool_input:{questions:[{title:'Optional preference',options:[{label:'保持'}]}]}})});
+   const optionalAlerts=[];
+   for(let i=0;i<30;i++) {
+     state=await rpc('poll',{client:'wb-switch'});
+     optionalAlerts.push(...state.notifications);
+-    if(state.snapshot.sessions.find(s=>s.sessionId==='optional-question')?.steps.some(s=>s.id==='after-optional'))break;
++    if(state.snapshot.sessions.find(s=>s.sessionId==='optional-question')?.status==='wait')break;
+     await delay(100);
+   }
+-  const optional=state.snapshot.sessions.find(s=>s.sessionId==='optional-question');
+-  assert(optional?.steps.some(s=>s.id==='after-optional'));
++  let optional=state.snapshot.sessions.find(s=>s.sessionId==='optional-question');
++  assert.equal(optional.status,'wait');
++  assert.equal(optional.pending.length,1);
++  assert.equal(optional.pending[0].optional,true);
++  assert.equal(optional.pending[0].text,'Optional preference');
++  assert.equal(optional.title,'Optional run');
++  assert.equal(optionalAlerts.filter(a=>a.sessionId==='codex:optional-question'&&a.kind==='wait').length,1);
++  assert.equal((await rpc('poll',{client:'wb-switch'})).notifications.length,0);
++  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:'PostToolUse',tool_name:'functions.request_user_input_async',tool_use_id:'optional-1',tool_response:{accepted:true}})});
++  const optionalReply=`<send_user_message_question_reply>\n${JSON.stringify([{questionItemId:JSON.stringify(['functions.request_user_input_async','optional-1',0]),answer:'保持'}])}\n</send_user_message_question_reply>`;
++  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:'UserPromptSubmit',prompt:optionalReply})});
++  for(let i=0;i<30;i++){state=await rpc('poll',{client:'wb-switch'});if(!state.snapshot.sessions.find(s=>s.sessionId==='optional-question')?.pending.length)break;await delay(100);}
++  optional=state.snapshot.sessions.find(s=>s.sessionId==='optional-question');
+   assert.equal(optional.status,'running');
+   assert.deepEqual(optional.pending,[]);
+-  assert(!optionalAlerts.some(a=>a.sessionId==='codex:optional-question'&&a.kind==='wait'));
+-  assert(!state.snapshot.events.some(a=>a.sessionId==='codex:optional-question'&&a.kind==='wait'));
++  assert.equal(optional.title,'Optional run');
++  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:'PreToolUse',tool_name:'functions.request_user_input_async',tool_use_id:'optional-2',tool_input:{questions:[{title:'Second preference'}]}})});
++  execFileSync(hook,['hook','--home',home],{input:JSON.stringify({session_id:'optional-question',turn_id:'optional',hook_event_name:'UserPromptSubmit',prompt:'Follow up'})});
++  for(let i=0;i<30;i++){state=await rpc('poll',{client:'wb-switch'});if(!state.snapshot.sessions.find(s=>s.sessionId==='optional-question')?.pending.length)break;await delay(100);}
++  optional=state.snapshot.sessions.find(s=>s.sessionId==='optional-question');
++  assert.deepEqual(optional.pending,[]);
++  assert.equal(optional.title,'Follow up');
+   const ideHooks=JSON.parse(await fs.readFile(path.join(home,'.codebuddy/settings.json')));
+   assert(ideHooks.hooks.Stop.some(g=>g.hooks.some(h=>h.command==='echo keep-ide-hook')));
+   assert(ideHooks.hooks.PreToolUse.some(g=>g.hooks.some(h=>h.command.includes('--source codebuddy-ide'))));
+@@ -91,7 +107,7 @@ try {
+   assert(!state.snapshot.sessions.some(s=>s.source==='codebuddy-ide'));
+   await assert.rejects(fs.access(path.join(home,'.agent-studio/codex-resume.json')));
+   await rpc('leave',{client:'wb-switch'});
+-  console.log('PASS: Codex + IDE native hooks, disabled IDE ignores hooks, two clients, service lock, owner handoff, isolated config, authenticated RPC');
++  console.log('PASS: Codex + IDE native hooks, async question wait/answer, disabled IDE ignores hooks, two clients, service lock, owner handoff, isolated config, authenticated RPC');
+ } finally {
+   child.kill('SIGTERM');
+   await fs.rm(home,{recursive:true,force:true});
+diff --git a/scripts/qa-rust-parity.mjs b/scripts/qa-rust-parity.mjs
+index e65563b..d03b1e9 100644
+--- a/scripts/qa-rust-parity.mjs
++++ b/scripts/qa-rust-parity.mjs
+@@ -14,10 +14,19 @@ const events = [
+   { type:'wait', callId:'q2', tool:'ask', text:'继续？', ts:t+8 },
+   { type:'end', roundId:'r1', status:'aborted', endedBy:'host', ts:t+9, source:'workbuddy', sessionId:'w' },
+   { type:'start', roundId:'r2', ts:t+10, source:'workbuddy', sessionId:'w' },
++  // An optional async question records its flag and survives its own completion.
++  { type:'start', roundId:'r3', ts:t+11 },
++  { type:'wait', callId:'answered', tool:'functions.request_user_input_async', text:'偏好？', questions:[{text:'偏好？',header:'',options:[{label:'A',description:''}]}], optional:true, roundId:'r3', ts:t+12 },
++  { type:'step', eventId:'after', label:'read', roundId:'r3', ts:t+13 },
++  { type:'resolve', callId:'answered', roundId:'r3', ts:t+14 },
++  // A stale optional item is dropped when the snapshot is taken, while a fresh
++  // one stays pending.
++  { type:'wait', callId:'expired', tool:'ask', text:'陈旧', optional:true, roundId:'r3', ts:t-61_000 },
++  { type:'wait', callId:'live', tool:'functions.request_user_input_async', text:'仍在等待', optional:true, roundId:'r3', ts:t+15 },
+ ].map(e=>({source:'codex',sessionId:'x',cwd:'/project',title:'Task',...e}));
+ const hub = new Hub(); hub.startedAt=1; hub.ready=true;
+ for(const e of events) hub.ingest(e);
+ const rust = JSON.parse(execFileSync('cargo',['run','--quiet','-p','agent-studio-core','--example','replay'],{input:JSON.stringify(events),encoding:'utf8'}));
+ const stable = snap => ({sessions:snap.sessions.map(({elapsed,...s})=>s),events:snap.events});
+ assert.deepEqual(stable(rust),stable(hub.snapshot()));
+-console.log('Rust/Node snapshot parity passed: rounds, waits, completion, stale replay, tokens');
++console.log('Rust/Node snapshot parity passed: rounds, waits, optional async expiry, completion, stale replay, tokens');
+diff --git a/src/types/snapshot.ts b/src/types/snapshot.ts
+index d3229ce..2b35bf6 100644
+--- a/src/types/snapshot.ts
++++ b/src/types/snapshot.ts
+@@ -43,6 +43,8 @@ export interface PendingRequest {
+   text: string;
+   questions: PendingQuestion[];
+   ts: number;
++  /** Async Codex questions only; omitted for every other wait. */
++  optional?: true;
+ }
+ 
+ export interface Session {
+diff --git a/src-tauri/Cargo.lock b/src-tauri/Cargo.lock
+index 89bf5ae..b2381e6 100644
+--- a/src-tauri/Cargo.lock
++++ b/src-tauri/Cargo.lock
+@@ -4076,6 +4076,7 @@ dependencies = [
+  "tauri-plugin",
+  "tauri-plugin-notification",
+  "url",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+diff --git a/tests/codex-hooks.test.js b/tests/codex-hooks.test.js
+index c315cae..102fa71 100644
+--- a/tests/codex-hooks.test.js
++++ b/tests/codex-hooks.test.js
+@@ -46,30 +46,73 @@ test('permission checks are neutral, silent, and do not hide a real question', a
+  hook('Stop');assert.equal(session.permissionChecks.length,0);
+ });
+ 
+-test('optional async questions never notify or clear an existing synchronous wait', async()=>{
++test('async questions notify once, answer by call id, and never title the session', async()=>{
+  const {createNotificationTracker}=await import('../src/monitor/model.js');
++ const {questionReplyIds}=await import('../collector/lib/codex.js');
+  const hub=new Hub();hub.ready=true;
+  const tracker=createNotificationTracker();tracker.ingest(hub.snapshot());
+  const poller=new CodexLivePoller(hub,{home:'/unused'});
+- let ts=Date.now();const hook=(event,tool='',id='')=>poller.ingestHook({session_id:'x',turn_id:'r',hook_event_name:event,tool_name:tool,tool_use_id:id,timestamp:++ts});
+- hook('UserPromptSubmit');
++ let ts=Date.now();const hook=(event,extra={})=>poller.ingestHook({session_id:'x',turn_id:'r',hook_event_name:event,timestamp:++ts,...extra});
++ const session=()=>hub.sessions.get('codex:x');
++ const reply=tool=>`<send_user_message_question_reply>\n${JSON.stringify([{questionItemId:JSON.stringify([tool,tool,0]),answer:'A'}])}\n</send_user_message_question_reply>`;
++ hook('UserPromptSubmit',{prompt:'Start'});
+  for(const name of ['request_user_input_async','functions.request_user_input_async','mcp__codex__request_user_input_async']) {
+-  for(const event of ['PreToolUse','PostToolUse','PreToolUse']) {
+-   hook(event,name,name);
+-   assert.equal(hub.sessions.get('codex:x').status,'running');
+-   assert.deepEqual(hub.sessions.get('codex:x').pending,[]);
+-   assert.deepEqual(tracker.ingest(hub.snapshot()),[]);
+-   assert.deepEqual(hub.snapshot().events,[]);
+-  }
+- }
+- hook('PreToolUse','functions.request_user_input','sync');
+- assert.equal(tracker.ingest(hub.snapshot()).filter(e=>e.kind==='wait').length,1);
+- for(const event of ['PreToolUse','PostToolUse','PreToolUse']) {
+-  hook(event,'functions.request_user_input_async','parallel');
+-  assert.equal(hub.sessions.get('codex:x').status,'wait');
+-  assert.deepEqual(hub.sessions.get('codex:x').pending.map(p=>p.id),['sync']);
++  hook('PreToolUse',{tool_name:name,tool_use_id:name,tool_input:{questions:[{title:'偏好',options:[{label:'A',description:'甲'}]}]}});
++  assert.equal(session().status,'wait');
++  assert.equal(session().pending.length,1);
++  assert.equal(session().pending[0].optional,true);
++  assert.equal(session().pending[0].text,'偏好');
++  assert.equal(session().pending[0].questions[0].options[0].description,'甲');
++  assert.equal(tracker.ingest(hub.snapshot()).filter(e=>e.kind==='wait').length,1);
++  hook('PostToolUse',{tool_name:name,tool_use_id:name,tool_response:{accepted:true}});
++  assert.equal(session().pending.length,1);
+   assert.deepEqual(tracker.ingest(hub.snapshot()),[]);
++  hook('UserPromptSubmit',{prompt:reply(name)});
++  assert.deepEqual(session().pending,[]);
++  assert.equal(session().status,'running');
++  assert.equal(session().title,'Start');
+  }
+- hook('PostToolUse','functions.request_user_input','sync');
+- assert.equal(hub.sessions.get('codex:x').status,'running');
++ assert.equal(questionReplyIds(reply('missing')).length,1);
++ assert.deepEqual(questionReplyIds('<send_user_message_question_reply>not json</send_user_message_question_reply>'),[]);
++ assert.deepEqual(questionReplyIds('hello'),[]);
++ assert.deepEqual(questionReplyIds('<send_user_message_question_reply>{}</send_user_message_question_reply>'),[]);
++ assert.deepEqual(questionReplyIds('<send_user_message_question_reply>[{"questionItemId":["t","x",0]}]</send_user_message_question_reply>'),[]);
++ assert.deepEqual(questionReplyIds(`<send_user_message_question_reply>\n${JSON.stringify([
++  {questionItemId:JSON.stringify(['t','a',0]),answer:'A'},
++  {questionItemId:JSON.stringify(['t','b',1]),answer:'B'},
++ ])}\n</send_user_message_question_reply>`),['a','b']);
++ hook('PreToolUse',{tool_name:'functions.request_user_input_async',tool_use_id:'bare'});
++ assert.equal(session().pending[0].text,'等待用户输入');
++ hook('UserPromptSubmit',{prompt:'   '});
++ assert.equal(session().pending.length,1);
++ assert.equal(session().title,'Start');
++ hook('UserPromptSubmit',{prompt:reply('bare')});
++ assert.deepEqual(session().pending,[]);
++ // A synchronous question is not optional and survives an async completion.
++ hook('PreToolUse',{tool_name:'functions.request_user_input',tool_use_id:'sync'});
++ hook('PreToolUse',{tool_name:'functions.request_user_input_async',tool_use_id:'waiting'});
++ hook('PostToolUse',{tool_name:'functions.request_user_input_async',tool_use_id:'waiting'});
++ assert.deepEqual(session().pending.map(p=>[p.id,p.optional??false]),[['sync',false],['waiting',true]]);
++ // Another internal envelope neither titles the session nor answers a question.
++ hook('UserPromptSubmit',{prompt:'<in-app-browser-context url="x">ctx</in-app-browser-context>'});
++ assert.equal(session().pending.length,2);
++ assert.equal(session().title,'Start');
++ // A real message clears every unanswered async item and titles the session.
++ hook('UserPromptSubmit',{prompt:'Continue'});
++ assert.deepEqual(session().pending.map(p=>p.id),['sync']);
++ assert.equal(session().title,'Continue');
++ hook('Stop');
++ assert.equal(session().status,'done');
++ assert.deepEqual(session().pending,[]);
++});
++
++test('a real prompt clears optional waits even after call bookkeeping is gone', () => {
++ const hub=new Hub();hub.ready=true;
++ const poller=new CodexLivePoller(hub,{home:'/unused'});
++ poller.ingestHook({session_id:'x',turn_id:'r',hook_event_name:'UserPromptSubmit',prompt:'Start',timestamp:1});
++ poller.ingestHook({session_id:'x',turn_id:'r',hook_event_name:'PreToolUse',tool_name:'functions.request_user_input_async',tool_use_id:'gone',timestamp:2});
++ poller.live.get('x').calls.clear();
++ poller.ingestHook({session_id:'x',turn_id:'r',hook_event_name:'UserPromptSubmit',prompt:'Follow up',timestamp:3});
++ assert.deepEqual(hub.sessions.get('codex:x').pending,[]);
++ assert.equal(hub.sessions.get('codex:x').title,'Follow up');
+ });
+diff --git a/tests/fixtures/codex-hooks.json b/tests/fixtures/codex-hooks.json
+index 70d333b..aff393e 100644
+--- a/tests/fixtures/codex-hooks.json
++++ b/tests/fixtures/codex-hooks.json
+@@ -136,24 +136,43 @@
+     "hook": {
+       "hook_event_name": "PreToolUse",
+       "tool_name": "request_user_input_async",
+-      "tool_use_id": "async"
++      "tool_use_id": "async",
++      "tool_input": {
++        "questions": [
++          {
++            "question": "Optional preference",
++            "options": [
++              {
++                "label": "A",
++                "description": "甲"
++              },
++              {
++                "label": "B"
++              }
++            ]
++          }
++        ]
++      }
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 1
+   },
+   {
+     "hook": {
+       "hook_event_name": "PostToolUse",
+       "tool_name": "request_user_input_async",
+-      "tool_use_id": "async"
++      "tool_use_id": "async",
++      "tool_response": {
++        "accepted": true
++      }
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 1
+   },
+   {
+     "hook": {
+       "hook_event_name": "UserPromptSubmit",
+-      "prompt": "Answer"
++      "prompt": "<send_user_message_question_reply>\n[{\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"async\\\",0]\",\"answer\":\"A\"}]\n</send_user_message_question_reply>"
+     },
+     "status": "running",
+     "pending": 0
+@@ -162,19 +181,29 @@
+     "hook": {
+       "hook_event_name": "PreToolUse",
+       "tool_name": "functions.request_user_input_async",
+-      "tool_use_id": "functions.async"
++      "tool_use_id": "functions.async",
++      "tool_input": {
++        "questions": [
++          {
++            "title": "Optional follow-up"
++          }
++        ]
++      }
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 1
+   },
+   {
+     "hook": {
+       "hook_event_name": "PostToolUse",
+       "tool_name": "functions.request_user_input_async",
+-      "tool_use_id": "functions.async"
++      "tool_use_id": "functions.async",
++      "tool_response": {
++        "accepted": true
++      }
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 1
+   },
+   {
+     "hook": {
+@@ -182,8 +211,8 @@
+       "tool_name": "functions.request_user_input_async",
+       "tool_use_id": "functions.async"
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 1
+   },
+   {
+     "hook": {
+@@ -191,8 +220,8 @@
+       "tool_name": "mcp__codex__request_user_input_async",
+       "tool_use_id": "mcp__codex__async"
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 2
+   },
+   {
+     "hook": {
+@@ -200,8 +229,8 @@
+       "tool_name": "mcp__codex__request_user_input_async",
+       "tool_use_id": "mcp__codex__async"
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 2
+   },
+   {
+     "hook": {
+@@ -209,6 +238,14 @@
+       "tool_name": "mcp__codex__request_user_input_async",
+       "tool_use_id": "mcp__codex__async"
+     },
++    "status": "wait",
++    "pending": 2
++  },
++  {
++    "hook": {
++      "hook_event_name": "UserPromptSubmit",
++      "prompt": "Follow up"
++    },
+     "status": "running",
+     "pending": 0
+   },
+@@ -228,16 +265,19 @@
+       "tool_use_id": "parallel-async"
+     },
+     "status": "wait",
+-    "pending": 1
++    "pending": 2
+   },
+   {
+     "hook": {
+       "hook_event_name": "PostToolUse",
+       "tool_name": "functions.request_user_input_async",
+-      "tool_use_id": "parallel-async"
++      "tool_use_id": "parallel-async",
++      "tool_response": {
++        "accepted": true
++      }
+     },
+     "status": "wait",
+-    "pending": 1
++    "pending": 2
+   },
+   {
+     "hook": {
+@@ -246,7 +286,7 @@
+       "tool_use_id": "parallel-async"
+     },
+     "status": "wait",
+-    "pending": 1
++    "pending": 2
+   },
+   {
+     "hook": {
+@@ -254,8 +294,8 @@
+       "tool_name": "functions.request_user_input",
+       "tool_use_id": "sync"
+     },
+-    "status": "running",
+-    "pending": 0
++    "status": "wait",
++    "pending": 1
+   },
+   {
+     "hook": {
+@@ -264,7 +304,7 @@
+       "tool_use_id": "cancel"
+     },
+     "status": "wait",
+-    "pending": 1
++    "pending": 2
+   },
+   {
+     "hook": {
+diff --git a/tests/monitor.test.js b/tests/monitor.test.js
+index 0cf4bf3..daf9ebb 100644
+--- a/tests/monitor.test.js
++++ b/tests/monitor.test.js
+@@ -244,24 +244,58 @@ test('WorkBuddy resumes in a new stable round and cannot retain an obsolete ask'
+  const s=hub.snapshot().sessions[0];assert.equal(s.roundId,'r2');assert.equal(s.status,'running');assert.equal(s.pending.length,0);
+ });
+ 
+-test('asynchronous Codex records never wait or resolve a synchronous question',()=>{
++test('asynchronous Codex records wait, answer by call id, and never title an envelope',()=>{
+  const hub=new Hub(),ctx={sessionId:'async'},events=[];
+  const feed=p=>codexRecord({timestamp:Date.now(),type:'response_item',payload:p},ctx,e=>{events.push(e);hub.ingest(e)});
++ const session=()=>hub.snapshot().sessions[0];
++ const reply=tool=>`<send_user_message_question_reply>\n${JSON.stringify([{questionItemId:JSON.stringify([tool,tool,0]),answer:'A'}])}\n</send_user_message_question_reply>`;
+  feed({type:'task_started',turn_id:'a'});
+  for(const name of ['request_user_input_async','functions.request_user_input_async','mcp__codex__request_user_input_async']) {
+-  feed({type:'function_call',name,call_id:name});
+-  assert.equal(hub.snapshot().sessions[0].status,'running');
++  feed({type:'function_call',name,call_id:name,arguments:JSON.stringify({questions:[{title:'偏好'}]})});
++  assert.equal(session().status,'wait');
++  assert.deepEqual(session().pending.map(p=>[p.id,p.optional??false]),[[name,true]]);
++  assert.equal(session().pending[0].text,'偏好');
+   feed({type:'function_call_output',call_id:name,output:'queued'});
++  assert.deepEqual(session().pending.map(p=>p.id),[name]); // A completion is not an answer.
++  feed({type:'message',role:'user',content:[{text:reply(name)}]});
++  assert.deepEqual(session().pending,[]); // The envelope clears its own call id.
++  assert.equal(session().title,'');       // The envelope never becomes a title.
+  }
+- assert.equal(events.filter(e=>['wait','resolve'].includes(e.type)).length,0);
++ assert.deepEqual(events.filter(e=>e.type==='wait').map(e=>e.optional??false),[true,true,true]);
++ // A synchronous question and an async one coexist; other internal envelopes
++ // neither answer nor title, and only a real message supersedes the async item.
+  feed({type:'function_call',name:'functions.request_user_input',call_id:'sync'});
+  feed({type:'custom_tool_call',name:'functions.request_user_input_async',call_id:'parallel'});
+  feed({type:'custom_tool_call_output',call_id:'parallel',output:'queued'});
++ feed({type:'function_call',name:'functions.request_user_input_async',call_id:'inner'});
++ assert.deepEqual(session().pending.map(p=>p.id),['sync','parallel','inner']);
++ feed({type:'message',role:'user',content:[{text:'<in-app-browser-context url="x">ctx</in-app-browser-context>'}]});
++ assert.equal(session().title,'');
++ assert.deepEqual(session().pending.map(p=>p.id),['sync','parallel','inner']);
+  feed({type:'message',role:'user',content:[{text:'A follow-up'}]});
+- assert.deepEqual(hub.snapshot().sessions[0].pending.map(p=>p.id),['sync']);
+- assert.equal(events.filter(e=>e.type==='resolve').length,0);
++ assert.deepEqual(session().pending.map(p=>p.id),['sync']);
++ assert.equal(session().title,'A follow-up');
+  feed({type:'function_call_output',call_id:'sync',output:'answered'});
+- assert.equal(hub.snapshot().sessions[0].status,'running');
++ assert.equal(session().status,'running');
++});
++
++test('optional waits expire on the snapshot clock without timing out synchronous ones',()=>{
++ const now=5_000_000;const hub=new Hub({now:()=>now});hub.ready=true;
++ send(hub,{type:'start',roundId:'t',ts:now});
++ send(hub,{type:'wait',callId:'expired',tool:'ask',text:'旧问题',optional:true,roundId:'t',ts:now-61_000});
++ send(hub,{type:'wait',callId:'live',tool:'ask',text:'新问题',optional:true,roundId:'t',ts:now-30_000});
++ send(hub,{type:'wait',callId:'sync',tool:'ask',text:'同步问题',roundId:'t',ts:now-90_000});
++ const snapshot=hub.snapshot().sessions[0];
++ assert.equal(snapshot.status,'wait');
++ assert.deepEqual(snapshot.pending.map(p=>[p.id,p.optional??false]),[['live',true],['sync',false]]);
++ assert.equal(hub.sessions.get('codex:full-id').pending.length,3); // Expiry is decided on read.
++ assert.equal(createNotificationTracker().ingest(hub.snapshot()).filter(a=>a.kind==='wait').length,2);
++ send(hub,{type:'resolve',callId:'live',roundId:'t',ts:now-29_999});
++ assert.equal(hub.snapshot().sessions[0].status,'wait');
++ send(hub,{type:'resolve',callId:'sync',roundId:'t',ts:now-29_998});
++ const resolved=hub.snapshot().sessions[0];
++ assert.equal(resolved.status,'running');
++ assert.deepEqual(resolved.pending,[]);
+ });
+ 
+ test('WorkBuddy questions preserve option labels and descriptions through the monitor snapshot',async()=>{

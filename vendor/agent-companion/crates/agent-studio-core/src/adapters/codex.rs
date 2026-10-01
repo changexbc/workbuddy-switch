@@ -18,6 +18,13 @@ impl Collector {
             let sid = text(&session["sessionId"]);
             if sid.is_empty() || session["id"] != format!("codex:{sid}") { continue; }
             let id = format!("codex:{sid}");
+            // Old runtimes persisted internal tasks before recognizing this
+            // template. Remember their identity before any late hook arrives.
+            if internal_prompt(&text(&session["title"])) {
+                self.live.insert(sid, json!({"internal":true,"recoveredInternal":true}));
+                self.hub.sessions.remove(&id);
+                continue;
+            }
             let newer = self.hub.sessions.get(&id).is_some_and(|current|
                 current["roundId"] != session["roundId"] && current["updatedAt"].as_i64().unwrap_or(0) > session["updatedAt"].as_i64().unwrap_or(0));
             if newer { continue; }
@@ -79,9 +86,14 @@ impl Collector {
         let internal = self.live.get(&sid).is_some_and(|s| s["internal"] == true)
             || event == "UserPromptSubmit" && internal_prompt(&content(&p["prompt"]));
         if internal {
-            self.live.insert(sid.clone(), json!({"internal":true}));
+            // Retain bounded legacy evidence across restarts; deleting it on
+            // the first late hook would forget why this session was hidden.
+            let recovered = self.live.get(&sid).is_some_and(|s| s["recoveredInternal"] == true);
+            self.live.insert(sid.clone(), json!({"internal":true,"recoveredInternal":recovered}));
             self.hub.sessions.remove(&format!("codex:{sid}"));
-            crate::codex_recovery::remove(&self.home, &self.settings, &self.integrations, &sid);
+            if !recovered {
+                crate::codex_recovery::remove(&self.home, &self.settings, &self.integrations, &sid);
+            }
             return false;
         }
         let ts = p["timestamp"]

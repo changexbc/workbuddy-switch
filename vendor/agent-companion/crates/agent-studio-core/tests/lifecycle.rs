@@ -1346,3 +1346,60 @@ fn optional_waits_expire_lazily_without_clearing_synchronous_items() {
     assert_eq!(expired["pending"], json!([]));
     assert_eq!(only.sessions["codex:y"]["pending"].as_array().unwrap().len(), 1);
 }
+
+const OBSERVED_MEMORY_PROMPT: &str = "Consolidate the supplied rollout summaries into `memory_summary.md` so another agent understands the user, finds relevant prior work, and continues correctly.";
+
+#[test]
+fn observed_memory_prompt_is_suppressed_with_whitespace_and_late_hooks() {
+    let home = Home::new();
+    let mut c = home.collector("codex");
+    let prompt = format!("  {}\nAdditional summaries follow.", OBSERVED_MEMORY_PROMPT.replace(' ', "\n\t"));
+    assert!(!c.ingest_hook(&json!({"session_id":"memory","hook_event_name":"UserPromptSubmit","prompt":prompt})));
+    for event in ["PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "Interrupt", "SessionEnd", "SessionStart"] {
+        assert!(!c.ingest_hook(&json!({"session_id":"memory","hook_event_name":event,"tool_name":"request_user_input","tool_use_id":"late"})));
+    }
+    assert!(c.hub.sessions.is_empty());
+    assert!(c.hub.snapshot()["events"].as_array().unwrap().is_empty());
+    for (i, prompt) in ["帮我整理 memory_summary.md".to_owned(), format!("Explain this: {OBSERVED_MEMORY_PROMPT}"), "Consolidate the supplied rollout summaries for my project".to_owned()].iter().enumerate() {
+        assert!(c.ingest_hook(&json!({"session_id":format!("user-{i}"),"hook_event_name":"UserPromptSubmit","prompt":prompt})));
+    }
+    assert_eq!(c.hub.sessions.len(), 3);
+}
+
+#[test]
+fn legacy_memory_recovery_is_hidden_before_late_hooks() {
+    let home = Home::new();
+    let mut c = home.collector("codex");
+    let timestamp = now();
+    // Build a valid old-runtime recovery record without passing its prompt
+    // through the updated ingestion filter.
+    for sid in ["memory", "user"] {
+        c.ingest_hook(&json!({"session_id":sid,"turn_id":"one","hook_event_name":"UserPromptSubmit","prompt":"ordinary user task","timestamp":timestamp}));
+        c.ingest_hook(&json!({"session_id":sid,"turn_id":"one","hook_event_name":"Stop","timestamp":timestamp+1}));
+    }
+    let store = home.0.join(".agent-studio/codex-recovery-v1.json");
+    let mut data: serde_json::Value = serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
+    data["sessions"]["memory"]["session"]["title"] = json!(OBSERVED_MEMORY_PROMPT);
+    data["sessions"]["user"]["session"]["title"] = json!(format!("Explain this: {OBSERVED_MEMORY_PROMPT}"));
+    atomic_json(&store, &data).unwrap();
+    drop(c);
+    let mut restored = Collector::new(home.0.clone()).unwrap();
+    assert!(!restored.hub.sessions.contains_key("codex:memory"));
+    assert!(restored.hub.sessions.contains_key("codex:user"));
+    assert_eq!(restored.live["memory"]["internal"], true);
+    for event in ["PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "SessionStart"] {
+        assert!(!restored.ingest_hook(&json!({"session_id":"memory","hook_event_name":event,"tool_name":"request_user_input","tool_use_id":"late"})));
+        assert!(!restored.hub.sessions.contains_key("codex:memory"));
+    }
+    assert_eq!(restored.hub.sessions.len(), 1);
+    assert!(restored.hub.snapshot()["events"].as_array().unwrap().is_empty());
+    drop(restored);
+    let mut again = Collector::new(home.0.clone()).unwrap();
+    assert!(again.hub.sessions.contains_key("codex:user"));
+    assert!(!again.ingest_hook(&json!({"session_id":"memory","hook_event_name":"PreToolUse","tool_name":"request_user_input","tool_use_id":"later"})));
+    assert!(!again.ingest_hook(&json!({"session_id":"memory","hook_event_name":"Stop"})));
+    assert!(!again.hub.sessions.contains_key("codex:memory"));
+    // Recognition evidence retains the original bounded expiry time.
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
+    assert_eq!(after["sessions"]["memory"], data["sessions"]["memory"]);
+}

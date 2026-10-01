@@ -1,5 +1,11 @@
 {
-  "revision": "a4d11ec4d6c2ac1585ba2d6ae27cab36a18e68e1",
-  "archiveSha256": "0aacb9d01ec27bbda6c1b9018084e6596a60bc49ed55cbb1b1ff42c92d98185a",
-  "interfaceVersion": 1
+  "revision": "c69b0110da11c383e1f777e62e81daff3826ab7c",
+  "archiveSha256": "5239b6befefcc2f59b056a5185542db7ba6b834e2d85e5517b8219b8ef07ac94",
+  "interfaceVersion": 1,
+  "patches": [
+    {
+      "path": "patches/agent-companion/host-compatibility.patch",
+      "sha256": "8439a867d00c105c4c33db590bf2b2b670df8db6727309dab3095d1fe7719332"
+    }
+  ]
 }
