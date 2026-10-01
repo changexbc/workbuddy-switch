@@ -14,8 +14,7 @@
 //! 与 CLI 是最近 2 个日期目录，两个 IDE 按文件 mtime 收窗）；重置时刻直接采用日志原文 / payload
 //! 原文给出的官方值，不自建限流窗口模型。
 //!
-//! 五个来源各扫一遍（PRD D1：插件宿主共享根 `CodeBuddyExtension/Logs/CodeBuddyIDE/` 与 CN
-//! IDE 真身重复记录同一次 429，**不扫**）：
+//! 六个来源各扫一遍：
 //!
 //! | 来源 | 日志根 | 格式 | 枚举 | 归因 |
 //! |---|---|---|---|---|
@@ -23,6 +22,10 @@
 //! | CodeBuddy CLI | `~/.codebuddy/logs` | `WorkBuddy` | 日期目录 | 日志内鉴权 uid → 轮换状态文件 |
 //! | CodeBuddy IDE | `<data_dir>/logs` | `Ide` | 会话目录 + mtime | 日志内鉴权 uid → IDE 状态文件 |
 //! | CodeBuddy CN IDE | `<data_dir>/logs` | `Ide` | 会话目录 + mtime | 同上 |
+//! | 插件宿主 agent 日志 | `CodeBuddyExtension/Logs/<宿主>/<日期>` | `Agent` | 日期目录 | 日志内鉴权 uid → IDE 状态文件 |
+//!
+//! 插件宿主那一路**必须扫**：实测 2026-09-27 的一次 429 只落在它里面（两个 IDE 真身的
+//! exthost 树里没有），早期「它是 IDE 真身的重复记录所以不扫」的结论在当前版本已不成立。
 //!
 //! 一次返回全部账号的当前受限状态——扫描本身就是全局的，按账号调用会把同一份日志扫 N 遍。
 //!
@@ -177,6 +180,13 @@ enum LogFormat {
     WorkBuddy,
     /// `2026-09-17 10:28:26.730 [info] …`：两个 CodeBuddy IDE。
     Ide,
+    /// `[2026/9/27 13:27:37.109] [Info] …`：插件宿主的 agent 业务日志
+    /// （`CodeBuddyExtension/Logs/<宿主>/<日期>/<工作区>__<hash>.log`）。
+    ///
+    /// 行首时间戳是 WorkBuddy 那种「方括号 + 非补零」写法，但事件 id / 模型 / 鉴权行都与两个
+    /// IDE 同构（`conversationId=`、`modelId=`、`[PulseServiceLifecycle] Auth session changed: … uid=`），
+    /// 所以时间戳按 WorkBuddy 解析、归因按 IDE。
+    Agent,
 }
 
 /// 鉴权行标记：顺序扫描时据此维护「事件前最近一次 uid」，是新来源唯一的时态可靠账号线索。
@@ -389,7 +399,8 @@ fn scan_text_scoped(
                     }
                 }
             }
-            LogFormat::Ide => {
+            // Agent 与两个 IDE 同构：会话级模型映射 + `[handleAuthError]` 文件级兜底。
+            LogFormat::Ide | LogFormat::Agent => {
                 // 会话级模型映射：`[ModelSelection] conversationId=…, modelId=…` 与
                 // `[AcpAgent:<conv>] … modelId=…`。`modelId=auto` 视为未知（不覆盖已有值）。
                 if line.contains(IDE_MODEL_FIELD) {
@@ -434,7 +445,7 @@ fn scan_text_scoped(
                 });
                 workbuddy_attribution(line, &request_models, &session_models, classifier)
             }
-            LogFormat::Ide => {
+            LogFormat::Ide | LogFormat::Agent => {
                 ide_attribution(line, &conversation_models, auth_error_model.as_deref())
             }
         };
@@ -598,6 +609,8 @@ fn collect_events(root: &Path, format: LogFormat, auth: AuthMarker) -> Vec<Event
         LogFormat::WorkBuddy => windowed_log_files(root, cutoff_ms),
         // IDE 会话目录下按插件目录过滤 + 文件 mtime 收窗。
         LogFormat::Ide => ide_log_files(root, cutoff_ms),
+        // Agent：`<根>/<日期>/*.log`（日期目录形态与 CLI / WorkBuddy 一致）。
+        LogFormat::Agent => windowed_log_files(root, cutoff_ms),
     };
     let mut hits = Vec::new();
     for file in files {
@@ -710,7 +723,8 @@ fn dedupe(hits: Vec<Hit>) -> Vec<Event> {
 fn line_timestamp(line: &str, format: LogFormat) -> Option<i64> {
     let trimmed = line.trim_start();
     let naive = match format {
-        LogFormat::WorkBuddy => {
+        // Agent 的行首同样是 `[2026/9/27 13:27:37.109]`（方括号 + 非补零），按 WorkBuddy 解析。
+        LogFormat::WorkBuddy | LogFormat::Agent => {
             let head = trimmed.split_whitespace().next().unwrap_or_default();
             if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(head) {
                 return Some(parsed.timestamp_millis());
@@ -1249,6 +1263,22 @@ fn cli_state_path() -> PathBuf {
     home_dir().join(CLI_ROTATE_DIR).join(CLI_STATE_FILE)
 }
 
+/// 插件宿主日志根（`…/CodeBuddyExtension/Logs`）：CN IDE 与 VS Code 插件共用的 **agent 业务日志**。
+///
+/// 布局：`Logs/<宿主>/<日期>/<工作区>__<hash>.log`（实测宿主目录有 `CodeBuddyIDE` 与 `VSCode`）。
+/// 数据根不存在（本机没用过插件）时返回 `None` —— 与其它来源一致：不存在就不扫。
+fn plugin_host_logs_root() -> Option<PathBuf> {
+    let base = if cfg!(target_os = "windows") {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+    } else if cfg!(target_os = "macos") {
+        home_dir().join("Library").join("Application Support")
+    } else {
+        home_dir().join(".config")
+    };
+    let root = base.join("CodeBuddyExtension").join("Logs");
+    root.is_dir().then_some(root)
+}
+
 // ---------------------------------------------------------------------------
 // 扫描缓存与范围（hook 通路接入后：逐来源判定）
 // ---------------------------------------------------------------------------
@@ -1268,6 +1298,11 @@ enum ScanSource {
     Cli,
     /// CodeBuddy IDE 的一个形态（429 不触发任何事件；`scanIdeLogs` 开启且数据根存在才扫）。
     Ide(CodeBuddyIdeFlavor),
+    /// 插件宿主的 agent 业务日志（`CodeBuddyExtension/Logs/<宿主>/<日期>/*.log`）。
+    ///
+    /// 与 `Ide(x)` 的 exthost 日志树是**两份不同的记录**：本机实测一次 429 只落在这一侧
+    /// （两个 IDE 的 exthost 树里没有），所以它必须单独成为一个来源。
+    AgentLog,
 }
 
 impl ScanSource {
@@ -1279,6 +1314,7 @@ impl ScanSource {
             Self::Cli => 2,
             Self::Ide(CodeBuddyIdeFlavor::Intl) => 3,
             Self::Ide(CodeBuddyIdeFlavor::Cn) => 4,
+            Self::AgentLog => 5,
         }
     }
 }
@@ -1290,10 +1326,10 @@ struct ScanScope(u8);
 impl ScanScope {
     /// 一个来源都不扫。
     const NONE: Self = Self(0);
-    /// 全量五源。生产路径的范围一律由 `scan_scope` 按来源算出（可能正好是它），
+    /// 全量来源。生产路径的范围一律由 `scan_scope` 按来源算出（可能正好是它），
     /// 这里保留给缓存超集语义的测试用。
     #[cfg(test)]
-    const ALL: Self = Self(0b1_1111);
+    const ALL: Self = Self(0b11_1111);
 
     fn insert(&mut self, source: ScanSource) {
         self.0 |= 1 << source.bit();
@@ -1315,6 +1351,8 @@ struct ScanRoots {
     hook_sources: Vec<(ScanSource, PathBuf, PathBuf)>,
     /// 只判「数据根存在」的来源：两个 IDE。
     ide_sources: Vec<(ScanSource, PathBuf)>,
+    /// 插件宿主日志根（`…/CodeBuddyExtension/Logs`）：存在才扫。
+    agent_log_root: Option<PathBuf>,
     /// 本工具 hook 脚本的绝对路径（配置里的 marker）。
     marker: String,
 }
@@ -1345,6 +1383,7 @@ impl ScanRoots {
         Self {
             hook_sources,
             ide_sources,
+            agent_log_root: plugin_host_logs_root(),
             marker: hook_marker(),
         }
     }
@@ -1368,6 +1407,10 @@ fn scan_scope(roots: &ScanRoots, scan_ide_logs: bool) -> ScanScope {
             if data_root.is_dir() {
                 scope.insert(*source);
             }
+        }
+        // 插件宿主日志与两个 IDE 共用同一个开关：它本来就是「IDE / 插件宿主」这一侧的记录。
+        if roots.agent_log_root.as_deref().is_some_and(Path::is_dir) {
+            scope.insert(ScanSource::AgentLog);
         }
     }
     scope
@@ -1465,9 +1508,8 @@ fn scan_sources(scope: ScanScope) -> Vec<Resolved> {
     }
     // ③ 两个 CodeBuddy IDE：同一份 Ide 格式与同一套归因，只有日志根与状态文件不同。
     //
-    // **不扫** `CodeBuddyExtension/Logs/CodeBuddyIDE/`：它是插件宿主的跨 App 共享日志根，
-    // 与 CN IDE 真身重复记录同一次 429（同一 requestId、行时间差 3 ms），扫它会重复展示
-    // 且档位归属不清（PRD D1）。
+    // 注意：这里扫的是 IDE 真身的 **exthost** 日志树（`<data_dir>/logs/<会话>/window<N>/exthost/…`），
+    // 与 ④ 的插件宿主 agent 日志是两份不同记录（早期「两者重复」的结论已不成立，见 ④）。
     let mut ide_uid_to_account: Option<HashMap<String, String>> = None;
     for (flavor, state_file) in [
         (CodeBuddyIdeFlavor::Intl, IDE_STATE_FILE),
@@ -1491,6 +1533,43 @@ fn scan_sources(scope: ScanScope) -> Vec<Resolved> {
             uid_to_account,
             &ActiveAccount::load(&store_dir().join(state_file)),
         ));
+    }
+    // ④ 插件宿主的 agent 业务日志（CN IDE / VS Code 插件共享根）。
+    //
+    // 早期按 PRD D1「与 CN IDE 真身重复记录同一次 429」而**不扫**，但该结论在当前版本不成立：
+    // 实测 2026-09-27 那次 429（`code=6004`、「您的使用量已超出频率限制」、`modelId=deepseek-v4.1-flash`、
+    // `conversationId=d8231a1e…`）**只**出现在这里，两个 IDE 的 exthost 树里没有 —— 不扫就整条漏掉。
+    // 万一某次事件两边都记了，最终的 (账号, 模型) 聚合会把它们并成一条（`hitCount` 累加），不会重复展示。
+    //
+    // 归因与两个 IDE 同源：日志内有 `[PulseServiceLifecycle] Auth session changed: … uid=` 鉴权行，
+    // 事件 id / 模型线索也同构，所以复用 `AuthMarker::AuthSessionChanged` + `resolve_by_uid`。
+    if scope.contains(ScanSource::AgentLog) {
+        if let Some(root) = plugin_host_logs_root() {
+            // `Logs/<宿主>/<日期>/…`：宿主目录逐个扫、排序保证结果稳定。
+            let mut hosts: Vec<PathBuf> = std::fs::read_dir(&root)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| path.is_dir())
+                        .collect()
+                })
+                .unwrap_or_default();
+            hosts.sort();
+            let mut events = Vec::new();
+            for host in hosts {
+                events.extend(collect_events(
+                    &host,
+                    LogFormat::Agent,
+                    AuthMarker::AuthSessionChanged,
+                ));
+            }
+            resolved.extend(resolve_by_uid(
+                &events,
+                &account_id_by_uid(),
+                &ActiveAccount::load(&store_dir().join(CN_IDE_STATE_FILE)),
+            ));
+        }
     }
     resolved
 }
@@ -1557,6 +1636,58 @@ mod tests {
 
     fn business_line(timestamp: &str, body: &str) -> String {
         format!("[{timestamp}] [Error] [pid=1] {body}")
+    }
+
+    /// 插件宿主 agent 日志（`CodeBuddyExtension/Logs/<宿主>/<日期>/<工作区>__<hash>.log`）：
+    /// 行首是 WorkBuddy 式 `[2026/9/27 13:27:37.109]`，但鉴权行 / 事件 id / 模型线索与 IDE 同构。
+    ///
+    /// 回归：这类日志曾整棵不扫（PRD D1 认为它只是 IDE 真身的重复记录），于是 2026-09-27 那次
+    /// 真实 429（**只**写在它里面）完全查不到，账号页没有限额标记。
+    #[test]
+    fn plugin_host_agent_log_parses_uid_reset_and_model() {
+        let uid = "3ca50d51-924a-4401-9c33-10a1f45bf3ca";
+        let conversation = "d8231a1e06e549d1ab0baf63fbd92aaf";
+        let quota = "您的使用量已超出频率限制，将在 2026-09-27 19:03:12 UTC+8 重置，您也可以切换其他模型继续使用。";
+        let text = [
+            format!("[2026/9/27 10:52:47.409] [Info] [PulseServiceLifecycle] Auth session changed: hasSession=true, initialized=false, uid={uid}"),
+            format!("[2026/9/27 13:27:30.001] [Info] [ModelSelection] conversationId={conversation}, mode=craft, modelId=deepseek-v4.1-flash, source=user-selected"),
+            format!("[2026/9/27 13:27:37.182] [Error] [CraftInvokableAgent] [0a2eeed2c4c5ed2f2e2947c1e1fb7616]  Execution failed: {quota}"),
+        ]
+        .join("\n");
+        let events = dedupe(scan_text(
+            &text,
+            LogFormat::Agent,
+            AuthMarker::AuthSessionChanged,
+        ));
+        assert_eq!(events.len(), 1, "应解析出一次限额事件");
+        assert_eq!(
+            events[0].uid.as_deref(),
+            Some(uid),
+            "账号归因靠日志内鉴权行"
+        );
+        // 官方恢复时刻：`2026-09-27 19:03:12 UTC+8` == `11:03:12Z`。
+        let expected = NaiveDateTime::parse_from_str("2026-09-27 11:03:12", "%Y-%m-%d %H:%M:%S")
+            .expect("合法时间")
+            .and_utc()
+            .timestamp_millis();
+        assert_eq!(events[0].reset_at, expected);
+
+        // 行上带会话身份（`[AcpAgent:<conversationId>]`）时，从同会话的 `[ModelSelection]` 取到模型。
+        let with_session = format!(
+            "[2026/9/27 13:27:37.182] [Error] [AcpAgent:{conversation}]  Execution failed: {quota}"
+        );
+        let text = [
+            format!("[2026/9/27 13:27:30.001] [Info] [ModelSelection] conversationId={conversation}, mode=craft, modelId=deepseek-v4.1-flash, source=user-selected"),
+            with_session,
+        ]
+        .join("\n");
+        let events = dedupe(scan_text(
+            &text,
+            LogFormat::Agent,
+            AuthMarker::AuthSessionChanged,
+        ));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].model.as_deref(), Some("deepseek-v4.1-flash"));
     }
 
     /// SDK 会话日志：模型线索来自 `method:sendPrompt`，会话 id 来自文件名。
@@ -2997,6 +3128,7 @@ mod tests {
                     dir.join("CodeBuddy CN"),
                 ),
             ],
+            agent_log_root: Some(dir.join("CodeBuddyExtension").join("Logs")),
             marker: marker.to_string(),
         }
     }
