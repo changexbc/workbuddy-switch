@@ -8,6 +8,8 @@
 //! ```
 
 mod api;
+mod cli;
+mod cli_accounts;
 
 use serde_json::json;
 
@@ -129,13 +131,24 @@ fn print_status(variant: WbVariant) {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if cli::handles(&args) {
+        if let Err(error) = cli::run(&args).await {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("serve");
     match cmd {
         "status" => print_status(variant_arg(&args)),
         "version" | "--version" | "-V" => {
             println!("workbuddy-switch {}", env!("CARGO_PKG_VERSION"));
         }
-        _ => serve(&args).await,
+        "serve" | "--port" | "--no-open" => serve(&args).await,
+        other => {
+            eprintln!("未知命令: {other}。运行 --help 查看用法。");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -173,19 +186,23 @@ async fn serve(args: &[String]) {
 
 fn open_browser(addr: &str) {
     let url = format!("http://{addr}");
+    open_browser_url(&url);
+}
+
+fn open_browser_url(url: &str) {
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open").arg(&url).spawn();
     }
     #[cfg(target_os = "windows")]
     {
-        let mut c = std::process::Command::new("cmd");
+        let mut c = std::process::Command::new("rundll32");
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW：开浏览器不闪 cmd 窗
         }
-        let _ = c.args(["/C", "start", &url]).spawn();
+        let _ = c.args(["url.dll,FileProtocolHandler", url]).spawn();
     }
     #[cfg(target_os = "linux")]
     {

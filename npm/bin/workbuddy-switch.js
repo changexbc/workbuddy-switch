@@ -23,7 +23,7 @@ if (!FILE) {
 const binPath = path.join(binDir, FILE);
 if (!fs.existsSync(binPath)) {
   console.error(
-    "wb-switch: 未找到平台二进制，请重新安装（npm install -g wb-switch 触发下载）",
+    "wb-switch: 未找到平台二进制，请重新安装（npm install -g workbuddy-switch 触发下载）",
   );
   process.exit(1);
 }

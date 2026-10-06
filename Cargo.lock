@@ -5645,6 +5645,7 @@ name = "wb-switch-server"
 version = "0.1.57"
 dependencies = [
  "axum",
+ "chrono",
  "rust-embed",
  "serde_json",
  "tokio",

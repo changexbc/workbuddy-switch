@@ -137,6 +137,62 @@ Token 统计页按来源展示 Token 总览与趋势、构成占比、活跃热�
 
 ## npm / webui 版本
 
+### 命令行账号管理与切换
+
+账号命令直接执行本地业务逻辑，无需启动 webui。账号库与桌面版共用。
+
+`wb-switch` 是 `workbuddy-switch` 的正式命令别名，以下命令均可使用短名称，例如 `wb-switch accounts list`。
+
+```bash
+workbuddy-switch accounts add                       # 浏览器 OAuth 登录并保存账号
+workbuddy-switch accounts add --variant ai           # 添加国际版账号
+workbuddy-switch accounts add --no-open              # 只打印登录地址，手动打开
+workbuddy-switch accounts add --local                # 收集本机 WorkBuddy 当前登录账号
+workbuddy-switch accounts add --file accounts.json   # 导入备份中的全部账号
+wb-switch accounts list                            # 本地账号元数据，含 index（不含凭据）
+wb-switch accounts list --lite                     # 精简表格，实时查询积分
+wb-switch credits 2                                # 查询第 2 个账号的积分及全部积分包
+wb-switch credits all --lite                       # 查询全部账号积分并输出表格
+
+workbuddy-switch switch workbuddy <account-id>
+wb-switch switch ide 2                             # 使用第 2 个账号
+wb-switch switch cli 2
+wb-switch switch 2 --lite                           # 依次切换全部服务
+wb-switch switch cli soonest --lite                 # 可用积分最快过期的账号
+wb-switch switch ide richest --lite                 # 可用积分最多的账号
+workbuddy-switch switch vscode <account-id> copy true syn true
+workbuddy-switch switch jetbrains <account-id> restart true
+workbuddy-switch --help
+```
+
+目标账号可用 `accounts list` 输出的 `index` 或 `id`。`index` 按账号库顺序从 1 编号，删除账号后会变化，固定脚本建议使用 `id`。`ide` 根据目标账号选择国内/国际版，`cli` 指 CodeBuddy CLI，旧的长服务名兼容保留。
+
+`credits <index|id>` 查询单账号，`credits all` 查询全部账号。完整 JSON 的 `credits` 字段包含 `totalRemaining`（剩余总积分）、`totalCapacity`（套餐总额度）、`soonestExpireAt`（有余额积分包的最早过期时间）、`expiringSoonRemaining`、`expiredRemaining`、`updatedAt` 与 `resources`（积分包额度、余额、已使用、过期时间和状态）。时间戳单位为毫秒，表格时间使用本机时区。查询失败显示未知值和错误，不会当作零积分。
+
+`switch [服务] soonest` / `richest` 实时查询积分后选择目标，排除查询失败、需要重新登录和没有可用余额的账号；已过期积分包不参与排名。`soonest` 还要求存在未来的过期时间；`richest` 允许无过期时间。并列时选列表中靠前的账号。
+
+快捷选择只比较查询成功的账号；失败项记录在 `selectionErrors` 中，表格模式也会提示，此时退出码为 `2`。积分查询逐账号执行，每个账号最多等待 90 秒，避免并发刷新凭据时覆盖账号库更新。
+
+`--lite` 适用于添加、列表、积分和切换命令，使用精简表格。列表只显示 index、ac id、剩余积分、积分最近过期时间、nickname、needrelogin、服务。WorkBuddy 服务归属读取登录文件，CLI 从当前认证配置匹配；IDE/插件显示工具记录的最近切换账号（外部手动切号可能使记录过时）。普通 `accounts list` 无网络查询；`accounts list --lite` 实时查询积分。
+
+省略服务时，顺序尝试 WorkBuddy、IDE、CLI、VS Code、JetBrains，逐项返回成功/失败；任一服务失败仍继续其余服务，不执行跨服务回滚。未安装或未初始化的服务会明确报错。全服务模式的复制/同步只应用于支持的服务，`share` 只用于 WorkBuddy，`restart` 不传给 CLI。
+
+| 参数 | 默认 | 行为 |
+| --- | --- | --- |
+| `copy true/false` | `false` | 复制当前服务账号的全部可复制会话 / 不复制 |
+| `syn true/false` | `false` | 处理当前账号到目标账号的全部关联会话 / 不同步 |
+| `overwrite true/false` | `false` | 同步时允许以源内容覆盖冲突 / 跳过冲突并报告 |
+| `restart true/false` | `true` | 自动关闭并重开客户端 / 使用原有手动退出模式 |
+| `share true/false` | `false` | WorkBuddy 原有共享会话行为 / 不共享 |
+
+所有布尔参数也支持 `--copy true`、`--copy=true` 等写法；不支持指定个别会话。`syn true` 保留后端可同步权限和预览校验：相同内容无需写入，目标领先或无法比较的会话会报告跳过，冲突须加 `overwrite true` 才覆盖。复制不改变源会话。
+
+WorkBuddy 会话操作需要 `restart true`。CodeBuddy CLI 与 JetBrains 不支持会话复制/同步；JetBrains 一次处理全部安装了插件的 IDE。CodeBuddy CLI 切换会关闭运行中的 CLI，不自动重开，也不接受 `restart` 参数。
+
+命令输出 JSON，错误写入 stderr。退出码：`0` 完成、`1` 参数或操作错误、`2` 已执行但存在会话失败/跳过或待恢复项；退出码 `2` 时账号可能已经切换，请查看操作报告。未知命令会报错，不会启动网页服务。
+
+源码开发时先执行 `npm ci && npm run build` 生成 webui 资源，再执行 `cargo build -p wb-switch-server`；可用 `cargo run -p wb-switch-server -- accounts list` 运行本分支的命令。npm 已安装版本只有更新到包含此功能的构建后才会提供这些命令。
+
 ```bash
 npm i -g workbuddy-switch
 workbuddy-switch              # 启动本地服务 + 自动打开浏览器

@@ -75,7 +75,7 @@ fn set_active_account_id(account_id: &str) -> Result<(), String> {
     save_state(&state)
 }
 
-fn active_account_id_from_state() -> Option<String> {
+pub fn active_account_id_from_state() -> Option<String> {
     load_state()
         .get("activeAccountId")
         .and_then(|v| v.as_str())

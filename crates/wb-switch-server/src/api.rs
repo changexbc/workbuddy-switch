@@ -230,6 +230,28 @@ fn json_ok(v: Value) -> Response {
     Json(v).into_response()
 }
 
+/// In-process entry point: CLI shares the web UI switch orchestration without a listener.
+pub async fn cli_switch(service: &str, body: Value) -> Result<Value, String> {
+    let response = match service {
+        "workbuddy" => api_switch(Json(body)).await,
+        "codebuddy-cli" => api_codebuddy_cli_switch(Json(body)).await,
+        "codebuddy-cn-ide" => api_codebuddy_cn_ide_switch(Json(body)).await,
+        "codebuddy-ide" => api_codebuddy_ide_switch(Json(body)).await,
+        "vscode" => api_vscode_ext_switch(Json(body)).await,
+        "jetbrains" => api_jetbrains_switch(Json(body)).await,
+        _ => return Err("未知服务".into()),
+    };
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .map_err(|e| e.to_string())?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(value["error"].as_str().unwrap_or("切换失败").into());
+    }
+    Ok(value)
+}
+
 fn json_err(e: String, code: StatusCode) -> Response {
     (code, Json(json!({ "ok": false, "error": e }))).into_response()
 }
