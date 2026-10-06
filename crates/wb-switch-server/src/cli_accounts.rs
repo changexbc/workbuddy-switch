@@ -176,7 +176,7 @@ pub fn choose(
 pub fn timestamp(value: &Value) -> String {
     value
         .as_i64()
-        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+        .and_then(chrono::DateTime::from_timestamp_millis)
         .map(|t| {
             t.with_timezone(&chrono::Local)
                 .format("%Y-%m-%d %H:%M:%S")

@@ -359,11 +359,11 @@ async fn switch_one(
         "cli" => "codebuddy-cli",
         s => s,
     };
-    let copy = boolean(&opts, "copy", false)?;
-    let syn = boolean(&opts, "syn", false)?;
-    let overwrite = boolean(&opts, "overwrite", false)?;
-    let restart = boolean(&opts, "restart", true)?;
-    let share = boolean(&opts, "share", false)?;
+    let copy = boolean(opts, "copy", false)?;
+    let syn = boolean(opts, "syn", false)?;
+    let overwrite = boolean(opts, "overwrite", false)?;
+    let restart = boolean(opts, "restart", true)?;
+    let share = boolean(opts, "share", false)?;
     let acc =
         account::find_account(id).ok_or("账号不存在；请使用 accounts list 中的 index 或 id")?;
     let v = account::variant_of(&acc);
