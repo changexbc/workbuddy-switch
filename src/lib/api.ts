@@ -58,9 +58,8 @@ import { screenshotDemoResponse } from "./screenshot-demo";
 /**
  * 双通道适配层：
  * - 桌面 App（Tauri）：`invoke` 调用 Rust commands
- * - webui（浏览器）：HTTP fetch 调用本地 workbuddy-switch 服务（127.0.0.1）
+ * - webui（浏览器）：HTTP fetch 调用同源服务（服务端口 / SSH 转发端口均可）
  */
-const API_BASE = "http://127.0.0.1:57890";
 
 const DEMO_READ_COMMANDS = new Set([
   "get_status", "get_accounts", "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_codebuddy_ide_status", "get_vscode_ext_status", "get_jetbrains_status", "list_vscode_sessions", "list_codebuddy_ide_sessions", "list_codebuddy_intl_ide_sessions", "vscode_session_links_preview", "codebuddy_ide_session_links_preview", "codebuddy_intl_ide_session_links_preview", "list_account_sessions", "session_links_preview_cross", "list_session_groups", "get_session_group", "preview_session_group_pair", "get_checkin_status",
@@ -214,22 +213,36 @@ function queryString(args?: Record<string, unknown>): string {
   return text ? `?${text}` : "";
 }
 
+/** 页面当前来源，仅用于错误提示；缺失时返回空串，调用方据此省略括号。 */
+function currentOrigin(): string {
+  if (typeof window === "undefined") return "";
+  const origin = window.location?.origin;
+  return typeof origin === "string" ? origin : "";
+}
+
 async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const route = ROUTES[cmd];
   if (!route) throw new Error(`webui 模式暂不支持该操作: ${cmd}`);
   let res: Response;
   try {
+    // 相对路径以页面自身来源为基准（服务端口 / SSH 转发端口 / localhost 与
+    // 127.0.0.1 混用都自动跟随），不能写死 127.0.0.1:57890。
     const url =
       route.method === "GET"
-        ? `${API_BASE}${route.path}${queryString(args)}`
-        : `${API_BASE}${route.path}`;
+        ? `${route.path}${queryString(args)}`
+        : route.path;
     res = await fetch(url, {
       method: route.method,
       headers: { "Content-Type": "application/json" },
       body: route.method === "POST" ? JSON.stringify(args ?? {}) : undefined,
     });
   } catch {
-    throw new Error(`无法连接 workbuddy-switch 服务（${API_BASE}），请先运行 \`workbuddy-switch\``);
+    const origin = currentOrigin();
+    throw new Error(
+      origin
+        ? `无法连接 workbuddy-switch 服务（${origin}），请先运行 \`workbuddy-switch\``
+        : `无法连接 workbuddy-switch 服务，请先运行 \`workbuddy-switch\``,
+    );
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
