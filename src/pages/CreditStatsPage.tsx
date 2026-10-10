@@ -1579,10 +1579,6 @@ function SelectedAccountDetails({
     return latest;
   }, null);
 
-  useEffect(() => {
-    setDetailTab("credits");
-  }, [effectiveFilter]);
-
   return (
     <div className="flex min-w-0 flex-col gap-12">
       <section className="min-w-0 space-y-2.5" aria-labelledby="credit-detail-title">
