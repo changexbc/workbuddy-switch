@@ -5,6 +5,7 @@ import {
   isActionable,
   isDirectlySyncable,
   primaryMode,
+  shouldDefaultSelect,
   summarySentence,
 } from "./session-link-shared";
 import type { SessionLinkPreviewGroup, SessionSyncMode } from "@/lib/types";
@@ -144,3 +145,81 @@ describe("summarySentence", () => {
     );
   });
 });
+
+describe("shouldDefaultSelect (#165 方案 3)", () => {
+  it("偏好关闭时：纯归档项默认不勾选", () => {
+    const pureArchive = group({
+      archiveAction: "statusOnly",
+      previewToken: "tok-1",
+      availableModes: [],
+      defaultChecked: false,
+    });
+    expect(shouldDefaultSelect(pureArchive, false)).toBe(false);
+  });
+
+  it("偏好关闭时：后端显式 defaultChecked（如快进）仍默认勾选", () => {
+    const ff = group({
+      availableModes: ["fastForward"],
+      previewToken: "tok-1",
+      defaultChecked: true,
+    });
+    expect(shouldDefaultSelect(ff, false)).toBe(true);
+  });
+
+  it("偏好开启时：纯归档项（无正文模式）自动预选", () => {
+    const pureArchive = group({
+      archiveAction: "statusOnly",
+      previewToken: "tok-1",
+      availableModes: [],
+      defaultChecked: false,
+    });
+    expect(shouldDefaultSelect(pureArchive, true)).toBe(true);
+  });
+
+  it("偏好开启时：无凭据的纯归档项绝不预选（非 actionable）", () => {
+    const unActionable = group({
+      archiveAction: "statusOnly",
+      previewToken: undefined,
+      availableModes: [],
+      defaultChecked: false,
+    });
+    expect(shouldDefaultSelect(unActionable, true)).toBe(false);
+  });
+
+  it("防覆盖铁律：Diverge 冲突项附带 statusOnly 时，绝不因偏好自动预选（必须用户手动勾选）", () => {
+    const divergeGroup = group({
+      verdict: "diverge",
+      availableModes: ["overwrite"],
+      archiveAction: "statusOnly",
+      previewToken: "tok-1",
+      defaultChecked: false,
+    });
+    // primaryMode 不为 null（为 overwrite），严禁自动勾选，避免意外触发正文覆盖
+    expect(shouldDefaultSelect(divergeGroup, true)).toBe(false);
+  });
+
+  it("偏好开启时：无归档动作的普通未改动项不预选", () => {
+    const unchanged = group({
+      previewToken: "tok-1",
+      availableModes: [],
+      defaultChecked: false,
+    });
+    expect(shouldDefaultSelect(unchanged, true)).toBe(false);
+  });
+
+  it("偏好开启时：正文快进项沿用自身 defaultChecked", () => {
+    const ffChecked = group({
+      availableModes: ["fastForward"],
+      previewToken: "tok-1",
+      defaultChecked: true,
+    });
+    const ffUnchecked = group({
+      availableModes: ["fastForward"],
+      previewToken: "tok-1",
+      defaultChecked: false,
+    });
+    expect(shouldDefaultSelect(ffChecked, true)).toBe(true);
+    expect(shouldDefaultSelect(ffUnchecked, true)).toBe(false);
+  });
+});
+

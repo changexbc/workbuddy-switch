@@ -10,10 +10,12 @@ import {
   LinksSkeleton,
   LIST_MIN_H,
   SessionLinkCard,
+  shouldDefaultSelect,
   STATUS_MIN_H,
   type SessionLinksMeta,
 } from "@/components/session-link-shared";
 import * as api from "@/lib/api";
+import { isDefaultArchiveSyncEnabled } from "@/lib/sync-prefs";
 import { displayName } from "@/lib/account-display";
 import { cn } from "@/lib/utils";
 import { accountVariant } from "@/lib/variant";
@@ -74,9 +76,12 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
       .then((res) => {
         if (cancelled) return;
         setPreview(res);
-        // 默认勾选值来自后端 defaultChecked，前端不扩大权限。
+        // 默认勾选：后端 defaultChecked（如快进），加用户开启偏好时的纯归档同步（#165 方案 3）。
+        const autoArchive = isDefaultArchiveSyncEnabled();
         const defaults = new Set(
-          res.groups.filter((group) => group.defaultChecked && isActionable(group)).map((g) => g.groupId),
+          res.groups
+            .filter((group) => shouldDefaultSelect(group, autoArchive))
+            .map((g) => g.groupId),
         );
         setChecked(defaults);
         onChange({ selections: buildSelections(res.groups, defaults), groups: res.groups });

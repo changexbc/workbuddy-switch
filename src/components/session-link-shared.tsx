@@ -115,6 +115,28 @@ export function isDirectlySyncable(group: SessionLinkPreviewGroup): boolean {
 }
 
 /**
+ * 决定切号弹窗初始化时该关联会话是否默认预先勾选（#165 方案 3）。
+ *
+ * 规则：
+ * 1. 项本身必须可勾选且有凭据（isActionable）；
+ * 2. 满足下列其一即可预先勾选：
+ *    - 后端显式指定默认勾选（如 fastForward 正文快进）；
+ *    - 用户开启了自动同步归档偏好（autoArchive），且该项为纯归档项（具备 archiveAction 且 primaryMode === null）。
+ *
+ * 绝对边界：Diverge（覆盖模式，primaryMode === "overwrite"）无论是否具备归档资格，绝不自动预选！
+ */
+export function shouldDefaultSelect(
+  group: SessionLinkPreviewGroup,
+  autoArchive: boolean,
+): boolean {
+  return (
+    isActionable(group) &&
+    (group.defaultChecked ||
+      (autoArchive && archiveOnly(group) && primaryMode(group) === null))
+  );
+}
+
+/**
  * 组装提交给后端的同步选择：只有「用户勾选 + 后端给出模式与预览凭据」的组才发送。
  * 前端不推断模式，也不为禁选项补默认值。
  */

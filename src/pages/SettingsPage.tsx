@@ -34,6 +34,7 @@ import { displayName } from "@/lib/account-display";
 import * as api from "@/lib/api";
 import { canPersistErrorLog } from "@/lib/error-report";
 import { setSessionsNavEnabled, useSessionsNavEnabled } from "@/lib/nav-prefs";
+import { setDefaultArchiveSyncEnabled, useDefaultArchiveSyncEnabled } from "@/lib/sync-prefs";
 import { getThemePreference, setThemePreference, type ThemePreference } from "@/lib/theme";
 import { SUPPORTED_TOOLS, setToolEnabled, useSupportedTools, type ToolId } from "@/lib/supported-tools";
 import type {
@@ -1805,6 +1806,7 @@ function ErrorLogCard() {
 function AppearanceCard() {
   const [theme, setTheme] = useState<ThemePreference>(getThemePreference);
   const sessionsNavEnabled = useSessionsNavEnabled();
+  const defaultArchiveSyncEnabled = useDefaultArchiveSyncEnabled();
 
   function onThemeChange(value: string) {
     if (value !== "system" && value !== "light" && value !== "dark") return;
@@ -1835,7 +1837,6 @@ function AppearanceCard() {
           </Select>
         </SettingsFieldRow>
         <SettingsFieldRow
-          className="border-b-0"
           label="显示关联会话菜单"
           description="关闭后左侧导航不再显示「关联会话」入口，会话数据与关联关系不受影响"
           htmlFor="appearance-sessions-nav"
@@ -1845,6 +1846,19 @@ function AppearanceCard() {
             checked={sessionsNavEnabled}
             onCheckedChange={(on) => setSessionsNavEnabled(on)}
             aria-label="显示关联会话菜单"
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow
+          className="border-b-0"
+          label="切换账号时默认勾选归档同步"
+          description="开启后，切换账号时会预先勾选可仅同步归档状态的关联会话，保留正文。你仍可取消勾选，确认切换后才执行。正文快进和覆盖沿用原有规则。"
+          htmlFor="sync-default-archive"
+        >
+          <Switch
+            id="sync-default-archive"
+            checked={defaultArchiveSyncEnabled}
+            onCheckedChange={(on) => setDefaultArchiveSyncEnabled(on)}
+            aria-label="切换账号时默认勾选归档同步"
           />
         </SettingsFieldRow>
       </CardContent>
