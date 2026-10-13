@@ -2,7 +2,7 @@
 
 ## 环境要求
 
-Node.js ≥ 20、Rust stable、macOS（或 Windows/Linux）。
+Node.js ≥ 20、Rust stable（≥ 1.89）、macOS（或 Windows/Linux）。
 
 ## 开发命令
 
