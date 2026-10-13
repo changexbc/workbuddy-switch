@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// wb-switch npm 入口：spawn 平台二进制（postinstall 下载，见 scripts/install.js）。
-const { spawnSync } = require("child_process");
+// workbuddy-switch npm 入口：spawn 平台二进制（postinstall 复制，见 scripts/install.js）。
+const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
@@ -23,10 +23,30 @@ if (!FILE) {
 const binPath = path.join(binDir, FILE);
 if (!fs.existsSync(binPath)) {
   console.error(
-    "wb-switch: 未找到平台二进制，请重新安装（npm install -g wb-switch 触发下载）",
+    "workbuddy-switch: 未找到平台二进制，请重新安装（npm install -g workbuddy-switch）",
   );
   process.exit(1);
 }
 
-const result = spawnSync(binPath, process.argv.slice(2), { stdio: "inherit" });
-process.exit(result.status ?? 1);
+const child = spawn(binPath, process.argv.slice(2), { stdio: "inherit" });
+
+// Keep the npm parent alive while the CLI finishes an authentication commit.
+// On Windows console Ctrl+C/Ctrl+Break is already broadcast to the child;
+// child.kill() would force-terminate it and bypass its graceful handler.
+const forward = signal => {
+  if (process.platform !== "win32" && child.exitCode === null) {
+    child.kill(signal);
+  }
+};
+process.on("SIGINT", () => forward("SIGINT"));
+process.on("SIGTERM", () => forward("SIGTERM"));
+if (process.platform === "win32") {
+  process.on("SIGBREAK", () => forward("SIGBREAK"));
+}
+child.once("error", error => {
+  console.error(`workbuddy-switch: 无法启动平台二进制 (${error.code || "unknown error"})`);
+  process.exitCode = 1;
+});
+child.once("close", (code, signal) => {
+  process.exitCode = code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1);
+});

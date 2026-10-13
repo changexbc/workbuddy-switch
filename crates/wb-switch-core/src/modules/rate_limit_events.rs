@@ -72,6 +72,10 @@ struct StoredEntry {
     reset_at: i64,
     first_seen_at: i64,
     hit_count: u32,
+    /// Added after the original ledger format. An empty list preserves the
+    /// truth of old entries whose transcript source was not persisted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    source_clients: Vec<String>,
 }
 
 /// 后端持有的状态：事件文件已读偏移 + 当前有效的限额条目。
@@ -134,6 +138,16 @@ enum HookSource {
     Cli,
     /// WorkBuddy 客户端（`~/.workbuddy` / `~/.workbuddy-ai`）。
     WorkBuddy(WbVariant),
+}
+
+impl HookSource {
+    fn client_name(self) -> &'static str {
+        match self {
+            Self::Cli => "codebuddy-cli",
+            Self::WorkBuddy(WbVariant::Cn) => "workbuddy-cn",
+            Self::WorkBuddy(WbVariant::Ai) => "workbuddy-ai",
+        }
+    }
 }
 
 /// 一行 payload 里识别出的限额事件（来源判定需要环境，见 `source_of`）。
@@ -527,6 +541,7 @@ fn ingest_lines(ctx: &IngestContext, state: &mut State, lines: &[String], now: i
                 reset_at: event.reset_at,
                 first_seen_at: now,
                 hit_count: 1,
+                source_clients: vec![source.client_name().to_string()],
             },
         );
         added = true;
@@ -546,6 +561,12 @@ fn merge_entry(events: &mut Vec<StoredEntry>, entry: StoredEntry) {
     }) {
         existing.hit_count += entry.hit_count;
         existing.first_seen_at = existing.first_seen_at.min(entry.first_seen_at);
+        for client in entry.source_clients {
+            if !existing.source_clients.contains(&client) {
+                existing.source_clients.push(client);
+            }
+        }
+        existing.source_clients.sort();
         return;
     }
     events.push(entry);
@@ -563,6 +584,8 @@ fn live_entries(state: &mut State, now: i64) -> Vec<Resolved> {
             reset_at: entry.reset_at,
             first_seen_at: entry.first_seen_at,
             hit_count: entry.hit_count,
+            source: "client-hook",
+            source_clients: entry.source_clients.clone(),
         })
         .collect()
 }
@@ -651,6 +674,12 @@ pub(crate) fn hook_entries(now: i64) -> Vec<Resolved> {
     let mut guard = STATE.lock().unwrap();
     let state = guard.get_or_insert_with(|| load_state(&state_path()));
     live_entries(state, now)
+}
+
+/// Read persisted, attributed events without consuming/rotating the shared hook queue.
+/// One-shot CLI processes may run alongside the desktop/server watcher.
+pub(crate) fn persisted_hook_entries(now: i64) -> Vec<Resolved> {
+    live_entries(&mut load_state(&state_path()), now)
 }
 
 /// 最近一次入账的 hook 限额事件时刻（诊断用）。
@@ -1214,6 +1243,10 @@ mod tests {
         assert_eq!(state.events.len(), 1);
         assert_eq!(state.events[0].account_id, "acc-cli");
         assert_eq!(
+            state.events[0].source_clients,
+            vec!["codebuddy-cli".to_string()]
+        );
+        assert_eq!(
             state.events[0].model.as_deref(),
             Some("deepseek-v4.1-flash")
         );
@@ -1225,6 +1258,10 @@ mod tests {
         let mut reloaded = fixture.state();
         assert_eq!(consume_with(&ctx, &mut reloaded, T0 + 2_000), None);
         assert_eq!(reloaded.events.len(), 1);
+        assert_eq!(
+            reloaded.events[0].source_clients,
+            vec!["codebuddy-cli".to_string()]
+        );
 
         // 同一次事件的重复书写（重试轮）：hitCount 累加、不新增条目。
         fixture.append(&[stop_payload(
@@ -1733,6 +1770,7 @@ mod tests {
                 reset_at: 1_500,
                 first_seen_at: 1_000,
                 hit_count: 1,
+                source_clients: vec!["codebuddy-cli".to_string()],
             }],
         };
         assert_eq!(
@@ -1744,6 +1782,52 @@ mod tests {
             live_entries(&mut state, 1_500).is_empty(),
             "到恢复时刻即清掉"
         );
+    }
+
+    #[test]
+    fn legacy_ledger_keeps_unknown_source_client_without_inventing_cli_origin() {
+        let mut state: State = serde_json::from_value(json!({
+            "offset": 123,
+            "events": [{
+                "accountId": "legacy-account", "model": null,
+                "resetAt": 1_500, "firstSeenAt": 1_000, "hitCount": 10,
+            }],
+        }))
+        .expect("original ledger format must remain readable");
+        let entries = live_entries(&mut state, 1_400);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, "client-hook");
+        assert!(entries[0].source_clients.is_empty());
+        assert!(entries[0].model.is_none());
+        assert_eq!(entries[0].hit_count, 10);
+        assert_eq!(state.offset, 123);
+    }
+
+    #[test]
+    fn merged_hook_observations_preserve_their_evidenced_client_sources() {
+        let mut events = Vec::new();
+        for client in ["workbuddy-cn", "codebuddy-cli", "codebuddy-cli"] {
+            merge_entry(
+                &mut events,
+                StoredEntry {
+                    account_id: "same-account".to_string(),
+                    model: None,
+                    reset_at: 1_500,
+                    first_seen_at: 1_000,
+                    hit_count: 1,
+                    source_clients: vec![client.to_string()],
+                },
+            );
+        }
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].hit_count, 3);
+        assert_eq!(
+            events[0].source_clients,
+            vec!["codebuddy-cli".to_string(), "workbuddy-cn".to_string()]
+        );
+        let saved = serde_json::to_string(&events[0]).expect("serialize source evidence");
+        let restored: StoredEntry = serde_json::from_str(&saved).expect("read source evidence");
+        assert_eq!(restored.source_clients, events[0].source_clients);
     }
 
     #[test]

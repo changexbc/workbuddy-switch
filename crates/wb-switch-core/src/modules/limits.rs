@@ -237,6 +237,11 @@ pub(crate) struct Resolved {
     pub(crate) reset_at: i64,
     pub(crate) first_seen_at: i64,
     pub(crate) hit_count: u32,
+    /// Observation transport, not an assertion about the scope of the quota.
+    pub(crate) source: &'static str,
+    /// Clients for which this observation has source evidence. Older persisted
+    /// hook entries may not record a client and must leave this empty.
+    pub(crate) source_clients: Vec<String>,
 }
 
 /// 字节级粗筛：命中限额文案的文件才解码（整份文件逐行解码是本模块的主要开销）。
@@ -1101,6 +1106,12 @@ fn resolve(variant: WbVariant, events: &[Event]) -> Vec<Resolved> {
                 reset_at: event.reset_at,
                 first_seen_at: event.first_seen_at,
                 hit_count: event.hit_count,
+                source: "local-log",
+                source_clients: vec![match variant {
+                    WbVariant::Cn => "workbuddy-cn",
+                    WbVariant::Ai => "workbuddy-ai",
+                }
+                .to_string()],
             })
         })
         .collect()
@@ -1179,6 +1190,8 @@ fn resolve_by_uid(
                 reset_at: event.reset_at,
                 first_seen_at: event.first_seen_at,
                 hit_count: event.hit_count,
+                source: "local-log",
+                source_clients: Vec::new(),
             })
         })
         .collect()
@@ -1198,6 +1211,21 @@ fn build_payload(resolved: Vec<Resolved>, scanned_at: i64) -> Value {
             Entry::Occupied(mut entry) => {
                 if item.reset_at > entry.get().reset_at {
                     entry.insert(item);
+                } else if item.reset_at == entry.get().reset_at {
+                    // The log and hook can observe the same quota event. Keep
+                    // both evidenced origins without counting it twice.
+                    let existing = entry.get_mut();
+                    if existing.source != item.source {
+                        existing.source = "multiple";
+                    }
+                    for client in item.source_clients {
+                        if !existing.source_clients.contains(&client) {
+                            existing.source_clients.push(client);
+                        }
+                    }
+                    existing.source_clients.sort();
+                    existing.first_seen_at = existing.first_seen_at.min(item.first_seen_at);
+                    existing.hit_count = existing.hit_count.max(item.hit_count);
                 }
             }
             Entry::Vacant(entry) => {
@@ -1221,11 +1249,36 @@ fn build_payload(resolved: Vec<Resolved>, scanned_at: i64) -> Value {
             let limited: Vec<Value> = items
                 .into_iter()
                 .map(|item| {
+                    // Missing model context identifies neither a particular
+                    // model nor an account-wide quota. Do not let consumers
+                    // infer account scope merely because `model` is null.
+                    let model_known = item.model.is_some();
+                    let sources = if item.source == "multiple" {
+                        vec!["client-hook", "local-log"]
+                    } else {
+                        vec![item.source]
+                    };
                     json!({
                         "model": item.model,
                         "resetAt": item.reset_at,
                         "firstSeenAt": item.first_seen_at,
                         "hitCount": item.hit_count,
+                        "scope": if model_known { "model" } else { "unknown" },
+                        "status": "limited",
+                        "observedAt": item.first_seen_at,
+                        "source": item.source,
+                        "sources": sources,
+                        "sourceClients": item.source_clients,
+                        "reason": if model_known { "MODEL_LIMIT_OBSERVED" } else { "MODEL_ATTRIBUTION_UNKNOWN" },
+                        "evidence": {
+                            "kind": "quota-message-with-official-reset",
+                            "modelAttribution": if model_known { "associated-model" } else { "missing-model-context" },
+                            "observedAtBasis": match item.source {
+                                "client-hook" => "hook-ingest-time",
+                                "local-log" => "log-event-time",
+                                _ => "mixed",
+                            },
+                        },
                     })
                 })
                 .collect();
@@ -1457,11 +1510,15 @@ fn scan_sources(scope: ScanScope) -> Vec<Resolved> {
             LogFormat::WorkBuddy,
             AuthMarker::AuthDoInitProbe,
         );
-        resolved.extend(resolve_by_uid(
+        let mut cli_entries = resolve_by_uid(
             &cli,
             &uid_to_account,
             &ActiveAccount::load(&cli_state_path()),
-        ));
+        );
+        for entry in &mut cli_entries {
+            entry.source_clients = vec!["codebuddy-cli".to_string()];
+        }
+        resolved.extend(cli_entries);
     }
     // ③ 两个 CodeBuddy IDE：同一份 Ide 格式与同一套归因，只有日志根与状态文件不同。
     //
@@ -1486,11 +1543,19 @@ fn scan_sources(scope: ScanScope) -> Vec<Resolved> {
             AuthMarker::AuthSessionChanged,
         );
         let uid_to_account = ide_uid_to_account.get_or_insert_with(account_id_by_uid);
-        resolved.extend(resolve_by_uid(
+        let mut ide_entries = resolve_by_uid(
             &events,
             uid_to_account,
             &ActiveAccount::load(&store_dir().join(state_file)),
-        ));
+        );
+        for entry in &mut ide_entries {
+            entry.source_clients = vec![match flavor {
+                CodeBuddyIdeFlavor::Intl => "codebuddy-ide",
+                CodeBuddyIdeFlavor::Cn => "codebuddy-cn-ide",
+            }
+            .to_string()];
+        }
+        resolved.extend(ide_entries);
     }
     resolved
 }
@@ -1518,6 +1583,26 @@ pub fn get_rate_limits() -> Value {
     let (scanned_at, mut resolved) = cached_scan(scope, now, enabled);
     resolved.extend(crate::modules::rate_limit_events::hook_entries(now));
     build_payload(resolved, if scanned_at > 0 { scanned_at } else { now })
+}
+
+/// Read-only CodeBuddy CLI snapshot. Scan its logs even when hooks are registered:
+/// the long-running host owns queue consumption and may lag behind the logs.
+/// Account/model limits are shared with other clients, so include their already
+/// attributed, persisted ledger entries. Never scan other clients, install hooks,
+/// or write the shared state/offset. Respect the monitoring switch.
+pub fn get_cli_rate_limits_snapshot() -> Value {
+    let now = now_ms();
+    let mut scope = ScanScope::NONE;
+    if crate::modules::rate_limit_events::rate_limit_enabled()
+        && home_dir().join(CLI_DATA_DIR).is_dir()
+    {
+        scope.insert(ScanSource::Cli);
+    }
+    let mut entries = scan_sources(scope);
+    entries.extend(crate::modules::rate_limit_events::persisted_hook_entries(
+        now,
+    ));
+    build_payload(entries, now)
 }
 
 /// 保存限额监听配置，并同步日志扫描范围。
@@ -2363,6 +2448,8 @@ mod tests {
                 reset_at: now + 7_200_000,
                 first_seen_at: 0,
                 hit_count: 1,
+                source: "local-log",
+                source_clients: vec!["codebuddy-cli".to_string()],
             },
             Resolved {
                 account_id: "a".to_string(),
@@ -2370,6 +2457,8 @@ mod tests {
                 reset_at: now + 600_000,
                 first_seen_at: 0,
                 hit_count: 3,
+                source: "local-log",
+                source_clients: vec!["codebuddy-cli".to_string()],
             },
             Resolved {
                 account_id: "a".to_string(),
@@ -2377,6 +2466,8 @@ mod tests {
                 reset_at: now - 1,
                 first_seen_at: 0,
                 hit_count: 1,
+                source: "local-log",
+                source_clients: vec!["codebuddy-cli".to_string()],
             },
             Resolved {
                 account_id: "b".to_string(),
@@ -2384,6 +2475,8 @@ mod tests {
                 reset_at: now + 60_000,
                 first_seen_at: 0,
                 hit_count: 2,
+                source: "local-log",
+                source_clients: vec!["codebuddy-cli".to_string()],
             },
         ];
         let payload = build_payload(resolved, now);
@@ -2397,6 +2490,20 @@ mod tests {
         assert_eq!(limited[0]["model"], "soon", "按恢复时间升序");
         assert_eq!(limited[1]["model"], "late");
         assert_eq!(accounts[1]["limited"][0]["model"], Value::Null);
+        let unknown = &accounts[1]["limited"][0];
+        assert_eq!(unknown["scope"], "unknown");
+        assert_eq!(unknown["status"], "limited");
+        assert_eq!(unknown["reason"], "MODEL_ATTRIBUTION_UNKNOWN");
+        assert_eq!(unknown["observedAt"], unknown["firstSeenAt"]);
+        assert_eq!(unknown["source"], "local-log");
+        assert_eq!(unknown["sourceClients"], json!(["codebuddy-cli"]));
+        assert_eq!(
+            unknown["evidence"]["modelAttribution"],
+            "missing-model-context"
+        );
+        assert_eq!(unknown["evidence"]["observedAtBasis"], "log-event-time");
+        assert_eq!(limited[0]["scope"], "model");
+        assert_eq!(limited[0]["reason"], "MODEL_LIMIT_OBSERVED");
     }
 
     #[test]
@@ -2409,6 +2516,8 @@ mod tests {
                 reset_at: now + 600_000,
                 first_seen_at: 10,
                 hit_count: 1,
+                source: "local-log",
+                source_clients: vec!["codebuddy-cli".to_string()],
             },
             Resolved {
                 account_id: "a".to_string(),
@@ -2416,6 +2525,8 @@ mod tests {
                 reset_at: now + 3_600_000,
                 first_seen_at: 20,
                 hit_count: 2,
+                source: "client-hook",
+                source_clients: vec!["codebuddy-cli".to_string()],
             },
         ];
         let payload = build_payload(resolved, now);
@@ -2425,6 +2536,65 @@ mod tests {
         assert_eq!(limited.len(), 1, "同 (账号, 模型) 只保留一条");
         assert_eq!(limited[0]["resetAt"], now + 3_600_000);
         assert_eq!(limited[0]["hitCount"], 2);
+        assert_eq!(limited[0]["observedAt"], 20);
+        assert_eq!(limited[0]["source"], "client-hook");
+        assert_eq!(
+            limited[0]["evidence"]["observedAtBasis"],
+            "hook-ingest-time"
+        );
+    }
+
+    #[test]
+    fn expired_limit_never_becomes_an_available_observation() {
+        let reset_at = 2_000;
+        let entry = Resolved {
+            account_id: "only-expired".to_string(),
+            model: Some("hy3".to_string()),
+            reset_at,
+            first_seen_at: 1_000,
+            hit_count: 1,
+            source: "local-log",
+            source_clients: vec!["codebuddy-cli".to_string()],
+        };
+        let live = build_payload(vec![entry.clone()], reset_at - 1);
+        assert_eq!(live["accounts"][0]["limited"][0]["status"], "limited");
+        let expired = build_payload(vec![entry], reset_at);
+        assert_eq!(expired["accounts"], json!([]));
+        assert!(!expired.to_string().contains("available"));
+    }
+
+    #[test]
+    fn same_quota_merges_evidenced_sources_without_double_counting() {
+        let log = Resolved {
+            account_id: "account-a".to_string(),
+            model: None,
+            reset_at: 2_000,
+            first_seen_at: 1_000,
+            hit_count: 10,
+            source: "local-log",
+            source_clients: vec!["codebuddy-cli".to_string()],
+        };
+        let hook = Resolved {
+            first_seen_at: 1_200,
+            hit_count: 2,
+            source: "client-hook",
+            source_clients: vec!["workbuddy-cn".to_string()],
+            ..log.clone()
+        };
+        for entries in [vec![log.clone(), hook.clone()], vec![hook, log]] {
+            let payload = build_payload(entries, 1_500);
+            let entry = &payload["accounts"][0]["limited"][0];
+            assert_eq!(entry["scope"], "unknown");
+            assert_eq!(entry["source"], "multiple");
+            assert_eq!(entry["sources"], json!(["client-hook", "local-log"]));
+            assert_eq!(
+                entry["sourceClients"],
+                json!(["codebuddy-cli", "workbuddy-cn"])
+            );
+            assert_eq!(entry["observedAt"], 1_000);
+            assert_eq!(entry["hitCount"], 10);
+            assert_eq!(entry["evidence"]["observedAtBasis"], "mixed");
+        }
     }
 
     // -----------------------------------------------------------------------
