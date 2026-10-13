@@ -41,11 +41,48 @@ fn load_accounts_from_path(path: &Path) -> Vec<Value> {
     vec![]
 }
 
+/// Mutation paths must never turn an unreadable/damaged library into an empty
+/// one. Keep the forgiving loader for display, but only a missing file is empty
+/// when writing. Legacy object records without IDs are retained for migration.
+fn load_accounts_for_update_from_path(path: &Path) -> std::io::Result<Vec<Value>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let accounts: Vec<Value> = serde_json::from_slice(&bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "账号库 JSON 已损坏；为保护现有数据，已拒绝写入。请先检查账号库或备份。",
+        )
+    })?;
+    if accounts.iter().any(|account| !account.is_object()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "账号库包含无效记录；为保护现有数据，已拒绝写入。请先检查账号库或备份。",
+        ));
+    }
+    Ok(accounts)
+}
+
+pub(crate) fn load_accounts_for_update() -> std::io::Result<Vec<Value>> {
+    load_accounts_for_update_from_path(&accounts_file())
+}
+
 fn save_accounts_to_path(path: &Path, accounts: &[Value]) -> std::io::Result<()> {
+    // Guard explicit saves too, including callers that loaded with the display
+    // loader. Recovery of a damaged library must be a deliberate user action.
+    load_accounts_for_update_from_path(path)?;
+    if accounts.iter().any(|account| !account.is_object()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "账号写入包含无效记录，已拒绝保存。",
+        ));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let content = serde_json::to_string_pretty(accounts).unwrap_or_default();
+    let content = serde_json::to_string_pretty(accounts).map_err(std::io::Error::other)?;
     atomic_write(path, &content)
 }
 
@@ -60,7 +97,8 @@ fn find_account_in(accounts: &[Value], account_id: &str) -> Option<Value> {
 }
 
 fn delete_account_from_path(path: &Path, account_id: &str) -> Result<(), String> {
-    let mut accounts = load_accounts_from_path(path);
+    let mut accounts =
+        load_accounts_for_update_from_path(path).map_err(|error| error.to_string())?;
     let before = accounts.len();
     accounts.retain(|account| account.get("id").and_then(Value::as_str) != Some(account_id));
     if accounts.len() == before {
@@ -86,7 +124,17 @@ pub fn load_accounts_at(path: &Path) -> Vec<Value> {
 
 /// 写回账号库（原子写），保持原 JSON 数组结构。
 pub fn save_accounts(accounts: &[Value]) -> std::io::Result<()> {
-    save_accounts_to_path(&accounts_file(), accounts)
+    let guard = crate::modules::state_lock::try_auth()?;
+    save_accounts_locked(accounts, &guard)
+}
+
+pub(crate) fn save_accounts_locked(
+    accounts: &[Value],
+    guard: &crate::modules::state_lock::StateLock,
+) -> std::io::Result<()> {
+    save_accounts_to_path(&accounts_file(), accounts)?;
+    crate::modules::state_lock::signal_auth_change(guard);
+    Ok(())
 }
 
 /// 按 id 或 uid 查找账号。
@@ -201,6 +249,19 @@ pub fn is_enterprise_account(account: &Value) -> bool {
             get_str(account, "type").as_deref(),
             Some("ultimate" | "exclusive")
         )
+}
+
+/// Apply a resolved tenant only to a request copy. Stored tenant metadata wins;
+/// all tokens and display fields stay from `fresh`. Never persist this overlay.
+pub(crate) fn with_request_enterprise_context(mut fresh: Value, context: &Value) -> Value {
+    if enterprise_id_of(&fresh).is_none() {
+        if let Some(enterprise_id) = enterprise_id_of(context) {
+            if let Some(object) = fresh.as_object_mut() {
+                object.insert("enterpriseId".into(), json!(enterprise_id));
+            }
+        }
+    }
+    fresh
 }
 
 /// 合并采集结果时保留已有档位：已入库的档位不得因再次采集而丢失。
@@ -318,17 +379,26 @@ pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value)
 
 /// 使用统一身份规则保存采集到的账号。
 pub fn save_collected_account(collected: Value) -> std::io::Result<Value> {
-    let mut accounts = load_accounts();
+    let guard = crate::modules::state_lock::try_auth()?;
+    let mut accounts = load_accounts_for_update()?;
     let saved = upsert_collected_account(&mut accounts, collected);
-    save_accounts(&accounts)?;
+    save_accounts_locked(&accounts, &guard)?;
     Ok(saved)
 }
 
 /// 按 id 覆盖；id 缺失或未命中时按 uid 回退覆盖，仍未命中则补 id 追加。
 pub fn upsert_account(updated: &Value) -> std::io::Result<()> {
-    let mut accounts = load_accounts();
+    let guard = crate::modules::state_lock::try_auth()?;
+    upsert_account_locked(updated, &guard)
+}
+
+pub(crate) fn upsert_account_locked(
+    updated: &Value,
+    guard: &crate::modules::state_lock::StateLock,
+) -> std::io::Result<()> {
+    let mut accounts = load_accounts_for_update()?;
     upsert_account_in(&mut accounts, updated);
-    save_accounts(&accounts)
+    save_accounts_locked(&accounts, guard)
 }
 
 /// 备注长度上限（字符数），与前端输入框 maxLength 保持一致。
@@ -339,9 +409,10 @@ const NOTE_MAX_CHARS: usize = 24;
 /// 只触碰本地展示字段，不修改 uid / token / profile_raw 等官方数据。
 /// 先整体校验再写入，避免部分更新。返回更新后的 `account_meta`。
 pub fn update_account_display(account_id: &str, patch: &Value) -> Result<Value, String> {
-    let mut accounts = load_accounts();
+    let guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    let mut accounts = load_accounts_for_update().map_err(|error| error.to_string())?;
     let updated = update_account_display_in(&mut accounts, account_id, patch)?;
-    save_accounts(&accounts).map_err(|error| error.to_string())?;
+    save_accounts_locked(&accounts, &guard).map_err(|error| error.to_string())?;
     Ok(account_meta(&updated))
 }
 
@@ -504,7 +575,10 @@ pub fn build_auth_headers(account: &Value) -> HashMap<String, String> {
 
 /// 删除账号（按 id）。
 pub fn delete_account(account_id: &str) -> Result<(), String> {
-    delete_account_from_path(&accounts_file(), account_id)
+    let guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    delete_account_from_path(&accounts_file(), account_id)?;
+    crate::modules::state_lock::signal_auth_change(&guard);
+    Ok(())
 }
 
 /// 导入本机当前账号（从该档位的登录态文件读取）。

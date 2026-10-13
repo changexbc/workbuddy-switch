@@ -140,6 +140,9 @@ fn skips_refresh_before_retry(variant: WbVariant, resp: &Value) -> bool {
 
 /// 发单次签到请求；遇到未授权且存在 refresh token 时刷新一次并重试。
 async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -> Value {
+    if let Some(error) = crate::modules::refresh::refresh_failure(account) {
+        return json!({"code": -3, "message": error});
+    }
     // 加密信封凭据短路：不发空 Bearer，直接给出可读错误（issue #94）。
     if let Some(err) = envelope_token_error(account) {
         return json!({"code": -2, "message": err});
@@ -159,6 +162,9 @@ async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -
             .is_empty()
     {
         let refreshed = refresh_account_token(account.clone()).await;
+        if let Some(error) = crate::modules::refresh::refresh_failure(&refreshed) {
+            return json!({"code": -3, "message": error});
+        }
         let headers = build_auth_headers(&refreshed);
         resp = http_request(&url, "POST", Some(json!({})), Some(&headers)).await;
     }
@@ -315,6 +321,9 @@ pub async fn checkin_account(account: &Value) -> Value {
     }
     let cfg = load_checkin_config();
     let acc = ensure_fresh_token(account.clone(), &cfg).await;
+    if let Some(error) = crate::modules::refresh::refresh_failure(&acc) {
+        return json!({"result": "error", "error": error});
+    }
     let variant = variant_of(&acc).as_str();
     let status = get_checkin_status(&acc).await;
     match decide_from_status(&status) {
@@ -891,6 +900,16 @@ async fn checkin_all_rows(accounts: Vec<Value>, cfg: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn refresh_failure_short_circuits_before_network_or_retry() {
+        let account = json!({"access_token":"old", "refresh_token":"old", "refresh_error":"AUTH_STATE_BUSY: fixture"});
+        let result = checkin_request_once("/must-not-be-requested", &account, WbVariant::Cn).await;
+        assert_eq!(
+            result,
+            json!({"code":-3,"message":"AUTH_STATE_BUSY: fixture"})
+        );
+    }
 
     /// 回归 issue #94：信封凭据的签到请求应在入口短路并返回可读错误，
     /// 不发出空 Bearer（此前会被网关 401 后把 HTML 原样回显）。
