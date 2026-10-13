@@ -297,7 +297,10 @@ async fn api_accounts(RawQuery(query): RawQuery) -> Response {
 }
 
 async fn api_codebuddy_cli_status() -> Response {
-    json_ok(codebuddy_cli::status())
+    match codebuddy_cli::status_consistent() {
+        Ok(status) => json_ok(status),
+        Err(error) => json_err(error, StatusCode::SERVICE_UNAVAILABLE),
+    }
 }
 
 async fn api_codebuddy_cli_install_helper() -> Response {
@@ -1560,7 +1563,11 @@ async fn api_refresh_token(Json(body): Json<Value>) -> Response {
     let Some(acc) = account::find_account(id) else {
         return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
     };
-    json_ok(refresh::refresh_account_token(acc).await)
+    let fresh = refresh::refresh_account_token(acc).await;
+    if let Some(error) = refresh::refresh_failure(&fresh) {
+        return json_err(error.to_string(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    json_ok(fresh)
 }
 
 // ---------------------------------------------------------------------------

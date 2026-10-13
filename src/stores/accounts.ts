@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as api from "@/lib/api";
+import { newerCreditResult } from "@/lib/newer-credit-result";
 import { DEFAULT_VARIANT, normalizeVariant } from "@/lib/variant";
 import type {
   AccountMeta,
@@ -16,6 +17,12 @@ import type {
 const creditInflight = new Set<string>();
 /** 状态查询按档位各留一个在途请求，避免切档位时复用另一档位的结果。 */
 let statusInflight: { variant: WbVariant; promise: Promise<AppStatus> } | undefined;
+/** Account reads share one ordering across page loads and external-change events. */
+let accountReadGeneration = 0;
+/** A silent account reconciliation must not strand a page's status loading state. */
+let fetchAllGeneration = 0;
+/** Polls and switch/revision events may receive CLI status replies out of order. */
+let cliStatusGeneration = 0;
 
 function fetchStatus(variant: WbVariant): Promise<AppStatus> {
   if (!statusInflight || statusInflight.variant !== variant) {
@@ -28,10 +35,12 @@ function fetchStatus(variant: WbVariant): Promise<AppStatus> {
 }
 
 async function fetchCreditExpiry(id: string): Promise<CreditExpiry> {
+  const startedAt = Date.now();
   try {
-    return await api.getCreditExpiry(id);
+    const result = await api.getCreditExpiry(id);
+    return { ...result, updatedAt: result.updatedAt ?? startedAt };
   } catch (e) {
-    return { ok: false, error: api.asError(e) };
+    return { ok: false, error: api.asError(e), updatedAt: startedAt };
   }
 }
 
@@ -76,6 +85,7 @@ interface AccountsState {
   setVariant: (variant: WbVariant) => void;
   /** 合并式更新各客户端状态：只覆盖传入的键，并发刷新不会互相清空。 */
   setClientStatus: (patch: Partial<ClientStatusSnapshot>) => void;
+  refreshCodebuddyCliStatus: () => Promise<void>;
   fetchAll: () => Promise<void>;
   refreshStatus: (signal?: AbortSignal) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
@@ -112,16 +122,32 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
     set((state) => ({ clientStatus: { ...state.clientStatus, ...patch } }));
   },
 
+  async refreshCodebuddyCliStatus() {
+    const generation = ++cliStatusGeneration;
+    try {
+      const codebuddyCli = await api.getCodebuddyCliStatus();
+      if (generation === cliStatusGeneration) get().setClientStatus({ codebuddyCli });
+    } catch {
+      // Keep the last committed snapshot while another host owns the auth lock.
+    }
+  },
+
   async fetchAll() {
     const variant = get().variant;
+    const accountGeneration = ++accountReadGeneration;
+    const generation = ++fetchAllGeneration;
     set({ loading: true, error: null });
     try {
       const [status, { accounts }] = await Promise.all([fetchStatus(variant), api.getAccounts()]);
       // 迟到结果不得覆盖已切换档位的状态。
-      if (get().variant !== variant) return;
-      set({ status, accounts, loading: false });
+      if (get().variant !== variant || generation !== fetchAllGeneration) return;
+      set({
+        status,
+        loading: false,
+        ...(accountGeneration === accountReadGeneration ? { accounts } : {}),
+      });
     } catch (e) {
-      if (get().variant !== variant) return;
+      if (get().variant !== variant || generation !== fetchAllGeneration) return;
       set({ error: api.asError(e), loading: false });
     }
   },
@@ -138,6 +164,8 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
 
   async deleteAccount(id: string) {
     await api.deleteAccount(id);
+    // A pre-delete read may still contain the removed account when it resolves.
+    ++accountReadGeneration;
     creditInflight.delete(id);
     const { creditMap, creditLoadingMap, creditUpdatedAtMap } = get();
     const nextCredits = { ...creditMap };
@@ -165,13 +193,15 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   async importLocal() {
     // 本机导入按当前档位读取对应登录态文件。
     const res = await api.importLocal(get().variant);
+    ++accountReadGeneration;
     await get().reconcileAccounts();
     return res.account;
   },
 
   async reconcileAccounts() {
+    const generation = ++accountReadGeneration;
     const { accounts } = await api.getAccounts();
-    set({ accounts });
+    if (generation === accountReadGeneration) set({ accounts });
   },
 }));
 
@@ -202,7 +232,7 @@ async function loadCredits(accountIds: string[], force: boolean, silent: boolean
       const result = await fetchCreditExpiry(id);
       creditInflight.delete(id);
       useAccountsStore.setState((s) => ({
-        creditMap: { ...s.creditMap, [id]: result },
+        creditMap: { ...s.creditMap, [id]: newerCreditResult(s.creditMap[id], result) },
         creditUpdatedAtMap: { ...s.creditUpdatedAtMap, [id]: Date.now() },
         creditLoadingMap: silent ? s.creditLoadingMap : { ...s.creditLoadingMap, [id]: false },
       }));
