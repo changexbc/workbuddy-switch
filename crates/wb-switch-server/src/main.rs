@@ -8,16 +8,14 @@
 //! ```
 
 mod api;
+mod cli;
 
 use serde_json::json;
+use std::process::ExitCode;
 
 use wb_switch_core::modules::{
     account, auth_file, checkin, config, process, rotate, travel, update, variant::WbVariant,
 };
-
-fn default_port() -> u16 {
-    57890
-}
 
 /// 后台任务：自动签到启动即核验，之后按 core 计算的下一轮延迟睡眠（未设置
 /// 签到时间段时固定 30 分钟）；自动轮换按配置间隔执行；
@@ -85,20 +83,8 @@ fn spawn_background_loops() {
     });
 }
 
-/// CLI 档位参数：`--variant ai` / `--variant=ai`；缺省国内版。
-///
-/// 与 Tauri 命令的可选 `variant` 参数、HTTP 路由的 query/body 字段同义。
-fn variant_arg(args: &[String]) -> WbVariant {
-    let raw = args.iter().enumerate().find_map(|(index, arg)| {
-        if let Some(value) = arg.strip_prefix("--variant=") {
-            return Some(value.to_string());
-        }
-        arg.eq("--variant")
-            .then(|| args.get(index + 1).cloned().unwrap_or_default())
-    });
-    WbVariant::parse(raw.as_deref())
-}
-
+// Preserve the existing human-facing status command. New CLI status is selected
+// explicitly with --target codebuddy-cli, so existing scripts keep their output.
 fn print_status(variant: WbVariant) {
     let auth = auth_file::read_auth_file(variant);
     let current = auth.as_ref().map(|a| {
@@ -127,26 +113,54 @@ fn print_status(variant: WbVariant) {
 }
 
 #[tokio::main]
-async fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("serve");
-    match cmd {
-        "status" => print_status(variant_arg(&args)),
-        "version" | "--version" | "-V" => {
-            println!("workbuddy-switch {}", env!("CARGO_PKG_VERSION"));
+async fn main() -> ExitCode {
+    let started = std::time::Instant::now();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let context = cli::Context::from_args(&args);
+    let ascii_json = args.iter().any(|arg| arg == "--ascii-json");
+    let json_output = context.json_output(&args);
+    let options = match cli::parse(&args) {
+        Ok(options) => options,
+        Err(error) => {
+            cli::print_failure(
+                &error,
+                json_output,
+                ascii_json,
+                &context,
+                started.elapsed().as_millis() as u64,
+            );
+            return ExitCode::from(error.exit);
         }
-        _ => serve(&args).await,
+    };
+    match options.command {
+        cli::Command::LegacyStatus => {
+            print_status(options.variant.unwrap_or(WbVariant::Cn));
+            ExitCode::SUCCESS
+        }
+        cli::Command::Serve => {
+            serve(&options).await;
+            ExitCode::SUCCESS
+        }
+        _ => match cli::execute(&options).await {
+            Ok((value, exit)) => {
+                cli::print_result(&value, options.json, options.ascii_json);
+                ExitCode::from(exit)
+            }
+            Err(error) => {
+                cli::print_failure(
+                    &error,
+                    options.json,
+                    options.ascii_json,
+                    &context,
+                    started.elapsed().as_millis() as u64,
+                );
+                ExitCode::from(error.exit)
+            }
+        },
     }
 }
-
-async fn serve(args: &[String]) {
-    let mut port = default_port();
-    if let Some(i) = args.iter().position(|a| a == "--port") {
-        if let Some(p) = args.get(i + 1).and_then(|p| p.parse::<u16>().ok()) {
-            port = p;
-        }
-    }
-
+async fn serve(options: &cli::Options) {
+    let port = options.port;
     let app = api::router();
     let addr = format!("127.0.0.1:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -161,7 +175,7 @@ async fn serve(args: &[String]) {
     println!("webui: http://{addr}");
     println!("按 Ctrl+C 停止服务。");
 
-    let no_open = args.iter().any(|a| a == "--no-open");
+    let no_open = options.no_open;
     if !no_open {
         open_browser(&addr);
     }
@@ -190,48 +204,5 @@ fn open_browser(addr: &str) {
     #[cfg(target_os = "linux")]
     {
         let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::variant_arg;
-    use wb_switch_core::modules::variant::WbVariant;
-
-    fn args(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
-    /// 不传档位时必须仍是国内版（改造前行为）。
-    #[test]
-    fn cli_variant_defaults_to_cn() {
-        assert_eq!(variant_arg(&args(&["status"])), WbVariant::Cn);
-        assert_eq!(variant_arg(&args(&["status", "--debug"])), WbVariant::Cn);
-        assert_eq!(variant_arg(&args(&["status", "--variant"])), WbVariant::Cn);
-        assert_eq!(variant_arg(&args(&["status", "cn"])), WbVariant::Cn);
-        assert_eq!(
-            variant_arg(&args(&["status", "--variant=cn"])),
-            WbVariant::Cn
-        );
-    }
-
-    #[test]
-    fn cli_variant_reads_space_and_equals_forms() {
-        assert_eq!(
-            variant_arg(&args(&["status", "--variant", "ai"])),
-            WbVariant::Ai
-        );
-        assert_eq!(
-            variant_arg(&args(&["status", "--variant=ai"])),
-            WbVariant::Ai
-        );
-        assert_eq!(
-            variant_arg(&args(&["status", "--variant", "AI", "--no-open"])),
-            WbVariant::Ai
-        );
-        assert_eq!(
-            variant_arg(&args(&["--variant=ai", "status"])),
-            WbVariant::Ai
-        );
     }
 }

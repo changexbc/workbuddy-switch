@@ -104,6 +104,9 @@ fn is_unauthorized(resp: &Value) -> bool {
 
 /// 发旅行接口请求；遇到未授权且存在 refresh token 时刷新一次并重试。
 async fn travel_request(path: &str, method: &str, body: Option<Value>, account: &Value) -> Value {
+    if let Some(error) = crate::modules::refresh::refresh_failure(account) {
+        return json!({"code": -3, "message": error});
+    }
     // 加密信封凭据短路：不发空 Bearer，直接给出可读错误（issue #94）。
     if let Some(err) = account::envelope_token_error(account) {
         return json!({"code": -2, "message": err});
@@ -119,6 +122,9 @@ async fn travel_request(path: &str, method: &str, body: Option<Value>, account: 
             .is_empty()
     {
         let refreshed = refresh_account_token(account.clone()).await;
+        if let Some(error) = crate::modules::refresh::refresh_failure(&refreshed) {
+            return json!({"code": -3, "message": error});
+        }
         let headers = build_travel_headers(&refreshed);
         resp = http_request(&url, method, body, Some(&headers)).await;
     }
@@ -1053,6 +1059,17 @@ pub fn travel_display(account_id: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn refresh_failure_short_circuits_before_network_or_retry() {
+        let account = json!({"access_token":"old", "refresh_token":"old", "refresh_error":"AUTH_STATE_BUSY: fixture"});
+        let result =
+            travel_request("/must-not-be-requested", "POST", Some(json!({})), &account).await;
+        assert_eq!(
+            result,
+            json!({"code":-3,"message":"AUTH_STATE_BUSY: fixture"})
+        );
+    }
 
     /// 回归 issue #94：信封凭据的旅行请求应在入口短路并返回可读错误，
     /// 不发出空 Bearer。

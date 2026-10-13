@@ -280,14 +280,19 @@ pub async fn run_rotate_cycle() -> Value {
     }
 
     // 当前 CLI 账号
-    let cli_status = codebuddy_cli::status();
+    let cli_status = match codebuddy_cli::status_consistent() {
+        Ok(status) => status,
+        Err(error) => return json!({"status": "skipped", "reason": error}),
+    };
     let current_id = cli_status
         .get("activeAccountId")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
     let now = now_ms();
-    let last_switch = LAST_SWITCH_AT.load(Ordering::SeqCst);
+    let last_switch = LAST_SWITCH_AT
+        .load(Ordering::SeqCst)
+        .max(cli_status["lastSwitchAt"].as_i64().unwrap_or(0));
     let last_switch_opt = (last_switch > 0).then_some(last_switch);
     // 存活门控：读 `~/.codebuddy/sessions/*.json` 的心跳（单次检查只读这里与 state.json，
     // 不再遍历 `~/.codebuddy/projects` 下的 transcript）。
@@ -379,11 +384,20 @@ pub async fn run_rotate_cycle() -> Value {
                 "name": target_name,
                 "variant": target_variant.as_str(),
             });
-            match codebuddy_cli::switch_active_account(&target_id) {
-                Ok(res) => {
+            match codebuddy_cli::switch_for_rotation(
+                &target_id,
+                current_id.as_deref(),
+                cli_status["lastSwitchAt"].as_i64(),
+            ) {
+                Ok(Some(res)) => {
                     LAST_SWITCH_AT.store(now, Ordering::SeqCst);
                     log["action"] = json!("switched");
                     json!({"status": "switched", "to": target_id, "detail": res})
+                }
+                Ok(None) => {
+                    log["action"] = json!("skipped");
+                    log["reason"] = json!("账号状态或运行会话已变化，本轮轮换跳过");
+                    json!({"status": "skipped", "reason": log["reason"]})
                 }
                 Err(e) => {
                     log["action"] = json!("error");

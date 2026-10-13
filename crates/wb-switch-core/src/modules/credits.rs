@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use crate::modules::account::{
     account_display_name, build_auth_headers, enterprise_id_of, envelope_token_error,
-    is_enterprise_account, variant_of,
+    is_enterprise_account, variant_of, with_request_enterprise_context,
 };
 use crate::modules::config::{
     http_request, is_route_missing, load_checkin_config, now_ms, CHECKIN_API_PREFIX,
@@ -343,7 +343,7 @@ fn is_success(response: &Value) -> bool {
 fn is_unauthorized(response: &Value) -> bool {
     let code = response_code(response).unwrap_or(-1);
     // 网关 WAF 10085 是客户端指纹拦截，不是 token 过期；刷新无效。
-    if code == 10085 {
+    if code == 10085 || code == -3 {
         return false;
     }
     if code == 401 || code == 403 {
@@ -381,7 +381,10 @@ pub async fn authenticated_post(account: &Value, url: &str, body: Value) -> Valu
         return json!({"code": -2, "message": err});
     }
     let config = load_checkin_config();
-    let mut working_account = ensure_fresh_token(account.clone(), &config).await;
+    let mut working_account = with_request_enterprise_context(
+        ensure_fresh_token(account.clone(), &config).await,
+        account,
+    );
     let mut response = post_with_account(&working_account, url, body.clone()).await;
 
     if is_unauthorized(&response)
@@ -391,7 +394,8 @@ pub async fn authenticated_post(account: &Value, url: &str, body: Value) -> Valu
             .unwrap_or("")
             .is_empty()
     {
-        working_account = refresh_account_token(working_account).await;
+        working_account =
+            with_request_enterprise_context(refresh_account_token(working_account).await, account);
         response = post_with_account(&working_account, url, body).await;
     }
 
@@ -399,6 +403,9 @@ pub async fn authenticated_post(account: &Value, url: &str, body: Value) -> Valu
 }
 
 async fn post_with_account(account: &Value, url: &str, body: Value) -> Value {
+    if let Some(error) = crate::modules::refresh::refresh_failure(account) {
+        return json!({"code": -3, "message": error});
+    }
     let headers = resource_auth_headers(account, request_origin(url));
     let response = http_request(url, "POST", Some(body.clone()), Some(&headers)).await;
     if is_transport_error(&response) {
@@ -504,6 +511,9 @@ pub fn api_base_for(account: &Value) -> &'static str {
 /// 401/403/10085/传输错误都必须原样返回：把它们当成「路径不对」会掩盖真因，
 /// 也会让上层误判为可重试（见 design D4 与 credits 既有契约）。
 async fn post_with_fallback(account: &Value, paths: &[String], body: Value) -> Value {
+    if let Some(error) = crate::modules::refresh::refresh_failure(account) {
+        return json!({"code": -3, "message": error});
+    }
     let base = api_base_for(account);
     let mut last = json!({"code": -1, "message": "无可用接口路径"});
     for (index, path) in paths.iter().enumerate() {
@@ -733,12 +743,13 @@ fn credit_result(account: &Value, resources: Vec<Value>, now: i64) -> Value {
     let account_id = account.get("id").cloned().unwrap_or(Value::Null);
     let account_name = account_display_name(account);
     if let Some(account_id) = account_id.as_str() {
-        let _ = credit_usage::record_snapshot(
+        let _ = credit_usage::record_snapshot_at(
             account_id,
             &account_name,
             total_capacity,
             total_remaining,
             variant_of(account),
+            now,
         );
     }
 
@@ -768,6 +779,72 @@ fn uses_three_endpoint_query(variant: WbVariant) -> bool {
 
 /// 查询单账号的积分资源及到期时间。
 pub async fn get_credit_expiry(account: &Value) -> Value {
+    let result = get_credit_expiry_uncached(account).await;
+    if result["ok"] == true {
+        if let Err(error) = cache_credit_result(&result) {
+            eprintln!("[credits] 查询缓存写入失败: {error}");
+        }
+    }
+    result
+}
+
+fn credit_cache_path() -> std::path::PathBuf {
+    crate::modules::config::store_dir().join("credit-query-cache.json")
+}
+
+pub fn cached_credit_results() -> Value {
+    cached_credit_results_at(&credit_cache_path())
+}
+
+fn cached_credit_results_at(path: &std::path::Path) -> Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+fn cache_credit_result(result: &Value) -> std::io::Result<()> {
+    cache_credit_result_at(&credit_cache_path(), result)
+}
+
+fn cache_credit_result_at(path: &std::path::Path, result: &Value) -> std::io::Result<()> {
+    let Some(id) = result["accountId"].as_str() else {
+        return Ok(());
+    };
+    let _guard = crate::modules::state_lock::StateLock::wait_at(
+        &path.with_extension("lock"),
+        std::time::Duration::from_secs(2),
+    )?;
+    let mut cache = cached_credit_results_at(path);
+    // A slower query completing later must not replace a newer observation.
+    if cache[id]["updatedAt"].as_i64().unwrap_or(0) >= result["updatedAt"].as_i64().unwrap_or(0) {
+        return Ok(());
+    }
+    cache[id] = result.clone();
+    crate::modules::config::atomic_write(path, &cache.to_string())
+}
+
+pub fn spawn_credit_cache_watcher(on_change: impl Fn(Value) + Send + 'static) {
+    std::thread::spawn(move || {
+        let stamp = || {
+            std::fs::metadata(credit_cache_path())
+                .ok()
+                .and_then(|m| m.modified().ok())
+        };
+        let mut previous = stamp();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let current = stamp();
+            if current.is_some() && current != previous {
+                previous = current;
+                on_change(cached_credit_results());
+            }
+        }
+    });
+}
+
+async fn get_credit_expiry_uncached(account: &Value) -> Value {
     // 加密信封凭据短路：明文解不出来，任何请求都只会发出空 Bearer 并换回网关 401。
     // 本入口同时覆盖新三路接口与旧接口回退两条取数链路，不再空跑请求。
     if let Some(error) = envelope_token_error(account) {
@@ -1014,6 +1091,53 @@ async fn resolve_enterprise_id(account: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_refresh_failure_does_not_trigger_another_token_rotation() {
+        assert!(!is_unauthorized(
+            &json!({"code":-3,"message":"AUTH_STATE_BUSY: token refresh pending"})
+        ));
+    }
+
+    #[test]
+    fn shared_credit_cache_keeps_newest_results_and_all_parallel_accounts() {
+        let root = std::env::temp_dir().join(format!("wb-credit-cache-{}", uuid::Uuid::new_v4()));
+        let path = root.join("cache.json");
+        let threads = (0..4)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let id = format!("account-{i}");
+                    cache_credit_result_at(
+                        &path,
+                        &json!({"ok":true,"accountId":id,"updatedAt":200,"totalRemaining":80}),
+                    )
+                    .unwrap();
+                    cache_credit_result_at(
+                        &path,
+                        &json!({"ok":true,"accountId":id,"updatedAt":100,"totalRemaining":90}),
+                    )
+                    .unwrap();
+                    cache_credit_result_at(
+                        &path,
+                        &json!({"ok":true,"accountId":id,"updatedAt":200,"totalRemaining":10}),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let cache = cached_credit_results_at(&path);
+        assert_eq!(cache.as_object().unwrap().len(), 4);
+        assert!(cache
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|result| result["totalRemaining"] == 80));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// 回归 issue #94：信封凭据在 authenticated_post 入口短路，不发空 Bearer，
     /// 也不会进入刷新重试链路。

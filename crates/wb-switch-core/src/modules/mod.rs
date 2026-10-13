@@ -27,6 +27,7 @@ pub mod session;
 pub mod session_backup;
 pub mod session_groups;
 pub mod session_link;
+pub mod state_lock;
 pub mod switch;
 pub mod token_stats;
 pub mod travel;

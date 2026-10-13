@@ -307,12 +307,8 @@ export default function AccountsPage() {
     };
   }, []);
 
-  async function refreshCodebuddyCliStatus() {
-    try {
-      setClientStatus({ codebuddyCli: await api.getCodebuddyCliStatus() });
-    } catch {
-      setClientStatus({ codebuddyCli: null });
-    }
+  function refreshCodebuddyCliStatus() {
+    return useAccountsStore.getState().refreshCodebuddyCliStatus();
   }
 
   async function refreshCodebuddyCnIdeStatus() {
@@ -529,6 +525,7 @@ export default function AccountsPage() {
     let unlisten: (() => void) | undefined;
     void listen("codebuddy-cli-updated", () => {
       void refreshCodebuddyCliStatusRef.current();
+      void useAccountsStore.getState().reconcileAccounts().catch(() => {});
     }).then((fn) => {
       unlisten = fn;
     });

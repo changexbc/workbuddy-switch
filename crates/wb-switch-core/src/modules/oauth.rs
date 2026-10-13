@@ -19,12 +19,33 @@ struct OAuthInfo {
     done: bool,
     result: Option<Value>,
     error: Option<String>,
+    /// Authorization has completed remotely. Keep credentials in memory until
+    /// the shared account transaction can commit; never repeat token exchange.
+    pending_account: Option<Value>,
+    polling: bool,
 }
 
 static OAUTH_STATES: OnceLock<Mutex<HashMap<String, OAuthInfo>>> = OnceLock::new();
 
 fn oauth_states() -> &'static Mutex<HashMap<String, OAuthInfo>> {
     OAUTH_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A cancelled HTTP poll must also allow the next poll to resume. No OAuth
+/// mutex is held across network I/O or the account-store transaction.
+struct OAuthPollGuard<'a>(&'a str);
+
+impl Drop for OAuthPollGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(info) = oauth_states().lock().unwrap().get_mut(self.0) {
+            info.polling = false;
+        }
+    }
+}
+
+enum PollInput {
+    Fetch { state: String, variant: WbVariant },
+    Persist(Value),
 }
 
 /// 申请 state 的 URL（域名、前缀、platform 全部取自档位）。
@@ -92,6 +113,8 @@ pub async fn oauth_start(variant: WbVariant) -> Result<Value, String> {
             done: false,
             result: None,
             error: None,
+            pending_account: None,
+            polling: false,
         },
     );
     drop(map);
@@ -133,7 +156,7 @@ fn domain_mismatch_error(variant: WbVariant, domain: &str) -> Option<String> {
 
 /// 轮询一次官方 token 接口。成功则拉取账号信息并入库。
 pub async fn oauth_poll(login_id: &str) -> Value {
-    let (state, variant) = {
+    let input = {
         let mut map = oauth_states().lock().unwrap();
         let Some(info) = map.get_mut(login_id) else {
             return json!({"done": true, "error": "登录请求不存在"});
@@ -141,13 +164,30 @@ pub async fn oauth_poll(login_id: &str) -> Value {
         if info.done {
             return json!({"done": true, "result": info.result.clone(), "error": info.error.clone()});
         }
-        if now_secs() > info.expires_at {
+        if info.polling {
+            return json!({"done": false});
+        }
+        // The state expiry only applies before authorization. A committed
+        // remote credential must survive local lock contention after expiry.
+        if info.pending_account.is_none() && now_secs() > info.expires_at {
             info.done = true;
             info.error = Some("登录超时".to_string());
             return json!({"done": true, "error": "登录超时"});
         }
-        // 用发起档位拼域名与 platform，不跟随当前列表档位。
-        (info.state.clone(), info.variant)
+        info.polling = true;
+        match info.pending_account.clone() {
+            Some(account) => PollInput::Persist(account),
+            // 用发起档位拼域名与 platform，不跟随当前列表档位。
+            None => PollInput::Fetch {
+                state: info.state.clone(),
+                variant: info.variant,
+            },
+        }
+    };
+    let _poll_guard = OAuthPollGuard(login_id);
+    let (state, variant) = match input {
+        PollInput::Persist(account) => return persist_pending_account(login_id, account),
+        PollInput::Fetch { state, variant } => (state, variant),
     };
 
     let url = oauth_token_url(variant, &state);
@@ -248,8 +288,21 @@ pub async fn oauth_poll(login_id: &str) -> Value {
         "createdAt": now_ms(),
     });
 
+    {
+        let mut map = oauth_states().lock().unwrap();
+        if let Some(info) = map.get_mut(login_id) {
+            info.pending_account = Some(account.clone());
+        }
+    }
+    persist_pending_account(login_id, account)
+}
+
+fn persist_pending_account(login_id: &str, account: Value) -> Value {
     let account = match account::save_collected_account(account) {
         Ok(saved) => saved,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            return json!({"done": false, "saving": true});
+        }
         Err(error) => {
             let error = format!("保存账号失败: {error}");
             let mut map = oauth_states().lock().unwrap();
@@ -266,6 +319,7 @@ pub async fn oauth_poll(login_id: &str) -> Value {
     if let Some(info) = map.get_mut(login_id) {
         info.done = true;
         info.result = Some(result.clone());
+        info.pending_account = None;
     }
     drop(map);
 
@@ -284,6 +338,96 @@ fn oauth_profile_email(profile: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_authorization_survives_lock_contention_and_state_expiry() {
+        let root = std::env::temp_dir().join(format!("wb-oauth-pending-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".wb-switch")).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "modules::oauth::tests::pending_authorization_worker",
+                "--nocapture",
+            ])
+            .env("WB_SWITCH_HOME", &root)
+            .env("WB_TEST_OAUTH_PENDING", "1")
+            .status()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(status.success());
+    }
+
+    #[test]
+    fn pending_authorization_worker() {
+        if std::env::var("WB_TEST_OAUTH_PENDING").as_deref() != Ok("1") {
+            return;
+        }
+        let original = json!({"id":"existing", "uid":"existing", "note":"keep"});
+        account::save_accounts(std::slice::from_ref(&original)).unwrap();
+        let pending = json!({"id":"authorized", "uid":"authorized", "access_token":"fake-token", "refresh_token":"fake-refresh", "variant":"cn"});
+        let login_id = "pending-test";
+        oauth_states().lock().unwrap().insert(
+            login_id.to_string(),
+            OAuthInfo {
+                variant: WbVariant::Cn,
+                state: "never-request-official-endpoint".into(),
+                expires_at: now_secs() - 1,
+                done: false,
+                result: None,
+                error: None,
+                pending_account: Some(pending.clone()),
+                polling: false,
+            },
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let store_guard = crate::modules::state_lock::try_auth().unwrap();
+        for _ in 0..2 {
+            let result = runtime.block_on(oauth_poll(login_id));
+            assert_eq!(result, json!({"done":false, "saving":true}));
+            let states = oauth_states().lock().unwrap();
+            let info = states.get(login_id).unwrap();
+            assert!(!info.done);
+            assert!(!info.polling);
+            assert_eq!(info.pending_account.as_ref(), Some(&pending));
+        }
+        assert_eq!(account::load_accounts(), vec![original.clone()]);
+        drop(store_guard);
+
+        // Another poller already owns this login; return without a second
+        // exchange/persist. The guard releases ownership on cancellation/drop.
+        oauth_states()
+            .lock()
+            .unwrap()
+            .get_mut(login_id)
+            .unwrap()
+            .polling = true;
+        let poll_guard = OAuthPollGuard(login_id);
+        assert_eq!(
+            runtime.block_on(oauth_poll(login_id)),
+            json!({"done":false})
+        );
+        drop(poll_guard);
+
+        let result = runtime.block_on(oauth_poll(login_id));
+        assert_eq!(result["done"], true);
+        assert_eq!(result["result"]["id"], "authorized");
+        assert_eq!(account::load_accounts(), vec![original, pending]);
+        let states = oauth_states().lock().unwrap();
+        let info = states.get(login_id).unwrap();
+        assert!(info.done);
+        assert!(!info.polling);
+        assert!(info.pending_account.is_none());
+        drop(states);
+        assert_eq!(
+            runtime.block_on(oauth_poll(login_id))["result"],
+            result["result"]
+        );
+        assert_eq!(account::load_accounts().len(), 2);
+        oauth_states().lock().unwrap().remove(login_id);
+    }
 
     #[test]
     fn oauth_profile_without_email_does_not_use_nickname_or_uid() {
@@ -360,6 +504,8 @@ mod tests {
                     done: false,
                     result: None,
                     error: None,
+                    pending_account: None,
+                    polling: false,
                 },
             );
         }
