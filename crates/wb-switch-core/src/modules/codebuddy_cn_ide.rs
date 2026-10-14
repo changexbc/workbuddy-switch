@@ -1260,6 +1260,10 @@ pub(crate) fn inject_session_and_finish(
     })?;
 
     set_active_account_id(account_id)?;
+    // 凭证已注入成功，最后使用记账失败只影响展示，不再回头报错。
+    if let Some(id) = get_str(acc, "id") {
+        let _ = account::mark_used(&id, account::USED_CLIENT_CODEBUDDY_IDE);
+    }
 
     if restart {
         eprintln!("[codebuddy-cn-ide] launching CodeBuddy CN…");

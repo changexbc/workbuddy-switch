@@ -1504,6 +1504,9 @@ pub fn switch_active_account(account_id: &str) -> Result<Value, String> {
         }
     }
 
+    // CLI 默认账号已改写成功，最后使用记账失败只影响展示，不再回头报错。
+    let _ = account::mark_used(&canonical_id, account::USED_CLIENT_CODEBUDDY_CLI);
+
     let region_changed = previous_variant != Some(variant);
 
     Ok(json!({

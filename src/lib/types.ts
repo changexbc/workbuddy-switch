@@ -28,6 +28,13 @@ export interface AccountMeta {
   refreshExpiresAt: number | null;
   refreshedAt: number | null;
   createdAt: number | null;
+  /**
+   * 最近一次被切为某端当前账号的时间（毫秒）。
+   * 缺省 / null 表示从未通过本应用切换过（旧后端与历史账号同样按此处理）。
+   */
+  lastUsedAt?: number | null;
+  /** 「最后使用」的来源端标识：workbuddy / codebuddyCli / codebuddyIde / vscodeExt / jetbrains。 */
+  lastUsedClient?: string | null;
   needsRelogin: boolean;
   needsReloginReason: string | null;
   /** 账号所属档位；缺省（旧后端/历史账号）按国内版处理。 */

@@ -140,6 +140,8 @@ pub fn account_meta(acc: &Value) -> Value {
         "refreshExpiresAt": display_value(acc, "refreshExpiresAt"),
         "refreshedAt": display_value(acc, "refreshedAt"),
         "createdAt": display_value(acc, "createdAt"),
+        "lastUsedAt": display_value(acc, "lastUsedAt"),
+        "lastUsedClient": display_value(acc, "lastUsedClient"),
         "needsRelogin": acc.get("needs_relogin").and_then(|v| v.as_bool()) == Some(true),
         "needsReloginReason": display_value(acc, "needs_relogin_reason"),
         // 企业版标记（issue #167）：读取时判定，供前端展示「企业版」徽标，历史数据零迁移。
@@ -276,8 +278,8 @@ pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value)
                 }
             }
         }
-        // 本地展示字段（备注 / 显示选择）不来自官方采集：采集结果缺失时保留已有值。
-        for key in ["note", "displayField"] {
+        // 本地字段（备注 / 显示选择 / 最后使用）不来自官方采集：采集结果缺失时保留已有值。
+        for key in ["note", "displayField", "lastUsedAt", "lastUsedClient"] {
             if collected.get(key).is_none() {
                 if let Some(v) = existing.get(key) {
                     collected[key] = v.clone();
@@ -397,6 +399,52 @@ pub fn update_account_display_in(
     Ok(accounts[index].clone())
 }
 
+/// 「最后使用」记账的来源端标识，取值与前端 `ToolId`（`src/lib/supported-tools.ts`）一致。
+pub const USED_CLIENT_WORKBUDDY: &str = "workbuddy";
+pub const USED_CLIENT_CODEBUDDY_CLI: &str = "codebuddyCli";
+pub const USED_CLIENT_CODEBUDDY_IDE: &str = "codebuddyIde";
+pub const USED_CLIENT_VSCODE_EXT: &str = "vscodeExt";
+pub const USED_CLIENT_JETBRAINS: &str = "jetbrains";
+
+/// 记录一次「该账号被切为某端的当前账号」：写入 `lastUsedAt`（毫秒）与 `lastUsedClient`。
+///
+/// 只补丁这两个本地字段，不触碰 token 等官方数据。由各端的切换收尾调用，
+/// 此时切换已经生效，记账失败只影响「最后使用」展示，调用方忽略返回值即可。
+pub fn mark_used(account_id: &str, client: &str) -> std::io::Result<()> {
+    let mut accounts = load_accounts();
+    if !mark_used_in(&mut accounts, account_id, client, now_ms()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "账号不存在",
+        ));
+    }
+    save_accounts(&accounts)
+}
+
+/// 「最后使用」记账的内存实现（不落盘，便于单测）。返回是否命中账号。
+pub fn mark_used_in(
+    accounts: &mut [Value],
+    account_id: &str,
+    client: &str,
+    timestamp: i64,
+) -> bool {
+    let index = accounts
+        .iter()
+        .position(|a| get_str(a, "id").as_deref() == Some(account_id));
+    let Some(index) = index else {
+        return false;
+    };
+    let Some(obj) = accounts[index].as_object_mut() else {
+        return false;
+    };
+    obj.insert("lastUsedAt".to_string(), json!(timestamp));
+    obj.insert(
+        "lastUsedClient".to_string(),
+        Value::String(client.to_string()),
+    );
+    true
+}
+
 /// 覆盖写入的内存实现：按 id 覆盖；id 缺失或未命中时回退按 uid 收敛到已有
 /// 记录；仍无归属才追加，且追加前补 id。
 ///
@@ -425,9 +473,9 @@ fn upsert_account_in(accounts: &mut Vec<Value>, updated: &Value) {
     if let Some(index) = matched_index {
         let mut next = updated.clone();
         inherit_existing_variant(&accounts[index], &mut next);
-        // 本地展示字段（备注 / 显示选择）不从官方数据来：updated 缺失时保留已有值。
+        // 本地字段（备注 / 显示选择 / 最后使用）不从官方数据来：updated 缺失时保留已有值。
         if let Some(obj) = next.as_object_mut() {
-            for key in ["note", "displayField"] {
+            for key in ["note", "displayField", "lastUsedAt", "lastUsedClient"] {
                 if !obj.contains_key(key) {
                     if let Some(v) = accounts[index].get(key) {
                         obj.insert(key.to_string(), v.clone());
@@ -1178,6 +1226,65 @@ mod tests {
         upsert_account_in(&mut accounts, &refreshed);
         assert_eq!(accounts[0]["note"], "工作号");
         assert_eq!(accounts[0]["displayField"], "phone");
+    }
+
+    // -----------------------------------------------------------------------
+    // 最后使用记账
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mark_used_records_timestamp_and_client() {
+        let mut accounts = vec![account("a-1", Some("uid-1"), "小明", None)];
+
+        assert!(mark_used_in(
+            &mut accounts,
+            "a-1",
+            USED_CLIENT_WORKBUDDY,
+            1_700_000_000_000
+        ));
+        assert_eq!(accounts[0]["lastUsedAt"], 1_700_000_000_000_i64);
+        assert_eq!(accounts[0]["lastUsedClient"], "workbuddy");
+        let meta = account_meta(&accounts[0]);
+        assert_eq!(meta["lastUsedAt"], 1_700_000_000_000_i64);
+        assert_eq!(meta["lastUsedClient"], "workbuddy");
+
+        // 再次切到另一端：时间与来源端一起更新，其余字段不动。
+        assert!(mark_used_in(
+            &mut accounts,
+            "a-1",
+            USED_CLIENT_VSCODE_EXT,
+            1_700_000_009_999
+        ));
+        assert_eq!(accounts[0]["lastUsedClient"], "vscodeExt");
+        assert_eq!(accounts[0]["nickname"], "小明");
+
+        assert!(
+            !mark_used_in(&mut accounts, "missing", USED_CLIENT_WORKBUDDY, 1),
+            "未知账号不记账"
+        );
+    }
+
+    #[test]
+    fn account_meta_without_last_used_is_null() {
+        let meta = account_meta(&account("a-1", Some("uid-1"), "小明", None));
+        assert!(meta["lastUsedAt"].is_null());
+        assert!(meta["lastUsedClient"].is_null());
+    }
+
+    /// 扫码重登 / 本机导入重建的记录不得丢「最后使用」。
+    #[test]
+    fn collected_upsert_preserves_last_used() {
+        let mut existing = account("a-1", Some("uid-1"), "小明", None);
+        existing["lastUsedAt"] = json!(1_700_000_000_000_i64);
+        existing["lastUsedClient"] = json!("workbuddy");
+        let mut accounts = vec![existing];
+
+        let saved = upsert_collected_account(
+            &mut accounts,
+            account("a-1", Some("uid-1"), "小明（官方更新）", None),
+        );
+        assert_eq!(saved["lastUsedAt"], 1_700_000_000_000_i64);
+        assert_eq!(saved["lastUsedClient"], "workbuddy");
     }
 }
 

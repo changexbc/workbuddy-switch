@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import * as api from "@/lib/api";
 import { accountIdentity } from "@/lib/account-display";
+import { formatRelativeTime, usedClientLabel } from "@/lib/account-order";
 import { avatarTone } from "@/lib/avatar-tone";
 import { cn } from "@/lib/utils";
 import { accountVariant, variantLabel } from "@/lib/variant";
@@ -38,6 +39,26 @@ interface Props {
   account: AccountMeta | null;
   /** 保存成功后回调（携带更新后的账号元数据）。 */
   onSaved?: (account: AccountMeta) => void;
+}
+
+/**
+ * 「最后使用」行文案：相对时间 + 精确时刻 + 来源端；从未切换给出明确说明。
+ * 只统计通过本应用发起的切换，在客户端里自行登录/登出不计入。
+ */
+function lastUsedText(account: AccountMeta): string {
+  const at = account.lastUsedAt;
+  if (!at) return "从未切换";
+  const date = new Date(at);
+  const absolute = Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+  const client = usedClientLabel(account.lastUsedClient);
+  return [`${formatRelativeTime(at, Date.now())}`, `${absolute}`, client].filter(Boolean).join(" · ");
 }
 
 /**
@@ -151,13 +172,13 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
         {/* 次级字段：企业名与 UID（等宽 + 一键复制）。 */}
         <dl className="divide-y divide-border/70 rounded-lg border text-xs">
           <div className="flex items-center gap-3 px-3 py-2.5">
-            <dt className="w-12 shrink-0 text-muted-foreground">企业名</dt>
+            <dt className="w-14 shrink-0 text-muted-foreground">企业名</dt>
             <dd className="min-w-0 flex-1 truncate font-medium" title={current.enterpriseName ?? ""}>
               {current.enterpriseName || "—"}
             </dd>
           </div>
           <div className="flex items-center gap-3 px-3 py-2.5">
-            <dt className="w-12 shrink-0 text-muted-foreground">UID</dt>
+            <dt className="w-14 shrink-0 text-muted-foreground">UID</dt>
             <dd
               className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
               title={uid ?? ""}
@@ -178,6 +199,15 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
           </div>
         </dl>
 
+        {/* 最后使用：只记本应用触发的切换，供「刚才切了哪个」定位（时间 + 来源端）。 */}
+        <div className="rounded-lg border px-3 py-2.5 text-xs">
+          <div className="flex items-center gap-3">
+            <span className="w-14 shrink-0 text-muted-foreground">最后使用</span>
+            <span className="min-w-0 flex-1 truncate font-medium" title={lastUsedText(current)}>
+              {lastUsedText(current)}
+            </span>
+          </div>
+        </div>
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between">
             <Label htmlFor="account-note" className="text-xs font-medium text-muted-foreground">

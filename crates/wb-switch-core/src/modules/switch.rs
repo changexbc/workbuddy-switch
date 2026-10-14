@@ -277,6 +277,10 @@ pub fn switch_account(
         launch_workbuddy(variant, Some(&progress))?;
     }
     progress("切换完成");
+    // 切换已生效，最后使用记账失败只影响展示，不再回头报错。
+    if let Some(id) = account::get_str(&acc, "id") {
+        let _ = account::mark_used(&id, account::USED_CLIENT_WORKBUDDY);
+    }
 
     let mut result = json!({
         "ok": true,

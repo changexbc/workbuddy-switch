@@ -10,6 +10,7 @@ import {
   QrCode,
   RefreshCw,
   Rows3,
+  SlidersHorizontal,
   Terminal,
 } from "lucide-react";
 
@@ -31,6 +32,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
@@ -59,7 +67,15 @@ import {
   variantUsesIntlCodebuddyIde,
 } from "@/lib/variant";
 import { useSupportedTools } from "@/lib/supported-tools";
-import type { AccountMeta, AppStatus, CheckinConfig, CreditExpiry, RateLimitEntry, TravelConfig, TravelStatus } from "@/lib/types";
+import {
+  ACCOUNT_SORT_OPTIONS,
+  hasExpiringSoonCredits,
+  mostRecentUsedAccountId,
+  orderAccounts,
+  useAccountSortKey,
+  type AccountSortKey,
+} from "@/lib/account-order";
+import type { AccountMeta, AppStatus, CheckinConfig, RateLimitEntry, TravelConfig, TravelStatus } from "@/lib/types";
 import { displayName } from "@/lib/account-display";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
@@ -84,32 +100,10 @@ const RATE_LIMIT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
  */
 const CLI_STATUS_REFRESH_INTERVAL_MS = 30 * 1000;
 
-function expiringSoonAmount(credit?: CreditExpiry): number {
-  return credit?.ok ? credit.expiringSoonRemaining ?? 0 : 0;
-}
-
-function hasExpiringSoonCredits(credit?: CreditExpiry): boolean {
-  return credit?.ok === true && expiringSoonAmount(credit) > 0;
-}
-
-function soonestRelevantExpiry(credit?: CreditExpiry): number {
-  const soonestExpiringCredit = (credit?.resources ?? [])
-    .filter((resource) => resource.remaining > 0 && resource.expiringSoon && resource.expireAt != null)
-    .map((resource) => resource.expireAt as number)
-    .reduce((soonest, expireAt) => Math.min(soonest, expireAt), Number.POSITIVE_INFINITY);
-  return Number.isFinite(soonestExpiringCredit)
-    ? soonestExpiringCredit
-    : credit?.soonestExpireAt ?? Number.POSITIVE_INFINITY;
-}
-
-function creditPriorityRank(credit?: CreditExpiry): number {
-  if (!credit?.ok) return 3;
-  if (hasExpiringSoonCredits(credit)) return 0;
-  if (credit.expired) return 1;
-  return 2;
-}
-
-function isWorkbuddyCurrent(account: AccountMeta, current: AppStatus["current"] | undefined): boolean {
+function isWorkbuddyCurrent(
+  account: AccountMeta,
+  current: AppStatus["current"] | undefined,
+): boolean {
   if (!current) return false;
   return Boolean(
     (current.uid && (account.uid === current.uid || account.id === current.uid)) ||
@@ -173,6 +167,7 @@ export default function AccountsPage() {
     error,
     fetchAll,
     deleteAccount,
+    reconcileAccounts,
     creditMap,
     creditLoadingMap,
     creditUpdatedAtMap,
@@ -265,6 +260,8 @@ export default function AccountsPage() {
       return true;
     }
   });
+  /** 账号列表排序方式：持久化到 localStorage，默认积分紧迫优先。 */
+  const [sortKey, setSortKey] = useAccountSortKey();
 
   /**
    * 支持工具开关（设置页）：关闭的端不渲染入口、不轮询状态。
@@ -723,6 +720,7 @@ export default function AccountsPage() {
     try {
       // 后端一律先关闭正在运行的 CLI 再写状态（`closeRunningCli` 入参已废弃）。
       const result = await api.switchCodebuddyCliAccount(account.id);
+      void reconcileAccounts();
       await refreshCodebuddyCliStatus();
       toast.success("CodeBuddy CLI 默认账号已更新", {
         id: toastId,
@@ -765,32 +763,17 @@ export default function AccountsPage() {
   }
 
   const current = status?.current;
-  const creditOrderingReady =
-    visibleAccounts.length > 0 &&
-    visibleAccounts.every((account) => Boolean(creditMap[account.id]) && !creditLoadingMap[account.id]);
-  const orderedAccounts = creditOrderingReady
-    ? visibleAccounts
-        .map((account, index) => ({ account, index }))
-        .sort((left, right) => {
-          const leftCredit = creditMap[left.account.id];
-          const rightCredit = creditMap[right.account.id];
-          const rankDifference = creditPriorityRank(leftCredit) - creditPriorityRank(rightCredit);
-          if (rankDifference !== 0) return rankDifference;
-
-          const leftExpiry = soonestRelevantExpiry(leftCredit);
-          const rightExpiry = soonestRelevantExpiry(rightCredit);
-          if (leftExpiry !== rightExpiry) return leftExpiry - rightExpiry;
-
-          const amountDifference = expiringSoonAmount(rightCredit) - expiringSoonAmount(leftCredit);
-          if (amountDifference !== 0) return amountDifference;
-          return left.index - right.index;
-        })
-        .map(({ account }) => account)
-    : visibleAccounts;
-  const priorityAccountId =
-    creditOrderingReady
-      ? orderedAccounts.find((account) => hasExpiringSoonCredits(creditMap[account.id]))?.id
-      : undefined;
+  const orderedAccounts = orderAccounts({
+    accounts: visibleAccounts,
+    creditMap,
+    creditLoadingMap,
+    sortKey,
+  });
+  const priorityAccountId = orderedAccounts.find((account) =>
+    hasExpiringSoonCredits(creditMap[account.id]),
+  )?.id;
+  /** 「最近切换」标记：本档位内最后一次被切为某端当前账号的那一个。 */
+  const recentUsedAccountId = mostRecentUsedAccountId(visibleAccounts);
   const cliCurrentAccountId = codebuddyCli?.activeAccountId;
   const cliSwitchAccountLabel = cliSwitchTarget ? displayName(cliSwitchTarget) : "";
   const workbuddyCurrentName = current ? displayName(current) : "未登录";
@@ -1029,6 +1012,26 @@ export default function AccountsPage() {
           </div>
           <TooltipProvider delayDuration={400}>
             <div className="ml-auto flex items-center gap-1">
+              <Select
+                value={sortKey}
+                onValueChange={(value) => setSortKey(value as AccountSortKey)}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-auto min-w-32 gap-1.5 border-0 bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent hover:text-foreground"
+                  aria-label="账号排序方式"
+                >
+                  <SlidersHorizontal className="size-4" aria-hidden="true" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ACCOUNT_SORT_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -1106,6 +1109,7 @@ export default function AccountsPage() {
                 creditLoading={creditLoadingMap[a.id]}
                 creditUpdatedAt={creditUpdatedAtMap[a.id]}
                 creditPriority={a.id === priorityAccountId}
+                mostRecentlyUsed={a.id === recentUsedAccountId}
                 workbuddyActive={enabledTools.workbuddy && isWorkbuddyCurrent(a, current)}
                 codebuddyCliConfigured={codebuddyCli?.configured && !codebuddyCli.migrationRequired && !codebuddyCli.syncPending && !codebuddyCli.syncInProgress}
                 codebuddyCliActive={enabledTools.codebuddyCli && a.id === cliCurrentAccountId}
@@ -1180,6 +1184,8 @@ export default function AccountsPage() {
         variant={variant}
         ideStatus={codebuddyCnIde}
         onDone={() => {
+          // 重读账号库：卡片上的「最近切换」标记随切换结果更新。
+          void reconcileAccounts();
           void refreshCodebuddyCnIdeStatus();
         }}
       />
@@ -1191,6 +1197,7 @@ export default function AccountsPage() {
         account={vscodeSwitchAccount}
         vscodeExtStatus={vscodeExt}
         onDone={() => {
+          void reconcileAccounts();
           void refreshVscodeExtStatus();
         }}
       />
@@ -1202,6 +1209,7 @@ export default function AccountsPage() {
         account={jetbrainsSwitchTarget}
         jetbrainsStatus={jetbrains}
         onDone={() => {
+          void reconcileAccounts();
           void refreshJetbrainsStatus();
         }}
       />

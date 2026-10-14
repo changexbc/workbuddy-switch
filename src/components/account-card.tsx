@@ -1,4 +1,4 @@
-import { ArrowRight, CalendarCheck2, CalendarDays, CalendarOff, Check, CircleCheck, Clock3, Coins, Ellipsis, Gauge, Info, Loader2, PackageOpen, PlaneTakeoff, RefreshCw, Sparkles, Star, Trash2 } from "lucide-react";
+import { ArrowRight, CalendarCheck2, CalendarDays, CalendarOff, Check, CircleCheck, Clock3, Coins, Ellipsis, Gauge, History, Info, Loader2, PackageOpen, PlaneTakeoff, RefreshCw, Sparkles, Star, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ import type { ToolId } from "@/lib/supported-tools";
 import { cn } from "@/lib/utils";
 import { accountIdentity, displayName } from "@/lib/account-display";
 import { avatarTone } from "@/lib/avatar-tone";
+import { formatRelativeTime, usedClientLabel } from "@/lib/account-order";
 import { creditResourceName } from "@/lib/credit-package-names";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import type { AccountMeta, CreditExpiry, CreditResource, RateLimitEntry, TravelStatus } from "@/lib/types";
@@ -55,6 +56,13 @@ function formatCreditUpdatedAt(ts: number | undefined): string {
   const date = new Date(ts);
   if (Number.isNaN(date.getTime())) return "—";
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+/** 「最后使用」提示文案：来源端 + 相对时间（括号内为精确时刻）。 */
+function formatLastUsedTooltip(account: AccountMeta, now: number): string {
+  if (!account.lastUsedAt) return "";
+  const client = usedClientLabel(account.lastUsedClient);
+  return `最近切换${client ? ` · ${client}` : ""} · ${formatRelativeTime(account.lastUsedAt, now)}（${formatFullDateTime(account.lastUsedAt)}）`;
 }
 
 function expiryClass(expired: boolean, expiringSoon: boolean): string {
@@ -278,6 +286,8 @@ interface Props {
   /** 该账号积分最近一次查询完成时间（时间戳） */
   creditUpdatedAt?: number;
   creditPriority?: boolean;
+  /** 当前档位内「最近切换」的账号：列表里只有这一个渲染标记，用于回答「刚才切了哪个」。 */
+  mostRecentlyUsed?: boolean;
   workbuddyActive?: boolean;
   codebuddyCliConfigured?: boolean;
   codebuddyCliActive?: boolean;
@@ -409,7 +419,7 @@ function CreditResourceRow({ resource, compact, placeholderLabel }: { resource?:
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInfo, onSwitch, todayCheckedIn, autoCheckinAllowed, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, enabledTools, featuresDisabled = true, compact = false }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInfo, onSwitch, todayCheckedIn, autoCheckinAllowed, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, mostRecentlyUsed, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, enabledTools, featuresDisabled = true, compact = false }: Props) {
   /** 支持工具开关：关闭的端整块不渲染（缺省视为开启）。 */
   const toolEnabled = (id: ToolId) => enabledTools?.[id] !== false;
   const [resourcesOpen, setResourcesOpen] = useState(false);
@@ -476,6 +486,16 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
             </Badge>
           </TooltipTrigger>
           <TooltipContent side="top">建议优先使用</TooltipContent>
+        </Tooltip>
+      )}
+      {mostRecentlyUsed && account.lastUsedAt && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="secondary" className={cn(chipClass, "px-1")} aria-label="最近切换">
+              <History className="size-3.5" />
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top">{formatLastUsedTooltip(account, now)}</TooltipContent>
         </Tooltip>
       )}
       {!compact && activeProductCount >= 2 && <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>{activeProductCount} 个工具正在使用</Badge>}
