@@ -814,6 +814,55 @@ export interface GithubConfig {
   proxy?: string;
 }
 
+/** WebDAV 备份 / 跨设备同步配置（脱敏视图：口令不回显，只带是否已设置标记）。 */
+export interface WebdavConfig {
+  url: string;
+  username: string;
+  remotePath: string;
+  /** 是否已保存 WebDAV 服务器口令（明文不返回前端）。 */
+  hasPassword: boolean;
+}
+
+/** 保存 WebDAV 配置时的提交体：`password` 为空表示沿用已存口令。 */
+export type WebdavConfigInput = Omit<WebdavConfig, "hasPassword"> & { password?: string };
+
+/** 云端备份元信息（拉取明文头即可得，无需加密密码）。 */
+export interface WebdavRemoteInfo {
+  exists: boolean;
+  remote: { dirUrl: string; fileUrl: string };
+  updatedAt?: number;
+  deviceName?: string;
+  appVersion?: string;
+  accountCount?: number;
+}
+
+/** 备份 / 同步结果。 */
+export interface WebdavActionResult {
+  ok: boolean;
+  count: number;
+  updatedAt: number;
+}
+
+/** 恢复结果（合并计数 + 远端信息）。 */
+export interface WebdavRestoreResult {
+  ok: boolean;
+  imported: number;
+  skipped: number;
+  overwritten: number;
+  /** 是否同时写回了备份里的功能配置。 */
+  restoredConfigs?: boolean;
+  remote: { dirUrl: string; fileUrl: string };
+}
+
+/** 恢复预览：脱敏账号列表（含文件内索引）+ 远端信息。 */
+export interface WebdavRestorePreview {
+  accounts: ImportPreviewAccount[];
+  total: number;
+  /** 备份是否携带功能配置快照（可选同时恢复）。 */
+  hasConfigs?: boolean;
+  remote: { dirUrl: string; fileUrl: string };
+}
+
 export interface UpdateInfo {
   ok: boolean;
   current?: string;
