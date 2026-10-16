@@ -18,6 +18,8 @@ use std::process::Stdio;
 use std::time::Duration;
 #[cfg(not(target_os = "windows"))]
 use std::time::Instant;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 
 use crate::modules::account::{self, get_str};
 use crate::modules::auth_file::build_account_obj;
@@ -520,12 +522,156 @@ fn running_instance() -> RunningInstance {
 }
 
 /// 关闭超时文案：列出剩余 PID 与可操作提示（**不做强杀**）。
+///
+/// Windows 走 [`close_timeout_error_windows`]（要点名窗口标题），这条只在 macOS / Linux
+/// 与单测里用得到。
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn close_timeout_error(alive: &[u32]) -> String {
     let pids: Vec<String> = alive.iter().map(|pid| pid.to_string()).collect();
     format!(
         "等待 VS Code 退出超时（仍有进程运行: {}）。请在 VS Code 中处理保存提示；若你在等待期间重新打开过 VS Code，请退出后重试。",
         pids.join(", ")
     )
+}
+
+/// Windows 侧「按 PID 点关闭按钮」的最小 user32 封装。
+///
+/// 为什么不只用 `taskkill /PID <pid> /T`（不带 `/F`）：对**没有窗口**的进程它只会返回
+/// 「只能强制终止」（本机实测退出码 255、进程原样存活），而快照里绝大多数 pid 都是这一类
+/// （语言服务 / GPU / 扩展宿主）；真正要关的主窗口是否被它命中，取决于它自己的窗口选择，
+/// 我们既看不见也控制不了 —— 实测两次「等待 VS Code 退出超时」时，主窗口都还开着，
+/// 而手动点 ✕ 秒关。这里改为自己 `EnumWindows` 找出该 PID 的可见顶层窗口再发 `SC_CLOSE`：
+/// 与用户点 ✕ 完全等价、同样**不强杀**，而且能读到窗口标题写进报错文案。
+///
+/// 与 `jetbrains::win_close` 同源（同样的 `extern "system"` 最小 API 面，不扩大依赖图），
+/// 差异是本处需要窗口标题、需要能对同一批窗口重复发消息。
+#[cfg(target_os = "windows")]
+mod win_close {
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumWindows(lpEnumFunc: WndEnumProc, lParam: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn GetWindowTextW(hwnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
+        fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+    }
+    type WndEnumProc = Option<unsafe extern "system" fn(isize, isize) -> i32>;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+        fn GetExitCodeProcess(handle: isize, exit_code: *mut u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+
+    const WM_SYSCOMMAND: u32 = 0x0112;
+    const SC_CLOSE: usize = 0xF060;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    /// `GetExitCodeProcess` 的「仍在运行」哨兵值。
+    const STILL_ACTIVE: u32 = 259;
+    /// 窗口标题缓冲上限（UTF-16 字符数）：只用于报错文案，超长截断可接受。
+    const TITLE_MAX: usize = 256;
+
+    /// 一个可见顶层窗口。
+    pub(super) struct VisibleWindow {
+        pub(super) hwnd: isize,
+        pub(super) pid: u32,
+        pub(super) title: String,
+    }
+
+    unsafe extern "system" fn enum_cb(hwnd: isize, lparam: isize) -> i32 {
+        if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return 1;
+        }
+        let mut buf = [0u16; TITLE_MAX];
+        let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), TITLE_MAX as i32);
+        let title = if len > 0 {
+            String::from_utf16_lossy(&buf[..len as usize])
+        } else {
+            String::new()
+        };
+        let out = &mut *(lparam as *mut Vec<VisibleWindow>);
+        out.push(VisibleWindow { hwnd, pid, title });
+        1
+    }
+
+    /// 当前全部可见顶层窗口。
+    pub(super) fn visible_windows() -> Vec<VisibleWindow> {
+        let mut rows: Vec<VisibleWindow> = Vec::new();
+        unsafe {
+            EnumWindows(Some(enum_cb), &mut rows as *mut _ as isize);
+        }
+        rows
+    }
+
+    /// 对指定 PID 的全部可见窗口发 `SC_CLOSE`（= 点 ✕）；返回命中的窗口数。
+    pub(super) fn post_close(pid: u32) -> usize {
+        let mut hit = 0;
+        for window in visible_windows().iter().filter(|window| window.pid == pid) {
+            unsafe {
+                PostMessageW(window.hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+            }
+            hit += 1;
+        }
+        hit
+    }
+
+    /// 进程是否仍存活：读退出码判定，不起子进程（`tasklist` 轮询在进程多的机器上很贵）。
+    pub(super) fn pid_alive(pid: u32) -> bool {
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle == 0 {
+                return false;
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            ok != 0 && code == STILL_ACTIVE
+        }
+    }
+}
+
+/// 关闭超时文案（Windows 专用）：点名「没关掉的窗口标题」+ 关闭请求的返回。
+///
+/// 与 [`close_timeout_error`] 分开是因为要回答的问题不同：这里要回答「到底是哪个窗口没关掉」，
+/// 而不是列一串 PID 让用户自己对；关闭命令的返回也一并带上，避免再出现「发了但没人知道结果」。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn close_timeout_error_windows(
+    alive: &[u32],
+    windows: &[(u32, String)],
+    notes: &[String],
+) -> String {
+    let mut message = if windows.is_empty() {
+        let pids: Vec<String> = alive.iter().map(u32::to_string).collect();
+        format!(
+            "等待 VS Code 退出超时（仍有进程运行: {}）。",
+            pids.join(", ")
+        )
+    } else {
+        let named: Vec<String> = windows
+            .iter()
+            .map(|(pid, title)| {
+                let title = title.trim();
+                if title.is_empty() {
+                    format!("PID {pid}")
+                } else {
+                    format!("『{title}』(PID {pid})")
+                }
+            })
+            .collect();
+        format!("VS Code 窗口 {} 没有关闭。", named.join("、"))
+    };
+    message
+        .push_str("请在 VS Code 中处理保存提示；若你在等待期间重新打开过 VS Code，请退出后重试。");
+    if !notes.is_empty() {
+        message.push_str(&format!("（关闭请求返回：{}）", notes.join("；")));
+    }
+    message
 }
 
 /// 优雅关闭 VS Code → 等待进程消失；超时返回可读错误，**绝不强杀**。
@@ -535,8 +681,15 @@ fn close_timeout_error(alive: &[u32]) -> String {
 /// 退出时会拿到空集合、被误判成「我们关掉了它」而在写入后又把它拉起来）。
 ///
 /// 契约（对齐 `.trellis/spec/wb-switch-core/backend/codebuddy-cn-process.md`）：
-/// 禁止 `pkill -f` / `pgrep -f` / `taskkill /IM`，一律精确 PID；等待退出不得早退
-/// （确认的是「按主进程模式命中的进程集合为空」，不是「主进程不在」）。
+/// 禁止 `pkill -f` / `pgrep -f` / `taskkill /IM`，一律精确 PID；**绝不 `/F` 强杀**。
+///
+/// 等待判据按平台不同（都不是「主进程不存在」这种早退）：
+/// - macOS：按主进程模式命中的进程集合为空；
+/// - Windows：快照里**带可见窗口**的进程（即用户看得见的那个实例）全部退出；一个可见窗口都
+///   没有时退回「全部快照 pid」。收窄的理由：库写入由主进程负责，只剩语言服务 / GPU /
+///   扩展宿主时写入已经安全（它们经主进程 IPC 写库，主进程没了就写不进去），按原判据等
+///   它们只会平白超时 —— 实测一次超时的 18 个残留里 17 个属于这一类；
+/// - 其它平台：全部快照 pid 退出。
 fn close_vscode(pids: &[u32], timeout_secs: i64) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -576,17 +729,87 @@ fn close_vscode(pids: &[u32], timeout_secs: i64) -> Result<(), String> {
         if pids.is_empty() {
             return Ok(());
         }
-        // `taskkill /PID /T` **不带 `/F`**：等价 WM_CLOSE，会走保存提示。
+        // ① 关闭前先看清「快照里哪些 pid 带着可见窗口」：既用于报错文案，也用于决定必须等到谁退出。
+        let blocked: Vec<(u32, String)> = {
+            let mut rows: Vec<(u32, String)> = win_close::visible_windows()
+                .into_iter()
+                .filter(|window| pids.contains(&window.pid))
+                .map(|window| (window.pid, window.title))
+                .collect();
+            rows.sort();
+            rows.dedup();
+            rows
+        };
+        // ② 必须等到「带可见窗口的进程」全部退出（见函数头契约）。没有可见窗口时退回等全部快照 pid。
+        let must_wait: Vec<u32> = if blocked.is_empty() {
+            pids.to_vec()
+        } else {
+            blocked.iter().map(|(pid, _)| *pid).collect()
+        };
+        // ③ 第一轮关闭：`taskkill /PID /T` **不带 `/F`**（等价 WM_CLOSE，会走保存提示），
+        //    外加自己向可见窗口发 SC_CLOSE。taskkill 的返回全部收下来：它对无窗口进程只会报
+        //    「只能强制终止」，那属于预期噪声；其余失败要能进报错文案，不再是一条 `let _ =`。
+        let mut notes: Vec<String> = Vec::new();
         for pid in pids {
             let pid_arg = pid.to_string();
-            let _ = process::run_cmd_timeout("taskkill", &["/PID", &pid_arg, "/T"], 10);
+            match process::run_cmd_timeout("taskkill", &["/PID", &pid_arg, "/T"], 10) {
+                Some(out) => {
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    let text = text.trim();
+                    if !out.status.success()
+                        && !text.is_empty()
+                        && !text.to_ascii_lowercase().contains("forcefully")
+                    {
+                        notes.push(format!("taskkill {pid}: {text}"));
+                    }
+                }
+                None => notes.push(format!("taskkill {pid}: 未能在超时内执行")),
+            }
         }
-        let alive =
-            process::wait_windows_pids_gone(pids, Duration::from_secs(timeout_secs.max(1) as u64));
-        if alive.is_empty() {
-            Ok(())
-        } else {
-            Err(close_timeout_error(&alive))
+        let window_hits: usize = must_wait
+            .iter()
+            .map(|pid| win_close::post_close(*pid))
+            .sum();
+        notes.push(format!("已向 {window_hits} 个可见窗口发出关闭请求"));
+        // ④ 等待退出；每 10s 对仍可见的窗口重发一次 SC_CLOSE（有些 Electron 应用会吞掉第一次）。
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1) as u64);
+        let mut last_nudge = Instant::now();
+        loop {
+            let alive: Vec<u32> = must_wait
+                .iter()
+                .copied()
+                .filter(|pid| win_close::pid_alive(*pid))
+                .collect();
+            if alive.is_empty() {
+                return Ok(());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                // 超时：把「还开着的窗口标题」与关闭请求的返回一并报出，并落一份诊断日志
+                // （这一路以前完全没有留痕，两次线上超时都只能靠猜）。
+                let remaining: Vec<(u32, String)> = win_close::visible_windows()
+                    .into_iter()
+                    .filter(|window| alive.contains(&window.pid))
+                    .map(|window| (window.pid, window.title))
+                    .collect();
+                crate::modules::error_log::record(
+                    "backend",
+                    "VS Code 关闭超时",
+                    &format!("alive={alive:?} windows={remaining:?} notes={notes:?}"),
+                );
+                return Err(close_timeout_error_windows(&alive, &remaining, &notes));
+            }
+            if now.duration_since(last_nudge) >= Duration::from_secs(10) {
+                for pid in &alive {
+                    win_close::post_close(*pid);
+                }
+                last_nudge = now;
+            }
+            std::thread::sleep(Duration::from_millis(300));
         }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -666,17 +889,107 @@ fn launch_vscode(inst: &RunningInstance) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let exe = inst
-            .launch_target()
-            .ok_or_else(|| "未能记录 VS Code 可执行文件路径，请手动打开 VS Code".to_string())?
-            .to_path_buf();
-        process::cmd_builder(&exe)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("重新打开 VS Code 失败: {e}（路径: {}）", exe.display()))?;
-        Ok(())
+        let candidates = launch_candidates(inst.launch_target());
+        if candidates.is_empty() {
+            return Err("未能记录 VS Code 可执行文件路径，请手动打开 VS Code".to_string());
+        }
+        let mut last = String::new();
+        for exe in &candidates {
+            match process::cmd_builder(exe)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => last = format!("{e}（路径: {}）", exe.display()),
+            }
+        }
+        Err(format!("重新打开 VS Code 失败: {last}"))
     }
+}
+
+/// 重开候选，按优先级排列。
+///
+/// 先试关闭前记录的路径；它可能不可用——旧版本按 UTF-8 解码 PowerShell 输出，非 ASCII
+/// 用户目录会被写成替换字符（`C:\Users\???\…`），拿它 spawn 只会得到「系统找不到指定的
+/// 路径」。那就退到 VS Code 系 CLI：CLI 走自己的安装信息，不受这个问题影响，而且无参启动
+/// 会恢复上次的窗口。
+///
+/// 只在非 macOS 的重开分支里用到（macOS 走 `open -a`），故 macOS 下允许未使用。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn launch_candidates(main_exe: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut push = |path: PathBuf| {
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    };
+    if let Some(path) = main_exe.filter(|p| !p.to_string_lossy().contains('\u{fffd}')) {
+        push(path.to_path_buf());
+    }
+    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default();
+    for name in vscode_cli_names() {
+        if let Some(found) = path_dirs
+            .iter()
+            .map(|dir| dir.join(name))
+            .find(|p| p.is_file())
+        {
+            push(found);
+        }
+    }
+    for dir in vscode_cli_dirs() {
+        for name in vscode_cli_names() {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                push(candidate);
+            }
+        }
+    }
+    out
+}
+
+/// VS Code 系客户端的命令行入口名。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn vscode_cli_names() -> Vec<&'static str> {
+    if cfg!(target_os = "windows") {
+        vec![
+            "code.cmd",
+            "code-insiders.cmd",
+            "codium.cmd",
+            "cursor.cmd",
+            "windsurf.cmd",
+        ]
+    } else {
+        vec!["code", "code-insiders", "codium", "cursor", "windsurf"]
+    }
+}
+
+/// 常见安装位置下的 CLI 目录。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn vscode_cli_dirs() -> Vec<PathBuf> {
+    if !cfg!(target_os = "windows") {
+        return vec![PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")];
+    }
+    let mut out = Vec::new();
+    for var in ["LOCALAPPDATA", "PROGRAMFILES", "ProgramFiles(x86)"] {
+        let Some(base) = std::env::var_os(var) else {
+            continue;
+        };
+        let base = PathBuf::from(base);
+        for suffix in [
+            "Programs/Microsoft VS Code/bin",
+            "Microsoft VS Code/bin",
+            "Programs/VSCodium/bin",
+            "VSCodium/bin",
+            "Programs/cursor/resources/app/bin",
+            "Programs/Windsurf/bin",
+        ] {
+            out.push(base.join(suffix));
+        }
+    }
+    out
 }
 
 /// 注入失败的文案映射（D3）：钥匙串 / Safe Storage 缺失时补一条可操作提示。
@@ -1179,6 +1492,30 @@ mod tests {
         ));
     }
 
+    /// Windows 超时文案要点名「没关掉的窗口标题」，并附上关闭请求的返回。
+    #[test]
+    fn close_timeout_error_windows_names_the_window_and_command_notes() {
+        let windows = vec![(
+            60680u32,
+            "check_columns.sql - newmes - Visual Studio Code".to_string(),
+        )];
+        let notes = vec!["已向 1 个可见窗口发出关闭请求".to_string()];
+        let message = close_timeout_error_windows(&[60680], &windows, &notes);
+        assert!(
+            message.contains("check_columns.sql - newmes - Visual Studio Code"),
+            "{message}"
+        );
+        assert!(message.contains("PID 60680"), "{message}");
+        assert!(
+            message.contains("已向 1 个可见窗口发出关闭请求"),
+            "{message}"
+        );
+        // 没有可见窗口残留（例如只剩语言服务）时退回 PID 列表，不编造窗口名。
+        let message = close_timeout_error_windows(&[1, 2], &[], &[]);
+        assert!(message.contains("1, 2"), "{message}");
+        assert!(!message.contains("窗口"), "{message}");
+    }
+
     #[test]
     fn close_timeout_error_lists_pids_and_manual_hint() {
         let message = close_timeout_error(&[4242, 4243]);
@@ -1186,6 +1523,22 @@ mod tests {
         assert!(message.contains("请在 VS Code 中处理保存提示"), "{message}");
         // 等待期间被重新打开也会表现为「仍有进程」→ 文案要点出这条排查方向。
         assert!(message.contains("重新打开过 VS Code"), "{message}");
+    }
+
+    /// 记录到的路径可能被编码问题写坏（含替换字符）；这种候选必须被跳过，另走 CLI 兜底。
+    #[test]
+    fn launch_candidates_skip_broken_recorded_path() {
+        let broken = PathBuf::from(
+            "C:\\Users\\\u{fffd}\u{fffd}\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+        );
+        assert!(!launch_candidates(Some(&broken)).contains(&broken));
+
+        let recorded = PathBuf::from("/Applications/Visual Studio Code.app");
+        assert_eq!(
+            launch_candidates(Some(&recorded)).first(),
+            Some(&recorded),
+            "记录到的正常路径必须排在最前"
+        );
     }
 
     fn instance_with_pids(pids: Vec<u32>) -> RunningInstance {
