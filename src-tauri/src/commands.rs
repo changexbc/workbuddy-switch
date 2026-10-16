@@ -12,7 +12,7 @@ use wb_switch_core::modules::{
     codebuddy_ide_session, codebuddy_ide_session_sync, credit_usage, credits, error_log,
     export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
-    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
+    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync, webdav_sync,
 };
 
 #[derive(Serialize)]
@@ -508,6 +508,65 @@ pub fn import_accounts(file_text: String, indexes: Vec<usize>) -> Result<Value, 
         "skipped": result.skipped,
         "overwritten": result.overwritten,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// WebDAV 备份 / 跨设备同步
+// ---------------------------------------------------------------------------
+
+/// GET /api/webdav/config —— WebDAV 配置（脱敏：不含口令，带 `hasPassword`）。
+#[tauri::command]
+pub fn get_webdav_config() -> Value {
+    webdav_sync::webdav_config_view()
+}
+
+/// POST /api/webdav/config —— 保存 WebDAV 配置，返回脱敏视图。
+#[tauri::command]
+pub fn save_webdav_config(config: Value) -> Result<Value, String> {
+    webdav_sync::save_webdav_config(&config)
+        .map_err(|e| e.to_string())?;
+    Ok(webdav_sync::webdav_config_view())
+}
+
+/// POST /api/webdav/test —— 测试连接（探测远端目录，缺失时创建）。
+#[tauri::command]
+pub async fn webdav_test_connection() -> Result<Value, String> {
+    webdav_sync::test_connection().await
+}
+
+/// POST /api/webdav/backup —— 整库端到端加密备份到 WebDAV。
+#[tauri::command]
+pub async fn webdav_backup(passphrase: String) -> Result<Value, String> {
+    webdav_sync::backup_now(&passphrase).await
+}
+
+/// POST /api/webdav/restore/preview —— 拉取解密远端备份，返回脱敏预览。
+#[tauri::command]
+pub async fn webdav_restore_preview(passphrase: String) -> Result<Value, String> {
+    webdav_sync::restore_preview(&passphrase).await
+}
+
+/// POST /api/webdav/restore —— 按选中索引把远端备份合并进账号库；`restoreConfigs`
+/// 为真且备份携带配置快照时，同时按白名单写回功能配置。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn webdav_restore(
+    passphrase: String,
+    indexes: Vec<usize>,
+    restore_configs: Option<bool>,
+) -> Result<Value, String> {
+    webdav_sync::restore(&passphrase, &indexes, restore_configs.unwrap_or(false)).await
+}
+
+/// POST /api/webdav/sync —— 拉取 → 按 uid 合并 → 推送（跨设备同步）。
+#[tauri::command]
+pub async fn webdav_sync_now(passphrase: String) -> Result<Value, String> {
+    webdav_sync::sync_now(&passphrase).await
+}
+
+/// GET /api/webdav/info —— 云端备份元信息（无需加密密码）。
+#[tauri::command]
+pub async fn webdav_info() -> Result<Value, String> {
+    webdav_sync::remote_info().await
 }
 
 /// 打开系统设置授权面板。默认「完全磁盘访问」（该 anchor 各版本均有效）；

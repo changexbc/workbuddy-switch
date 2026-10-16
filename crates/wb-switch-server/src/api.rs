@@ -22,7 +22,7 @@ use wb_switch_core::modules::{
     codebuddy_ide_session, codebuddy_ide_session_sync, config, credit_usage, credits,
     export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
-    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
+    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync, webdav_sync,
 };
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
@@ -223,6 +223,13 @@ pub fn router() -> Router {
             "/api/update/config",
             get(api_update_config).post(api_save_update_config),
         )
+        .route("/api/webdav/config", get(api_get_webdav_config).post(api_save_webdav_config))
+        .route("/api/webdav/test", post(api_webdav_test_connection))
+        .route("/api/webdav/backup", post(api_webdav_backup))
+        .route("/api/webdav/restore/preview", post(api_webdav_restore_preview))
+        .route("/api/webdav/restore", post(api_webdav_restore))
+        .route("/api/webdav/sync", post(api_webdav_sync_now))
+        .route("/api/webdav/info", get(api_webdav_info))
         .fallback(static_handler)
 }
 
@@ -1606,6 +1613,93 @@ async fn api_save_update_config(Json(body): Json<Value>) -> Response {
     match update::save_github_config(&body) {
         Ok(()) => json_ok(json!({ "ok": true, "config": update::load_github_config() })),
         Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WebDAV 备份 / 跨设备同步
+// ---------------------------------------------------------------------------
+
+async fn api_get_webdav_config() -> Response {
+    json_ok(webdav_sync::webdav_config_view())
+}
+
+async fn api_save_webdav_config(Json(body): Json<Value>) -> Response {
+    if webdav_sync::save_webdav_config(&body).is_err() {
+        return json_err("保存 WebDAV 配置失败".to_string(), StatusCode::BAD_REQUEST);
+    }
+    // 与 Tauri 命令同形：回脱敏视图（不回显明文口令），前端两通道拿到一致结构。
+    json_ok(webdav_sync::webdav_config_view())
+}
+
+async fn api_webdav_test_connection() -> Response {
+    match webdav_sync::test_connection().await {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_webdav_backup(Json(body): Json<Value>) -> Response {
+    let passphrase = body
+        .get("passphrase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    match webdav_sync::backup_now(&passphrase).await {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_webdav_restore_preview(Json(body): Json<Value>) -> Response {
+    let passphrase = body
+        .get("passphrase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    match webdav_sync::restore_preview(&passphrase).await {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_webdav_restore(Json(body): Json<Value>) -> Response {
+    let passphrase = body
+        .get("passphrase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let indexes: Vec<usize> = body
+        .get("indexes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect())
+        .unwrap_or_default();
+    let restore_configs = body
+        .get("restoreConfigs")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    match webdav_sync::restore(&passphrase, &indexes, restore_configs).await {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_webdav_sync_now(Json(body): Json<Value>) -> Response {
+    let passphrase = body
+        .get("passphrase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    match webdav_sync::sync_now(&passphrase).await {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn api_webdav_info() -> Response {
+    match webdav_sync::remote_info().await {
+        Ok(v) => json_ok(v),
+        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
     }
 }
 

@@ -3,10 +3,13 @@ import {
   ArrowUpCircle,
   ChevronDown,
   CircleCheck,
+  CloudDownload,
   ExternalLink,
   Loader2,
   RefreshCw,
   Save,
+  Shield,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -50,6 +53,7 @@ import type {
   RotateStatus,
   TravelConfig,
   UpdateInfo,
+  WebdavRemoteInfo,
 } from "@/lib/types";
 import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
 import { useUpdateState } from "@/lib/use-update-state";
@@ -58,6 +62,7 @@ import { cn } from "@/lib/utils";
 import { accountVariant, variantSupportsCheckin, variantSupportsTravel, variantUsesIntlCodebuddyIde } from "@/lib/variant";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { DemoAction } from "@/components/demo-action";
+import { WebdavRestoreDialog } from "@/components/webdav-restore-dialog";
 import { CodeBuddyAiIdeMark, CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyAiMark, WorkBuddyMark } from "@/components/product-marks";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -1474,6 +1479,302 @@ function UpdateCard() {
   );
 }
 
+/** WebDAV 备份 / 跨设备同步：服务器配置（脱敏，口令不回显）+ 云端备份操作。 */
+function WebdavSyncCard() {
+  const [cfg, setCfg] = useState<{
+    url: string;
+    username: string;
+    remotePath: string;
+    hasPassword: boolean;
+  } | null>(null);
+  const [url, setUrl] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [remotePath, setRemotePath] = useState("");
+  const [remote, setRemote] = useState<WebdavRemoteInfo | null>(null);
+  const [passphrase, setPassphrase] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [backing, setBacking] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.allSettled([api.getWebdavConfig(), api.webdavInfo()]).then(
+      ([configResult, infoResult]) => {
+        if (cancelled) return;
+        if (configResult.status === "fulfilled") {
+          const c = configResult.value;
+          setCfg(c);
+          setUrl(c.url);
+          setUsername(c.username);
+          setRemotePath(c.remotePath);
+        }
+        if (infoResult.status === "fulfilled") setRemote(infoResult.value);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const configured = (cfg?.url ?? "").trim() !== "";
+
+  async function saveConfig() {
+    setSaving(true);
+    try {
+      const saved = await api.saveWebdavConfig({
+        url,
+        username,
+        remotePath: remotePath.trim() || "wb-switch",
+        password,
+      });
+      setCfg(saved);
+      setPassword("");
+      toast.success(
+        password ? "WebDAV 配置已保存（含服务器口令）" : "WebDAV 配置已保存",
+      );
+      void api.webdavInfo().then(setRemote).catch(() => {});
+    } catch (e) {
+      toast.error("保存 WebDAV 配置失败", { description: api.asError(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function test() {
+    setTesting(true);
+    try {
+      await api.webdavTestConnection();
+      toast.success("WebDAV 连接正常", { description: "远端目录可访问（缺失时已自动创建）" });
+      void api.webdavInfo().then(setRemote).catch(() => {});
+    } catch (e) {
+      toast.error("WebDAV 连接失败", { description: api.asError(e) });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function backup() {
+    setBacking(true);
+    try {
+      const res = await api.webdavBackup(passphrase);
+      toast.success(`已备份 ${res.count} 个账号到 WebDAV 云端`);
+      void api.webdavInfo().then(setRemote).catch(() => {});
+    } catch (e) {
+      toast.error("备份到 WebDAV 失败", { description: api.asError(e) });
+    } finally {
+      setBacking(false);
+    }
+  }
+
+  async function sync() {
+    setSyncing(true);
+    try {
+      const res = await api.webdavSyncNow(passphrase);
+      toast.success(
+        `云端同步完成（${res.count} 个账号）`,
+        { description: "云端账号已合并到本地，本地整库已加密推送" },
+      );
+      void api.webdavInfo().then(setRemote).catch(() => {});
+    } catch (e) {
+      toast.error("云端同步失败", { description: api.asError(e) });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <SettingsGroup id="settings-webdav" title="WebDAV 备份 / 跨设备同步">
+      <CardContent className="space-y-0 p-0">
+        <div className="border-b border-border/60 px-4 py-3 text-xs leading-5 text-muted-foreground sm:px-5">
+          把完整账号库（含 token 等授权信息）端到端加密备份到私有 WebDAV 服务器，在新设备
+          登录同一服务器即可恢复账号与授权。上传前用加密密码派生密钥加密，服务器侧只见密文。
+        </div>
+
+        <SettingsFieldRow
+          label="WebDAV 服务器地址"
+          description="http(s):// 完整地址，可带子路径。"
+          htmlFor="webdav-url"
+          className="bg-muted/25"
+          operational
+        >
+          <Input
+            id="webdav-url"
+            className="w-full sm:w-80"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="例如 https://dav.example.com/dav"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsFieldRow>
+
+        <SettingsFieldRow
+          label="用户名"
+          htmlFor="webdav-username"
+          className="bg-muted/25"
+          operational
+        >
+          <Input
+            id="webdav-username"
+            className="w-full sm:w-80"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="无认证服务器可留空"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsFieldRow>
+
+        <SettingsFieldRow
+          label="服务器口令"
+          description={
+            cfg?.hasPassword ? "已保存（留空保持不变；填写则更新）" : "首次填写后保存"
+          }
+          htmlFor="webdav-password"
+          className="bg-muted/25"
+          operational
+        >
+          <Input
+            id="webdav-password"
+            type="password"
+            className="w-full sm:w-80"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder={cfg?.hasPassword ? "留空保持不变" : "WebDAV 服务器口令"}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsFieldRow>
+
+        <SettingsFieldRow
+          label="远端目录"
+          description="相对 WebDAV 根目录的目录名；留空使用默认。"
+          htmlFor="webdav-remote-path"
+          className="bg-muted/25"
+          operational
+        >
+          <Input
+            id="webdav-remote-path"
+            className="w-full sm:w-80"
+            value={remotePath}
+            onChange={(event) => setRemotePath(event.target.value)}
+            placeholder="wb-switch"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsFieldRow>
+
+        <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-muted/25 px-4 py-3 sm:px-5">
+          <DemoAction>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void saveConfig()}
+              disabled={saving || !configured && !url.trim()}
+            >
+              {saving ? <Loader2 className="animate-spin" /> : <Save />}
+              保存配置
+            </Button>
+          </DemoAction>
+          <DemoAction>
+            <Button size="sm" variant="outline" onClick={() => void test()} disabled={testing}>
+              {testing ? <Loader2 className="animate-spin" /> : <Shield />}
+              测试连接
+            </Button>
+          </DemoAction>
+        </div>
+
+        <SettingsFieldRow
+          label="备份加密密码"
+          description="备份文件的端到端加密密钥；各设备需使用同一密码。至少 8 位。"
+          htmlFor="webdav-passphrase"
+          className="bg-muted/25"
+          operational
+        >
+          <Input
+            id="webdav-passphrase"
+            type="password"
+            className="w-full sm:w-80"
+            value={passphrase}
+            onChange={(event) => setPassphrase(event.target.value)}
+            placeholder="备份加密密码"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </SettingsFieldRow>
+
+        <div className="px-4 py-3 sm:px-5">
+          <div className="space-y-2 rounded-lg bg-foreground/[0.04] px-3 py-2.5">
+            <div className="text-[13px] font-medium leading-4">云端备份</div>
+            {remote?.exists ? (
+              <div className="text-xs leading-5 text-muted-foreground">
+                已有备份：{remote.accountCount} 个账号 · 来自 {remote.deviceName}
+                {remote.updatedAt
+                  ? ` · 更新于 ${new Date(remote.updatedAt).toLocaleString("zh-CN")}`
+                  : ""}
+              </div>
+            ) : (
+              <div className="text-xs leading-5 text-muted-foreground">
+                {configured ? "云端还没有备份" : "尚未配置 WebDAV 服务器"}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <DemoAction>
+                <Button
+                  size="sm"
+                  onClick={() => void backup()}
+                  disabled={!configured || backing || !passphrase}
+                >
+                  {backing ? <Loader2 className="animate-spin" /> : <Upload />}
+                  立即备份
+                </Button>
+              </DemoAction>
+              <DemoAction>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void sync()}
+                  disabled={!configured || syncing || !passphrase}
+                >
+                  {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                  同步
+                </Button>
+              </DemoAction>
+              <DemoAction>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setRestoreOpen(true)}
+                  disabled={!configured}
+                >
+                  <CloudDownload />
+                  从云端恢复
+                </Button>
+              </DemoAction>
+            </div>
+          </div>
+        </div>
+
+        <WebdavRestoreDialog
+          open={restoreOpen}
+          onOpenChange={setRestoreOpen}
+          onRestored={(result) => {
+            void useAccountsStore.getState().fetchAll();
+            const parts: string[] = [];
+            parts.push(`已从云端恢复 ${result.imported} 个账号`);
+            if (result.overwritten > 0) parts.push(`其中 ${result.overwritten} 个覆盖了同名账号`);
+            if (result.restoredConfigs) parts.push("并写回了备份中的功能配置");
+            toast.success(parts.join("，"));
+          }}
+        />
+      </CardContent>
+    </SettingsGroup>
+  );
+}
+
 /** 开机自启（仅桌面端渲染）：开关直接反映系统自启注册状态，切换立即生效。 */
 function StartupCard() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -2128,6 +2429,7 @@ export default function SettingsPage() {
         {api.isDesktop() || api.isDemoMode() ? <StartupCard /> : null}
         <NotificationHistoryCard />
         <ErrorLogCard />
+        <WebdavSyncCard />
         {api.isWebui() && !api.isDemoMode() ? null : <UpdateCard />}
       </div>
     </div>

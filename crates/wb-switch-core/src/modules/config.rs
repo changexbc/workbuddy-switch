@@ -1134,6 +1134,84 @@ pub async fn http_request_raw(
     }
 }
 
+/// 通用 HTTP 请求，返回原始响应（状态码 + 响应头 + 响应体字节），请求体为任意字节。
+///
+/// 供 WebDAV 这类非 JSON 协议使用：可指定任意方法与 Content-Type，二进制上传 /
+/// 下载，不强制 JSON。`timeout_secs` 为每次请求的整体超时上限（备份文件上传可能
+/// 远超共享客户端的 30 秒）；`None` 使用共享客户端（30 秒）。
+/// 失败（网络错误）返回 `(0, HashMap::new(), 错误信息)`。
+pub async fn http_request_bytes(
+    url: &str,
+    method: &str,
+    content_type: Option<&str>,
+    body: Option<Vec<u8>>,
+    headers: Option<&HashMap<String, String>>,
+    follow_redirects: bool,
+    timeout_secs: Option<u64>,
+) -> (u16, HashMap<String, String>, Vec<u8>) {
+    let method = match reqwest::Method::from_bytes(method.as_bytes()) {
+        Ok(method) => method,
+        Err(e) => return (0, HashMap::new(), format!("无效的 HTTP 方法：{e}").into_bytes()),
+    };
+    let client = match timeout_secs {
+        Some(secs) => {
+            let mut builder = http_client_builder().timeout(std::time::Duration::from_secs(secs));
+            if !follow_redirects {
+                builder = builder.redirect(reqwest::redirect::Policy::none());
+            }
+            match builder.build() {
+                Ok(client) => client,
+                Err(e) => return (0, HashMap::new(), format!("客户端创建失败: {e}").into_bytes()),
+            }
+        }
+        None => {
+            if follow_redirects {
+                http_client().clone()
+            } else {
+                match http_client_builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(e) => {
+                        return (
+                            0,
+                            HashMap::new(),
+                            format!("客户端创建失败: {e}").into_bytes(),
+                        )
+                    }
+                }
+            }
+        }
+    };
+    let mut req = client.request(method, url);
+    if let Some(ct) = content_type {
+        req = req.header("Content-Type", ct);
+    }
+    if let Some(h) = headers {
+        for (k, v) in h {
+            req = req.header(k, v);
+        }
+    }
+    if let Some(b) = body {
+        req = req.body(b);
+    }
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let mut resp_headers = HashMap::new();
+            for (k, v) in resp.headers() {
+                if let Ok(vs) = v.to_str() {
+                    resp_headers.insert(k.as_str().to_string(), vs.to_string());
+                }
+            }
+            let bytes = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+            (status, resp_headers, bytes)
+        }
+        Err(e) => (0, HashMap::new(), e.to_string().into_bytes()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
