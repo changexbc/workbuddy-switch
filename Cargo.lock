@@ -5009,6 +5009,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -5645,6 +5646,7 @@ name = "wb-switch-server"
 version = "0.1.62"
 dependencies = [
  "axum",
+ "chrono",
  "rust-embed",
  "serde_json",
  "tokio",

@@ -57,6 +57,14 @@ pub(crate) fn notify_codebuddy_cli_updated(app: &tauri::AppHandle) {
 /// 签到时间段时固定 30 分钟）；自动轮换每 30 秒检查；每天一次保活；
 /// 限额 hook 信号每秒轮询一次（入账即通知前端）；限额 hook 启动时后台默认接入。
 fn spawn_background_loops(app: tauri::AppHandle) {
+    let credit_cache_app = app.clone();
+    modules::credits::spawn_credit_cache_watcher(move |cache| {
+        let _ = credit_cache_app.emit("credit-query-cache-updated", cache);
+    });
+    let revision_app = app.clone();
+    modules::state_lock::spawn_revision_watcher(move || {
+        notify_codebuddy_cli_updated(&revision_app);
+    });
     let rotate_app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = modules::config::compact_checkin_logs() {

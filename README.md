@@ -145,6 +145,26 @@ workbuddy-switch status       # 终端查看当前账号
 
 界面与桌面 App 一致，功能覆盖上方全部模块，但不提供会话悬浮窗（桌面版专属）。webui 模式下的 macOS 权限由启动服务的终端进程决定；若终端已授权完全磁盘访问则无需额外操作。
 
+### CLI / AI 调用
+
+无需打开 GUI。`inspect --summary` 一次查询账号、当前 CLI 状态、积分、到期信息和模型限额。
+
+```bash
+workbuddy-switch inspect --summary              # 一次概览
+workbuddy-switch accounts                       # 账号 ID 列表
+workbuddy-switch status --target codebuddy-cli  # 当前 CLI 账号
+workbuddy-switch credits --summary              # 积分汇总
+workbuddy-switch limits --model hy3             # 模型限额与恢复时间
+workbuddy-switch switch <ACCOUNT_ID> --dry-run  # 切号预览
+workbuddy-switch switch <ACCOUNT_ID>            # 实际切号
+```
+
+默认 JSON，人工阅读加 `--text`；结果在 stdout，进度在 stderr。切号会关闭运行中的 CodeBuddy CLI，不自动重开。未观察到限额不代表模型可用。
+
+摘要省略已过期明细，未来和未知到期条目全部保留。与 GUI 并发写入须使用配套新版，旧发行版不支持共享锁。
+
+完整参数与返回约定见 [CLI 文档](docs/cli.md)，或运行 `workbuddy-switch --help`。
+
 ## 致谢
 
 感谢 [Linux.do](https://linux.do) 社区。

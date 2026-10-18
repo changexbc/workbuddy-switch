@@ -67,6 +67,24 @@ webui 界面与桌面 App 一致，功能覆盖下方全部模块。
 
 > webui 模式：由启动服务的终端进程权限决定；若终端已授权完全磁盘访问则无需额外操作。
 
+## CodeBuddy CLI / AI 调用
+
+无需打开 GUI，一次性命令执行后退出：
+
+```bash
+workbuddy-switch inspect --summary              # 账号、积分、到期和模型限额
+workbuddy-switch accounts                       # 账号 ID 列表
+workbuddy-switch status --target codebuddy-cli  # 当前 CLI 账号
+workbuddy-switch credits --summary              # 积分汇总
+workbuddy-switch limits --model hy3             # 模型限额与恢复时间
+workbuddy-switch switch <ACCOUNT_ID> --dry-run  # 切号预览
+workbuddy-switch switch <ACCOUNT_ID>            # 实际切号
+```
+
+默认 JSON，人工阅读加 `--text`；结果在 stdout，进度在 stderr。实际切号会关闭运行中的 CLI，不自动重开；未观察到限额不保证模型可用。与 GUI 同时写入须使用配套新版。
+
+完整参数与返回约定见 [CLI 文档](../docs/cli.md)，或运行 `workbuddy-switch --help`。
+
 ## 许可
 
 [MIT](./LICENSE)

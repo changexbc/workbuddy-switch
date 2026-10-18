@@ -152,9 +152,11 @@ pub fn merge_import_records(
 
 /// 导入：读账号库 → 合并 → 写回，返回计数。
 pub fn import_accounts(text: &str, indexes: &[usize]) -> Result<ImportResult, String> {
-    let mut accounts = account::load_accounts();
+    let guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    let mut accounts =
+        account::load_accounts_for_update().map_err(|e| format!("读取账号库失败：{e}"))?;
     let result = merge_import_records(&mut accounts, text, indexes)?;
-    account::save_accounts(&accounts).map_err(|e| format!("保存账号库失败：{e}"))?;
+    account::save_accounts_locked(&accounts, &guard).map_err(|e| format!("保存账号库失败：{e}"))?;
     Ok(result)
 }
 

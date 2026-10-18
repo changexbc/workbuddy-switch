@@ -12,8 +12,7 @@ use std::sync::Mutex;
 
 use crate::modules::account::{account_display_name, load_accounts, variant_of};
 use crate::modules::config::{
-    atomic_write, credit_usage_snapshots_file, load_checkin_logs, now_ms, store_dir,
-    CHECKIN_LOG_KEEP_DAYS,
+    atomic_write, credit_usage_snapshots_file, load_checkin_logs, now_ms, CHECKIN_LOG_KEEP_DAYS,
 };
 use crate::modules::official_usage;
 use crate::modules::variant::WbVariant;
@@ -109,7 +108,10 @@ fn snapshot_value(
 
 /// 读取本地观察快照；文件缺失或损坏时返回空列表。
 pub fn load_snapshots() -> Vec<Value> {
-    let path = credit_usage_snapshots_file();
+    load_snapshots_at(&credit_usage_snapshots_file())
+}
+
+fn load_snapshots_at(path: &std::path::Path) -> Vec<Value> {
     if let Ok(text) = std::fs::read_to_string(path) {
         if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&text) {
             return items;
@@ -158,7 +160,8 @@ fn normalize_snapshots(snapshots: &[Value], at_ms: i64) -> Vec<Value> {
 /// 写入一个成功的资源观察值。
 ///
 /// 同一账号同一资源值在短时间内只保留一条；资源值发生变化时立即保留，
-/// 这样余额下降可以归因到新快照。返回值表示本次是否实际写入。
+/// 这样余额下降可以归因到新快照。返回值表示本次是否新增快照；相同余额
+/// 仍更新观察时间水位，防止较早查询的迟到结果回退基线。
 pub fn record_snapshot(
     account_id: &str,
     account_name: &str,
@@ -166,39 +169,116 @@ pub fn record_snapshot(
     remaining: f64,
     variant: WbVariant,
 ) -> bool {
+    record_snapshot_at(
+        account_id,
+        account_name,
+        total,
+        remaining,
+        variant,
+        now_ms(),
+    )
+}
+
+/// The observation time is the query's start, shared with its credit-cache
+/// result. Completing an older request later must not reset the usage baseline.
+pub(crate) fn record_snapshot_at(
+    account_id: &str,
+    account_name: &str,
+    total: f64,
+    remaining: f64,
+    variant: WbVariant,
+    observed_at: i64,
+) -> bool {
     let account_id = account_id.trim();
     if account_id.is_empty() {
         return false;
     }
 
-    let at_ms = now_ms();
+    record_snapshot_at_path(
+        &credit_usage_snapshots_file(),
+        &Snapshot {
+            ts: observed_at,
+            account_id: account_id.to_string(),
+            account_name: account_name.trim().to_string(),
+            total,
+            remaining,
+            variant,
+        },
+    )
+}
+
+fn record_snapshot_at_path(path: &std::path::Path, snapshot: &Snapshot) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+
     let _guard = SNAPSHOT_WRITE_LOCK.lock().unwrap();
-    let snapshots = load_snapshots();
-    if should_suppress_duplicate(&snapshots, account_id, total, remaining, at_ms) {
+    let _process_guard = match crate::modules::state_lock::StateLock::wait_at(
+        &parent.join("credit-snapshots.lock"),
+        std::time::Duration::from_secs(2),
+    ) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("[积分统计] 快照写入锁失败: {error}");
+            return false;
+        }
+    };
+    let at_ms = now_ms();
+    let mut snapshots = load_snapshots_at(path);
+    let latest = snapshots
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            let previous = snapshot_from_value(value)?;
+            (previous.account_id == snapshot.account_id).then_some((
+                index,
+                value["lastObservedAt"].as_i64().unwrap_or(previous.ts),
+            ))
+        })
+        .max_by_key(|(_, observed_at)| *observed_at);
+    if latest.is_some_and(|(_, observed_at)| observed_at >= snapshot.ts) {
         return false;
     }
 
+    let duplicate = should_suppress_duplicate(
+        &snapshots,
+        &snapshot.account_id,
+        snapshot.total,
+        snapshot.remaining,
+        snapshot.ts,
+    );
+    if duplicate {
+        // Keep the original baseline and retention timestamp. Moving `ts` on
+        // every identical result would erase the first-observation coverage.
+        if let Some((index, _)) = latest {
+            snapshots[index]["lastObservedAt"] = json!(snapshot.ts);
+        }
+    }
     let mut kept = normalize_snapshots(&snapshots, at_ms);
-    kept.push(snapshot_value(
-        at_ms,
-        account_id,
-        account_name.trim(),
-        total,
-        remaining,
-        variant,
-    ));
+    if !duplicate {
+        let mut value = snapshot_value(
+            snapshot.ts.min(at_ms),
+            &snapshot.account_id,
+            &snapshot.account_name,
+            snapshot.total,
+            snapshot.remaining,
+            snapshot.variant,
+        );
+        value["lastObservedAt"] = json!(snapshot.ts);
+        kept.push(value);
+    }
     if kept.len() > CREDIT_SNAPSHOT_MAX_RECORDS {
         kept.drain(..kept.len() - CREDIT_SNAPSHOT_MAX_RECORDS);
     }
 
-    if let Err(error) = std::fs::create_dir_all(store_dir()).and_then(|_| {
+    if let Err(error) = std::fs::create_dir_all(parent).and_then(|_| {
         let content = serde_json::to_string_pretty(&kept).unwrap_or_default();
-        atomic_write(&credit_usage_snapshots_file(), &content)
+        atomic_write(path, &content)
     }) {
         eprintln!("[积分统计] 保存积分快照失败: {error}");
         return false;
     }
-    true
+    !duplicate
 }
 
 fn local_date(ts: i64) -> Option<NaiveDate> {
@@ -653,6 +733,98 @@ mod tests {
             remaining,
             variant,
         )
+    }
+
+    #[test]
+    fn delayed_query_cannot_reset_usage_baseline_or_double_count_consumption() {
+        let root = std::env::temp_dir().join(format!("wb-usage-order-{}", uuid::Uuid::new_v4()));
+        let path = root.join("snapshots.json");
+        let now = now_ms();
+        let observation = |ts, remaining| Snapshot {
+            ts,
+            account_id: "account-1".into(),
+            account_name: "test".into(),
+            total: 100.0,
+            remaining,
+            variant: WbVariant::Cn,
+        };
+        assert!(record_snapshot_at_path(
+            &path,
+            &observation(now - 60_000, 100.0)
+        ));
+        assert!(record_snapshot_at_path(
+            &path,
+            &observation(now - 40_000, 80.0)
+        ));
+        // An earlier GUI query returns after the newer CLI observation.
+        assert!(!record_snapshot_at_path(
+            &path,
+            &observation(now - 50_000, 100.0)
+        ));
+        assert!(!record_snapshot_at_path(
+            &path,
+            &observation(now - 30_000, 80.0)
+        ));
+        let snapshots = load_snapshots_at(&path);
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[1]["remaining"], 80.0);
+        assert_eq!(snapshots[1]["ts"], now - 40_000);
+        assert_eq!(snapshots[1]["lastObservedAt"], now - 30_000);
+        let stats = build_statistics(&snapshots, &[], &[], now);
+        assert_eq!(stats["summary"]["usage7Days"], 20.0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_newer_query_advances_watermark_without_erasing_coverage() {
+        let root = std::env::temp_dir().join(format!("wb-usage-dedupe-{}", uuid::Uuid::new_v4()));
+        let path = root.join("snapshots.json");
+        let now = now_ms();
+        let observation = |ts, remaining| Snapshot {
+            ts,
+            account_id: "account-1".into(),
+            account_name: "test".into(),
+            total: 100.0,
+            remaining,
+            variant: WbVariant::Cn,
+        };
+        assert!(record_snapshot_at_path(
+            &path,
+            &observation(now - 60_000, 100.0)
+        ));
+        assert!(!record_snapshot_at_path(
+            &path,
+            &observation(now - 30_000, 100.0)
+        ));
+        // The newer balance was unchanged, but a delayed different balance
+        // still must not replace it. Equal-time contradictory results lose too.
+        assert!(!record_snapshot_at_path(
+            &path,
+            &observation(now - 40_000, 80.0)
+        ));
+        assert!(!record_snapshot_at_path(
+            &path,
+            &observation(now - 30_000, 80.0)
+        ));
+        let snapshots = load_snapshots_at(&path);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0]["ts"], now - 60_000);
+        assert_eq!(snapshots[0]["lastObservedAt"], now - 30_000);
+        let stats = build_statistics(&snapshots, &[], &[], now);
+        assert_eq!(stats["coverageStartAt"], now - 60_000);
+        assert_eq!(stats["summary"]["usage7Days"], 0.0);
+        // A real newer decline and a subsequent balance increase remain valid.
+        assert!(record_snapshot_at_path(
+            &path,
+            &observation(now - 20_000, 80.0)
+        ));
+        assert!(record_snapshot_at_path(
+            &path,
+            &observation(now - 10_000, 90.0)
+        ));
+        let stats = build_statistics(&load_snapshots_at(&path), &[], &[], now);
+        assert_eq!(stats["summary"]["usage7Days"], 20.0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// 旧快照没有 `variant` 字段：按国内版解释，且统计行显式带档位。

@@ -32,6 +32,10 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       # 与 build.yml 分开的 key 前缀（那边是 release profile 产物），
       # restore-keys 回落到它的缓存，以复用依赖编译产物。
       - name: Cache cargo
@@ -51,6 +55,20 @@ jobs:
       # 交叉编译 x86_64，跑测试需要 Rosetta，不适用于本 job。
       - name: Run tests
         run: cargo test -p wb-switch-core
+        env:
+          WB_SWITCH_HOME: ${{ runner.temp }}/wb-switch-test-home
+
+      # One-shot CLI 与 npm 入口也必须覆盖三平台。server 测试只需 SPA 占位，
+      # 真正前端构建与 Tauri 检查仍由 lint job 完成。
+      - name: Prepare server test assets
+        run: |
+          node -e "const fs = require('node:fs'); fs.mkdirSync('dist', {recursive:true}); fs.writeFileSync('dist/index.html', '<!doctype html><title>CLI test fixture</title>');"
+
+      - name: CLI tests
+        run: cargo test -p wb-switch-server
+
+      - name: npm launcher tests
+        run: node --test npm/tests/cli-launcher.test.cjs
 
       # linux 专属 cfg 分支只在 ubuntu 上展开（macOS 侧由 lint job 覆盖）。
       # rust-embed 要求 #[folder] 目录存在，先建 dist 占位（前端产物由 build.yml 产出）。

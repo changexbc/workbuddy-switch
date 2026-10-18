@@ -81,9 +81,9 @@ pub fn get_accounts() -> Value {
 /// 避免在账号页挂载刷新时阻塞主线程造成页面卡顿。
 #[tauri::command]
 pub async fn get_codebuddy_cli_status() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(codebuddy_cli::status)
+    tauri::async_runtime::spawn_blocking(codebuddy_cli::status_consistent)
         .await
-        .map_err(|error| format!("查询 CodeBuddy CLI 状态失败: {error}"))
+        .map_err(|error| format!("查询 CodeBuddy CLI 状态失败: {error}"))?
 }
 
 /// POST /api/codebuddy-cli/install-helper —— 显式安装/升级 CLI helper。
@@ -439,13 +439,7 @@ pub async fn detect_codebuddy_ide_account() -> Result<Value, String> {
 /// DELETE /api/delete —— 删除账号。
 #[tauri::command]
 pub fn delete_account(account_id: String) -> Result<Value, String> {
-    let mut accounts = account::load_accounts();
-    let before = accounts.len();
-    accounts.retain(|a| a.get("id").and_then(|v| v.as_str()) != Some(account_id.as_str()));
-    if accounts.len() == before {
-        return Err("账号不存在".to_string());
-    }
-    account::save_accounts(&accounts).map_err(|e| e.to_string())?;
+    account::delete_account(&account_id)?;
     Ok(json!({ "ok": true }))
 }
 
@@ -1210,6 +1204,9 @@ pub fn get_rotate_logs() -> Value {
 pub async fn refresh_account_token(account_id: String) -> Result<Value, String> {
     let acc = account::find_account(&account_id).ok_or("账号不存在")?;
     let fresh = refresh::refresh_account_token(acc).await;
+    if let Some(error) = refresh::refresh_failure(&fresh) {
+        return Err(error.to_string());
+    }
     Ok(account::account_meta(&fresh))
 }
 

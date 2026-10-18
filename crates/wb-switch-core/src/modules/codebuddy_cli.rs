@@ -345,49 +345,58 @@ fn current_cli_variant(accounts: &[Value], state: &Value) -> Option<WbVariant> {
     accounts.get(active.0).map(WbVariant::from_account)
 }
 
-fn list_codebuddy_cli_pids() -> Vec<u32> {
+#[cfg(target_os = "windows")]
+const WINDOWS_CLI_PROCESS_FILTER: &str = "Where-Object { \
+      $_.ProcessId -ne $PID -and $_.CommandLine -and ( \
+        $_.CommandLine -like '*@tencent-ai/codebuddy-code*' -or \
+        $_.CommandLine -like '*codebuddy-code*dist-server*' -or \
+        $_.CommandLine -like '*\\bin\\codebuddy*' -or \
+        $_.CommandLine -like '*cbc-prewarm*' -or \
+        $_.CommandLine -like '*codebuddy.cmd*' \
+      ) \
+    }";
+
+#[cfg(target_os = "windows")]
+fn windows_cli_pid_query() -> String {
+    format!("Get-CimInstance Win32_Process -ErrorAction Stop | {WINDOWS_CLI_PROCESS_FILTER} | ForEach-Object {{ $_.ProcessId }}")
+}
+
+fn list_codebuddy_cli_pids() -> Result<Vec<u32>, String> {
     let self_pid = std::process::id();
     #[cfg(target_os = "macos")]
     {
-        let patterns = [
-            "@tencent-ai/codebuddy-code".to_string(),
-            "cbc-prewarm".to_string(),
-            "/bin/codebuddy".to_string(),
-        ];
-        process::macos_rows_by_patterns(&patterns)
-            .into_iter()
-            .filter(|(pid, args)| *pid != self_pid && is_codebuddy_cli_process_args(args))
-            .map(|(pid, _)| pid)
-            .collect()
+        let output = process::run_cmd_timeout("ps", &["-axo", "pid=,command="], 5)
+            .ok_or_else(|| process_scan_error("读取 CLI 进程列表失败或超时"))?;
+        if !output.status.success() {
+            return Err(process_scan_error("系统拒绝读取 CLI 进程列表"));
+        }
+        parse_macos_cli_pid_rows(&String::from_utf8_lossy(&output.stdout), self_pid)
     }
     #[cfg(target_os = "windows")]
     {
-        let script = "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | \
-             Where-Object { \
-               $_.CommandLine -and ( \
-                 $_.CommandLine -like '*@tencent-ai/codebuddy-code*' -or \
-                 $_.CommandLine -like '*codebuddy-code*dist-server*' -or \
-                 $_.CommandLine -like '*\\bin\\codebuddy*' -or \
-                 $_.CommandLine -like '*cbc-prewarm*' -or \
-                 $_.CommandLine -like '*codebuddy.cmd*' \
-               ) \
-             } | ForEach-Object { $_.ProcessId }";
-        let Some(stdout) = process::ps_output(script, 5) else {
-            return Vec::new();
-        };
-        return stdout
-            .lines()
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .filter(|pid| *pid != self_pid)
-            .collect();
+        let output = process::run_cmd_timeout(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &windows_cli_pid_query(),
+            ],
+            5,
+        )
+        .ok_or_else(|| process_scan_error("读取 CLI 进程列表失败或超时"))?;
+        if !output.status.success() {
+            return Err(process_scan_error("系统拒绝读取 CLI 进程列表"));
+        }
+        parse_cli_pid_rows(&String::from_utf8_lossy(&output.stdout), self_pid)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut pids = Vec::new();
-        let Ok(entries) = std::fs::read_dir("/proc") else {
-            return pids;
-        };
-        for entry in entries.flatten() {
+        let entries =
+            std::fs::read_dir("/proc").map_err(|_| process_scan_error("无法读取 CLI 进程目录"))?;
+        for entry in entries {
+            let entry = entry.map_err(|_| process_scan_error("无法读取 CLI 进程目录项"))?;
             let pid: u32 = match entry.file_name().to_string_lossy().parse() {
                 Ok(pid) => pid,
                 Err(_) => continue,
@@ -405,8 +414,40 @@ fn list_codebuddy_cli_pids() -> Vec<u32> {
                 pids.push(pid);
             }
         }
-        pids
+        Ok(pids)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn parse_cli_pid_rows(text: &str, self_pid: u32) -> Result<Vec<u32>, String> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.trim()
+                .parse::<u32>()
+                .map_err(|_| process_scan_error("CLI 进程列表格式错误"))
+        })
+        .filter(|pid| match pid {
+            Ok(pid) => *pid != self_pid,
+            Err(_) => true,
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_cli_pid_rows(text: &str, self_pid: u32) -> Result<Vec<u32>, String> {
+    let mut pids = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let line = line.trim_start();
+        let (pid, args) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        let pid = pid
+            .parse::<u32>()
+            .map_err(|_| process_scan_error("CLI 进程列表格式错误"))?;
+        if pid != self_pid && is_codebuddy_cli_process_args(args) {
+            pids.push(pid);
+        }
+    }
+    Ok(pids)
 }
 
 fn terminate_codebuddy_cli_pids(pids: &[u32]) {
@@ -467,13 +508,201 @@ fn terminate_codebuddy_cli_pids(pids: &[u32]) {
     }
 }
 
-fn close_running_codebuddy_cli() -> (bool, usize) {
-    let pids = list_codebuddy_cli_pids();
+fn process_scan_error(reason: &str) -> String {
+    format!("PROCESS_SCAN_FAILED: 无法枚举正在运行的 CodeBuddy CLI 进程（{reason}），已取消切换；请检查进程查询权限后重试")
+}
+
+/// A process inventory contains only IDs and creation times. In particular,
+/// command lines (which can contain prompts or credentials) never leave the
+/// system query used to identify CLI processes.
+#[derive(Debug, Clone)]
+struct CliProcessInfo {
+    pid: u32,
+    parent_pid: Option<u32>,
+    started_at: Option<i64>,
+    matched: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn windows_cli_inventory_query() -> String {
+    format!(
+        "$all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate,CommandLine -ErrorAction Stop); \
+         $matched = @($all | {WINDOWS_CLI_PROCESS_FILTER} | ForEach-Object {{ [uint32]$_.ProcessId }}); \
+         $affected = [System.Collections.Generic.HashSet[uint32]]::new(); \
+         foreach ($processId in $matched) {{ [void]$affected.Add($processId) }}; \
+         $expanded = $true; \
+         while ($expanded) {{ \
+           $expanded = $false; \
+           foreach ($process in $all) {{ \
+             if ($affected.Contains([uint32]$process.ParentProcessId) -and $affected.Add([uint32]$process.ProcessId)) {{ $expanded = $true }} \
+           }} \
+         }}; \
+         $rows = @($all | Where-Object {{ $affected.Contains([uint32]$_.ProcessId) }} | ForEach-Object {{ \
+           $start = $null; \
+           if ($_.CreationDate) {{ try {{ $start = $_.CreationDate.ToUniversalTime().ToString('o') }} catch {{}} }}; \
+           @{{ pid = [uint32]$_.ProcessId; parentPid = [uint32]$_.ParentProcessId; \
+             startedAtUtc = $start; matched = $matched -contains [uint32]$_.ProcessId }} \
+         }}); ConvertTo-Json -InputObject $rows -Compress"
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_cli_inventory(text: &str, self_pid: u32) -> Result<Vec<CliProcessInfo>, String> {
+    let rows: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|_| process_scan_error("CLI 进程清单不是有效 JSON"))?;
+    let rows = rows
+        .as_array()
+        .ok_or_else(|| process_scan_error("CLI 进程清单格式错误"))?;
+    let mut processes = Vec::with_capacity(rows.len());
+    for row in rows {
+        let pid = row["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .ok_or_else(|| process_scan_error("CLI 进程 ID 格式错误"))?;
+        let matched = row["matched"]
+            .as_bool()
+            .ok_or_else(|| process_scan_error("CLI 进程匹配标记格式错误"))?;
+        if pid == self_pid {
+            continue;
+        }
+        let started_at = row["startedAtUtc"]
+            .as_str()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.timestamp_millis());
+        processes.push(CliProcessInfo {
+            pid,
+            parent_pid: row["parentPid"]
+                .as_u64()
+                .and_then(|pid| u32::try_from(pid).ok()),
+            started_at,
+            matched,
+        });
+    }
+    Ok(processes)
+}
+
+fn switch_process_preview_from_inventory(
+    processes: &[CliProcessInfo],
+    closes_process_tree: bool,
+    observed_at: i64,
+) -> Value {
+    use std::collections::BTreeSet;
+    let roots: BTreeSet<u32> = processes
+        .iter()
+        .filter(|process| process.matched)
+        .map(|process| process.pid)
+        .collect();
+    let mut affected = roots.clone();
+    if closes_process_tree {
+        loop {
+            let previous_len = affected.len();
+            for process in processes {
+                if process
+                    .parent_pid
+                    .is_some_and(|pid| affected.contains(&pid))
+                {
+                    affected.insert(process.pid);
+                }
+            }
+            if affected.len() == previous_len {
+                break;
+            }
+        }
+    }
+    let mut rows: Vec<_> = processes
+        .iter()
+        .filter(|process| affected.contains(&process.pid))
+        .map(|process| {
+            json!({
+                "pid": process.pid,
+                "parentPid": process.parent_pid,
+                "startedAt": process.started_at,
+                "startedAtUtc": process.started_at.and_then(chrono::DateTime::from_timestamp_millis).map(|time| time.to_rfc3339()),
+                "kind": if process.matched { "codebuddy-cli" } else { "descendant" },
+                "sessionState": "unknown",
+                "sessionActivityKnown": false,
+            })
+        })
+        .collect();
+    rows.sort_unstable_by_key(|row| row["pid"].as_u64());
+    rows.dedup_by_key(|row| row["pid"].as_u64());
+    json!({
+        "observedAt": observed_at,
+        "processCount": rows.len(),
+        "matchedProcessCount": roots.len(),
+        "processes": rows,
+        "closesProcessTree": closes_process_tree,
+        "sessionState": "unknown",
+        "sessionActivityKnown": false,
+        "autoReopened": false,
+        "snapshotOnly": true,
+        "note": "Read-only process snapshot. Session activity is unknown. Switch scans again before closing; processes may start or exit after this preview.",
+    })
+}
+
+/// Preview the same process selection used by switching, without reading CLI
+/// history/settings, modifying files, closing a process, or validating tokens.
+/// Windows taskkill /T additionally closes descendants in the captured tree.
+/// Creation time is null when the OS does not supply a reliable value.
+pub fn switch_process_preview() -> Result<Value, String> {
+    #[cfg(target_os = "windows")]
+    let processes = {
+        let output = process::run_cmd_timeout(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &windows_cli_inventory_query(),
+            ],
+            // Starting Windows PowerShell/CIM can exceed five seconds under
+            // load. The one-shot host emits progress while this bounded query
+            // runs; a timeout remains an explicit failure, never an empty list.
+            20,
+        )
+        .ok_or_else(|| process_scan_error("读取 CLI 进程清单失败或超时"))?;
+        if !output.status.success() {
+            return Err(process_scan_error("系统拒绝读取 CLI 进程清单"));
+        }
+        parse_cli_inventory(&String::from_utf8_lossy(&output.stdout), std::process::id())?
+    };
+    #[cfg(not(target_os = "windows"))]
+    let processes = list_codebuddy_cli_pids()?
+        .into_iter()
+        .map(|pid| CliProcessInfo {
+            pid,
+            parent_pid: None,
+            started_at: None,
+            matched: true,
+        })
+        .collect::<Vec<_>>();
+    Ok(switch_process_preview_from_inventory(
+        &processes,
+        cfg!(windows),
+        now_ms(),
+    ))
+}
+
+fn close_codebuddy_cli_pids(pids: &[u32]) -> (bool, usize) {
     if pids.is_empty() {
         return (false, 0);
     }
-    terminate_codebuddy_cli_pids(&pids);
+    terminate_codebuddy_cli_pids(pids);
     (true, pids.len())
+}
+
+fn add_switch_side_effects_receipt(result: &mut Value, closed_count: usize) {
+    // The legacy count is the captured list size, not an exit-status witness.
+    // Preserve it for existing GUI consumers while stating its limits explicitly.
+    result["closedProcessCountScope"] = json!("matched-cli-processes");
+    result["closeAttemptedProcessCount"] = json!(closed_count);
+    result["processTerminationVerified"] = json!(false);
+    result["closesProcessTree"] = json!(cfg!(windows));
+    result["autoReopened"] = json!(false);
+    result["backupCreated"] = json!(false);
+    result["backupPath"] = Value::Null;
+    result["backupId"] = Value::Null;
+    result["backupReason"] = json!("Switch does not create a persistent backup; previous state and settings are held in memory for rollback during this operation.");
 }
 
 /// 切换结果文案（唯一构造点）：**始终**说明是否关闭了正在运行的 CLI。
@@ -1091,6 +1320,20 @@ pub fn sync_windows_env_for_account(
     account_value: &Value,
     previous_access_token: Option<&str>,
 ) -> Result<bool, String> {
+    let guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    let changed =
+        sync_windows_env_for_account_locked(account_value, previous_access_token, &guard)?;
+    if changed {
+        crate::modules::state_lock::signal_auth_change(&guard);
+    }
+    Ok(changed)
+}
+
+pub(crate) fn sync_windows_env_for_account_locked(
+    account_value: &Value,
+    previous_access_token: Option<&str>,
+    _guard: &crate::modules::state_lock::StateLock,
+) -> Result<bool, String> {
     if !cfg!(windows) {
         return Ok(false);
     }
@@ -1110,6 +1353,13 @@ pub fn sync_windows_env_for_account(
     let account_id = account_value.get("id").and_then(Value::as_str);
     if account_id != Some(active_id.as_str()) {
         return Ok(false);
+    }
+    if accounts
+        .iter()
+        .find(|a| a["id"] == account_value["id"])
+        .is_some_and(|latest| latest["access_token"] != account_value["access_token"])
+    {
+        return Err("账号凭据已更新，拒绝把过期快照写回 CLI 配置".to_string());
     }
     let Some(updated_token) = account_value.get("access_token").and_then(Value::as_str) else {
         return Ok(false);
@@ -1247,7 +1497,15 @@ pub fn status() -> Value {
         "activeAccountVariant": active.as_ref().and_then(|(index, _)| accounts.get(*index)).map(WbVariant::from_account).map(WbVariant::as_str),
         "accountCount": accounts.len(),
         "statePath": state_path().to_string_lossy(),
+        "lastSwitchAt": state.get("updatedAt").and_then(Value::as_i64),
     })
+}
+
+/// Public hosts should read a coherent account/settings/state snapshot. Internal
+/// transactions already holding the authentication guard use status() directly.
+pub fn status_consistent() -> Result<Value, String> {
+    let _guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    Ok(status())
 }
 
 fn install_env_auth() -> Result<Value, String> {
@@ -1288,6 +1546,13 @@ fn install_env_auth() -> Result<Value, String> {
 /// 兼容旧版：早期 helper 是 `helper.sh`（bash + python3），若当前配置的是
 /// wb-switch 的旧 helper，允许直接原地升级，并清理旧文件。
 pub fn install_helper() -> Result<Value, String> {
+    let guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    let result = install_helper_locked()?;
+    crate::modules::state_lock::signal_auth_change(&guard);
+    Ok(result)
+}
+
+fn install_helper_locked() -> Result<Value, String> {
     if cfg!(windows) {
         return install_env_auth();
     }
@@ -1428,6 +1693,40 @@ pub fn install_helper() -> Result<Value, String> {
 /// - 关闭失败 / 没有进程都不阻断切换（只影响返回文案里的数量）；
 /// - 关闭**不可回滚**：后续任一阶段失败时，错误里都会说明 CLI 已被关闭。
 pub fn switch_active_account(account_id: &str) -> Result<Value, String> {
+    let guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    let result = switch_active_account_locked(account_id)?;
+    crate::modules::state_lock::signal_auth_change(&guard);
+    Ok(result)
+}
+
+/// Automatic decisions may be stale by the time they acquire the write lock.
+/// Recheck the account and live-session gate inside the authentication transaction.
+pub(crate) fn switch_for_rotation(
+    account_id: &str,
+    expected_active: Option<&str>,
+    expected_switch_at: Option<i64>,
+) -> Result<Option<Value>, String> {
+    let guard = crate::modules::state_lock::try_auth().map_err(|e| e.to_string())?;
+    let current = status();
+    if current["lastSwitchAt"].as_i64() != expected_switch_at
+        || !rotation_precondition(
+            expected_active,
+            current["activeAccountId"].as_str(),
+            has_live_session(now_ms()),
+        )
+    {
+        return Ok(None);
+    }
+    let result = switch_active_account_locked(account_id)?;
+    crate::modules::state_lock::signal_auth_change(&guard);
+    Ok(Some(result))
+}
+
+fn rotation_precondition(expected: Option<&str>, actual: Option<&str>, live_session: bool) -> bool {
+    expected == actual && !live_session
+}
+
+fn switch_active_account_locked(account_id: &str) -> Result<Value, String> {
     if cfg!(windows) {
         ensure_no_process_env_override()?;
     }
@@ -1459,6 +1758,10 @@ pub fn switch_active_account(account_id: &str) -> Result<Value, String> {
         None
     };
 
+    // Query once before mutation and close that same captured list. A failed
+    // query must not be mistaken for an absence of running CLI sessions.
+    let cli_pids = list_codebuddy_cli_pids()?;
+
     // 目录先建好：写 state 是"关进程之后"的事，那一段里不再留失败点。
     std::fs::create_dir_all(rotate_dir()).map_err(|_| {
         if cfg!(windows) {
@@ -1477,8 +1780,9 @@ pub fn switch_active_account(account_id: &str) -> Result<Value, String> {
     state["updatedAt"] = json!(switched_at);
     let content = serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?;
     // 顺序关键点：关闭在前、写 state 在后（用例固定这个顺序）。
-    let (cli_closed, closed_count) =
-        close_then_write_state(&state_path(), &content, close_running_codebuddy_cli)?;
+    let (cli_closed, closed_count) = close_then_write_state(&state_path(), &content, || {
+        close_codebuddy_cli_pids(&cli_pids)
+    })?;
 
     if let Some((settings, previous_settings, settings_value, token)) = windows_settings {
         if let Err(error) = commit_settings_env_update(
@@ -1506,7 +1810,7 @@ pub fn switch_active_account(account_id: &str) -> Result<Value, String> {
 
     let region_changed = previous_variant != Some(variant);
 
-    Ok(json!({
+    let mut result = json!({
         "ok": true,
         "configured": true,
         "synced": true,
@@ -1518,12 +1822,179 @@ pub fn switch_active_account(account_id: &str) -> Result<Value, String> {
         "cliClosed": cli_closed,
         "closedProcessCount": closed_count,
         "message": region_switch_message(variant, region_changed, closed_count),
-    }))
+    });
+    add_switch_side_effects_receipt(&mut result, closed_count);
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn switch_receipt_never_fabricates_process_exit_or_persistent_backup() {
+        for count in [0, 3] {
+            let mut result = json!({"closedProcessCount": count, "cliClosed": count > 0});
+            add_switch_side_effects_receipt(&mut result, count);
+            assert_eq!(result["closedProcessCount"], count);
+            assert_eq!(result["cliClosed"], count > 0);
+            assert_eq!(result["closeAttemptedProcessCount"], count);
+            assert_eq!(result["processTerminationVerified"], false);
+            assert_eq!(result["autoReopened"], false);
+            assert_eq!(result["backupCreated"], false);
+            assert!(result["backupPath"].is_null());
+            assert!(result["backupId"].is_null());
+        }
+    }
+
+    #[test]
+    fn preview_includes_windows_descendants_and_never_claims_idle_sessions() {
+        let inventory = parse_cli_inventory(
+            r#"[
+              {"pid":12,"parentPid":1,"startedAtUtc":"2026-10-13T03:04:05+00:00","matched":true,"commandLine":"SECRET_PROMPT"},
+              {"pid":20,"parentPid":12,"startedAtUtc":null,"matched":false},
+              {"pid":30,"parentPid":20,"startedAtUtc":"unavailable","matched":false},
+              {"pid":40,"parentPid":1,"startedAtUtc":null,"matched":false},
+              {"pid":99,"parentPid":1,"startedAtUtc":null,"matched":true}
+            ]"#,
+            99,
+        )
+        .unwrap();
+        let preview = switch_process_preview_from_inventory(&inventory, true, 1234);
+        assert_eq!(preview["processCount"], 3);
+        assert_eq!(preview["matchedProcessCount"], 1);
+        assert_eq!(preview["closesProcessTree"], true);
+        assert_eq!(preview["processes"][0]["pid"], 12);
+        assert!(preview["processes"][0]["startedAt"].is_i64());
+        assert_eq!(preview["processes"][1]["kind"], "descendant");
+        assert!(preview["processes"][1]["startedAt"].is_null());
+        assert!(preview["processes"][2]["startedAtUtc"].is_null());
+        assert!(preview["processes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["sessionState"] == "unknown" && row["sessionActivityKnown"] == false));
+        assert_eq!(preview["autoReopened"], false);
+        assert!(!preview.to_string().contains("SECRET_PROMPT"));
+        assert!(!preview.to_string().contains("commandLine"));
+    }
+
+    #[test]
+    fn preview_on_unix_only_lists_direct_cli_processes_with_unknown_start_times() {
+        let processes = vec![
+            CliProcessInfo {
+                pid: 12,
+                parent_pid: None,
+                started_at: None,
+                matched: true,
+            },
+            CliProcessInfo {
+                pid: 20,
+                parent_pid: Some(12),
+                started_at: Some(1234),
+                matched: false,
+            },
+        ];
+        let preview = switch_process_preview_from_inventory(&processes, false, 1234);
+        assert_eq!(preview["processCount"], 1);
+        assert_eq!(preview["closesProcessTree"], false);
+        assert!(preview["processes"][0]["parentPid"].is_null());
+        assert!(preview["processes"][0]["startedAt"].is_null());
+        assert_eq!(preview["sessionState"], "unknown");
+    }
+
+    #[test]
+    fn preview_rejects_corrupt_inventory_instead_of_reporting_no_processes() {
+        for text in [
+            "broken",
+            "{}",
+            r#"[{"pid":"12","matched":true}]"#,
+            r#"[{"pid":12,"matched":null}]"#,
+            r#"[{"pid":4294967296,"matched":true}]"#,
+        ] {
+            assert!(parse_cli_inventory(text, 99)
+                .unwrap_err()
+                .starts_with("PROCESS_SCAN_FAILED:"));
+        }
+        let preview = switch_process_preview_from_inventory(&[], true, 1234);
+        assert_eq!(preview["processCount"], 0);
+        assert_eq!(preview["sessionActivityKnown"], false);
+        assert_eq!(preview["snapshotOnly"], true);
+    }
+
+    #[test]
+    fn preview_deduplicates_matches_and_handles_parent_cycles() {
+        let rows = parse_cli_inventory(
+            r#"[
+              {"pid":12,"parentPid":20,"matched":true},
+              {"pid":12,"parentPid":20,"matched":true},
+              {"pid":20,"parentPid":12,"matched":false}
+            ]"#,
+            99,
+        )
+        .unwrap();
+        let preview = switch_process_preview_from_inventory(&rows, true, 1234);
+        assert_eq!(preview["processCount"], 2);
+        assert_eq!(preview["matchedProcessCount"], 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_preview_query_returns_only_safe_metadata_from_a_mock_inventory() {
+        let mock = "function Get-CimInstance { \
+          [pscustomobject]@{ ProcessId=12; ParentProcessId=1; CommandLine='node @tencent-ai/codebuddy-code SECRET_PROMPT'; CreationDate=[datetime]::Parse('2026-10-13T03:04:05Z') }; \
+          [pscustomobject]@{ ProcessId=20; ParentProcessId=12; CommandLine='worker SECRET_TOKEN'; CreationDate=$null }; \
+          [pscustomobject]@{ ProcessId=40; ParentProcessId=1; CommandLine='unrelated'; CreationDate=$null }; \
+          [pscustomobject]@{ ProcessId=$PID; ParentProcessId=1; CommandLine='codebuddy.cmd scanner'; CreationDate=$null }; \
+        }; ";
+        let text = process::ps_output(&format!("{mock}{}", windows_cli_inventory_query()), 10)
+            .expect("mock process inventory runs");
+        assert!(!text.contains("SECRET_PROMPT"));
+        assert!(!text.contains("SECRET_TOKEN"));
+        assert!(!text.contains("CommandLine"));
+        let rows = parse_cli_inventory(&text, std::process::id()).unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "Only affected processes should be serialized"
+        );
+        let preview = switch_process_preview_from_inventory(&rows, true, 1234);
+        assert_eq!(preview["processCount"], 2);
+        assert_eq!(preview["matchedProcessCount"], 1);
+        assert_eq!(preview["processes"][0]["pid"], 12);
+        assert!(preview["processes"][0]["startedAt"].is_i64());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_process_scan_excludes_the_scanner_even_when_its_arguments_match() {
+        let stdout = process::ps_output(
+            &format!(
+                "{}; Write-Output ('scanner:' + $PID)",
+                windows_cli_pid_query()
+            ),
+            10,
+        )
+        .expect("PowerShell scanner should execute");
+        let scanner = stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("scanner:")?.parse::<u32>().ok())
+            .expect("scanner reports its own PID");
+        assert!(
+            !stdout
+                .lines()
+                .filter_map(|line| line.trim().parse::<u32>().ok())
+                .any(|pid| pid == scanner),
+            "The scanner is not a CodeBuddy CLI session"
+        );
+    }
+
+    #[test]
+    fn stale_automatic_rotation_cannot_override_a_manual_switch_or_new_session() {
+        assert!(rotation_precondition(Some("a"), Some("a"), false));
+        assert!(!rotation_precondition(Some("a"), Some("b"), false));
+        assert!(!rotation_precondition(Some("a"), Some("a"), true));
+    }
     use std::fs;
 
     fn helper_test_dir() -> PathBuf {
