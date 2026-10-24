@@ -1,6 +1,6 @@
 //! 本地 WorkBuddy / WorkBuddy 国际版 / CodeBuddy CLI / CodeBuddy IDE Token 统计。
 //!
-//! 这个模块是统计数据的唯一归属：日志只在这里解码、去重和按时间聚合，
+//! 这个模块是统计数据的唯一归属：用量日志只在这里解码、去重和按时间聚合，
 //! Tauri 与 HTTP 层只负责转发结果。响应只包含聚合数字和脱敏标识，不返回
 //! 消息正文、arguments 或认证信息。
 //!
@@ -12,11 +12,12 @@
 
 use chrono::{Datelike, Local, Timelike};
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use crate::modules::variant::WbVariant;
+use crate::modules::{account, limits};
 
 /// 明细中最多返回的请求条数（响应窗口）。
 const REQUEST_WINDOW: usize = 500;
@@ -408,6 +409,70 @@ fn total_value(value: &Value) -> u64 {
 }
 
 #[derive(Default)]
+struct AccountTotals {
+    total: Totals,
+    daily: HashMap<String, Totals>,
+    daily_by_model: HashMap<String, HashMap<String, Totals>>,
+}
+
+impl AccountTotals {
+    fn add(&mut self, usage: Usage, timestamp: Option<i64>, model: &str) {
+        self.total.add(usage);
+        if let Some(day) = timestamp.and_then(chrono::DateTime::from_timestamp_millis) {
+            let day = day.with_timezone(&Local).format("%Y-%m-%d").to_string();
+            self.daily.entry(day.clone()).or_default().add(usage);
+            self.daily_by_model
+                .entry(model.to_string())
+                .or_default()
+                .entry(day)
+                .or_default()
+                .add(usage);
+        }
+    }
+
+    fn into_value(self, account_id: Option<String>, names: &HashMap<String, String>) -> Value {
+        let account_name = account_id
+            .as_ref()
+            .and_then(|id| names.get(id))
+            .cloned()
+            .unwrap_or_else(|| "未归属".to_string());
+        json!({
+            "accountId": account_id,
+            "accountName": account_name,
+            "summary": self.total.value(),
+            "daily": groups(self.daily),
+            "dailyByModel": model_daily_values(self.daily_by_model),
+        })
+    }
+}
+
+fn model_daily_values(daily: HashMap<String, HashMap<String, Totals>>) -> Map<String, Value> {
+    daily
+        .into_iter()
+        .map(|(model, points)| (model, Value::Array(groups(points))))
+        .collect()
+}
+
+/// Metadata kept alongside the existing dedupe fingerprint, never message bodies.
+/// A conflicting or missing owner is absorbing: copies cannot relabel history.
+struct AttributedUsage {
+    usage: Usage,
+    timestamp: Option<i64>,
+    model: String,
+    account_id: Option<String>,
+}
+
+type UsageFingerprint = (i64, u64, u64, u64, u64, String);
+
+impl AttributedUsage {
+    fn merge_owner(&mut self, account_id: Option<&str>) {
+        if self.account_id.as_deref() != account_id {
+            self.account_id = None;
+        }
+    }
+}
+
+#[derive(Default)]
 struct SourceCollector {
     total: Totals,
     models: HashMap<String, Totals>,
@@ -422,9 +487,37 @@ struct SourceCollector {
     session_key_counts: HashMap<String, usize>,
     requests: Vec<RequestRow>,
     collect_requests: bool,
+    accounts: HashMap<Option<String>, AccountTotals>,
+    account_names: HashMap<String, String>,
 }
 
 impl SourceCollector {
+    fn with_accounts(accounts: &[Value]) -> Self {
+        Self {
+            account_names: accounts
+                .iter()
+                .filter_map(|acc| {
+                    Some((
+                        account::get_str(acc, "id")?,
+                        account::account_display_name(acc),
+                    ))
+                })
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    fn add_account_usage(&mut self, record: AttributedUsage) {
+        let account_id = record
+            .account_id
+            .filter(|id| self.account_names.contains_key(id));
+        self.accounts.entry(account_id).or_default().add(
+            record.usage,
+            record.timestamp,
+            &record.model,
+        );
+    }
+
     fn note_parse_error(&mut self) {
         self.parse_errors = self.parse_errors.saturating_add(1);
     }
@@ -507,11 +600,18 @@ impl SourceCollector {
     }
 
     fn into_value(mut self, name: &str, files_scanned: usize) -> Value {
-        let daily_by_model = self
-            .daily_by_model
+        let mut accounts: Vec<_> = self.accounts.into_iter().collect();
+        // Stable identities/order, independent of current usage or hash iteration order.
+        accounts.sort_by(|(left, _), (right, _)| match (left, right) {
+            (Some(left), Some(right)) => left.cmp(right),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        let accounts: Vec<_> = accounts
             .into_iter()
-            .map(|(model, points)| (model, Value::Array(groups(points))))
-            .collect::<Map<String, Value>>();
+            .map(|(id, totals)| totals.into_value(id, &self.account_names))
+            .collect();
         let mut value = json!({
             "source": name,
             "summary": self.total.value(),
@@ -519,15 +619,16 @@ impl SourceCollector {
             "projects": groups(self.projects),
             "sessions": session_groups(self.sessions),
             "daily": groups(self.daily),
-            "dailyByModel": daily_by_model,
+            "dailyByModel": model_daily_values(self.daily_by_model),
+            "accounts": accounts,
             "hours": groups(self.hours),
             "filesScanned": files_scanned,
             "parseErrors": self.parse_errors,
             "coverageStartAt": self.coverage_start_at,
             "coverageEndAt": self.coverage_end_at,
         });
-        // Only detail sources take the new key; every other source keeps its
-        // previous response shape byte for byte.
+        // Request rows remain limited to detail sources; account aggregates
+        // above always cover the full deduplicated history, not this window.
         if self.collect_requests {
             self.requests
                 .sort_by_key(|row| std::cmp::Reverse(row.timestamp));
@@ -542,6 +643,7 @@ impl SourceCollector {
 /// `detail` additionally keeps a bounded window of per-call request rows; both
 /// outputs share the same decode, cutoff, dedupe, and `subagents`-exclusion
 /// pipeline so a detail row can never disagree with the aggregate totals.
+#[cfg(test)]
 fn source(root: PathBuf, name: &str, cutoff: Option<i64>, detail: bool) -> Value {
     source_from_roots(std::slice::from_ref(&root), name, cutoff, detail)
 }
@@ -550,7 +652,19 @@ fn source(root: PathBuf, name: &str, cutoff: Option<i64>, detail: bool) -> Value
 ///
 /// 国际版数据根与国内版不同构（实测无 `projects/`、只有 `sessions/`），因此按
 /// 「存在的根」探测；一个都不存在时返回空集且不报错（前端显示空状态）。
+#[cfg(test)]
 fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail: bool) -> Value {
+    source_from_roots_with_accounts(roots, name, cutoff, detail, &[], |_| HashMap::new())
+}
+
+fn source_from_roots_with_accounts(
+    roots: &[PathBuf],
+    name: &str,
+    cutoff: Option<i64>,
+    detail: bool,
+    accounts: &[Value],
+    resolve_sessions: impl FnOnce(&BTreeSet<String>) -> HashMap<String, String>,
+) -> Value {
     let mut paths: Vec<(PathBuf, PathBuf)> = Vec::new();
     for root in roots {
         let mut found = Vec::new();
@@ -559,8 +673,13 @@ fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail:
     }
     let mut collector = SourceCollector {
         collect_requests: detail,
-        ..SourceCollector::default()
+        ..SourceCollector::with_accounts(accounts)
     };
+    let session_ids = paths
+        .iter()
+        .filter_map(|(_, path)| path.file_stem()?.to_str().map(str::to_string))
+        .collect();
+    let session_accounts = resolve_sessions(&session_ids);
 
     // Copied/forked sessions replay the parent history (including usage
     // records with their original timestamps) into their own JSONL, so the
@@ -575,7 +694,7 @@ fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail:
             .map(|duration| duration.as_millis() as u64)
             .unwrap_or(u64::MAX)
     });
-    let mut seen: HashSet<(i64, u64, u64, u64, u64, String)> = HashSet::new();
+    let mut seen: HashMap<UsageFingerprint, Option<String>> = HashMap::new();
 
     for (root, path) in &paths {
         let session_id = path
@@ -585,6 +704,7 @@ fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail:
             .unwrap_or("未知会话")
             .to_string();
         let fallback_project = project_name(root, path);
+        let account_id = session_accounts.get(&session_id);
         let Ok(file) = std::fs::File::open(path) else {
             collector.note_parse_error();
             continue;
@@ -633,17 +753,37 @@ fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail:
             let ts = timestamp(&value);
             let model_name = model(&value);
             let duplicate = ts.is_some_and(|ts| {
-                !seen.insert((
+                let fingerprint = (
                     ts,
                     usage.input,
                     usage.output,
                     usage.read,
                     usage.write,
                     model_name.clone(),
-                ))
+                );
+                match seen.entry(fingerprint) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(account_id.cloned());
+                        false
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if entry.get().as_ref() != account_id {
+                            entry.insert(None);
+                        }
+                        true
+                    }
+                }
             });
             if duplicate {
                 continue;
+            }
+            if ts.is_none() {
+                collector.add_account_usage(AttributedUsage {
+                    usage,
+                    timestamp: None,
+                    model: model_name.clone(),
+                    account_id: account_id.cloned(),
+                });
             }
             let project = record_project(&value, &fallback_project);
             if session_project.is_none() {
@@ -685,6 +825,19 @@ fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail:
         );
     }
 
+    for ((timestamp, input, output, read, write, model), account_id) in seen {
+        collector.add_account_usage(AttributedUsage {
+            usage: Usage {
+                input,
+                output,
+                read,
+                write,
+            },
+            timestamp: Some(timestamp),
+            model,
+            account_id,
+        });
+    }
     collector.into_value(name, paths.len())
 }
 
@@ -948,15 +1101,25 @@ fn ide_file_weight(path: &Path) -> Option<(String, usize, u64)> {
 /// `seen` 按请求指纹去重、跨副本共享：副本重放父历史时带的是原始时间戳，所以并集
 /// 既不会把历史日期重复抬高，也不会丢掉各副本复制后各自追加的请求。指纹缺失的记录
 /// 一律计入。
+struct IdeRequestContext<'a> {
+    model: &'a str,
+    project: &'a str,
+    account_id: Option<&'a str>,
+}
+
 fn collect_ide_requests(
     collector: &mut SourceCollector,
     requests: &[Value],
     cutoff: Option<i64>,
-    model_name: &str,
-    project: &str,
-    seen: &mut HashSet<String>,
+    context: IdeRequestContext<'_>,
+    seen: &mut HashMap<String, AttributedUsage>,
     session_totals: &mut Totals,
 ) {
+    let IdeRequestContext {
+        model: model_name,
+        project,
+        account_id,
+    } = context;
     for request in requests {
         let ts = ide_request_timestamp(request);
         if cutoff.is_some_and(|minimum| ts.is_none_or(|value| value < minimum)) {
@@ -966,10 +1129,27 @@ fn collect_ide_requests(
             continue;
         };
         if let Some(fingerprint) = ide_request_fingerprint(request, &usage, ts) {
-            // 同一请求已在另一份副本里计过。
-            if !seen.insert(fingerprint) {
-                continue;
+            match seen.entry(fingerprint) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(AttributedUsage {
+                        usage,
+                        timestamp: ts,
+                        model: model_name.to_string(),
+                        account_id: account_id.map(str::to_string),
+                    });
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().merge_owner(account_id);
+                    continue;
+                }
             }
+        } else {
+            collector.add_account_usage(AttributedUsage {
+                usage,
+                timestamp: ts,
+                model: model_name.to_string(),
+                account_id: account_id.map(str::to_string),
+            });
         }
         session_totals.add(usage);
         collector.add(
@@ -983,11 +1163,41 @@ fn collect_ide_requests(
     }
 }
 
+#[cfg(test)]
 fn ide_source(
     root: PathBuf,
     name: &str,
     cutoff: Option<i64>,
     project_by_session: &HashMap<String, String>,
+) -> Value {
+    ide_source_with_accounts(root, name, cutoff, project_by_session, &[])
+}
+
+/// Only recognize the existing `<uid>/<VSCode|CodeBuddyIDE>/<uid>/history/...` layout.
+fn ide_account_id<'a>(
+    path: &Path,
+    root: &Path,
+    uid_to_account: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let relative = path.strip_prefix(root).ok()?;
+    let parts: Vec<_> = relative.iter().filter_map(|part| part.to_str()).collect();
+    if parts.len() != 7
+        || !matches!(parts[1], "VSCode" | "CodeBuddyIDE")
+        || parts[0] != parts[2]
+        || parts[3] != "history"
+        || !crate::modules::vscode_session::is_safe_uid(parts[0])
+    {
+        return None;
+    }
+    uid_to_account.get(parts[0]).map(String::as_str)
+}
+
+fn ide_source_with_accounts(
+    root: PathBuf,
+    name: &str,
+    cutoff: Option<i64>,
+    project_by_session: &HashMap<String, String>,
+    accounts: &[Value],
 ) -> Value {
     let mut paths = Vec::new();
     ide_index_files(&root, &mut paths);
@@ -1014,7 +1224,11 @@ fn ide_source(
         }
     }
 
-    let mut collector = SourceCollector::default();
+    let uid_to_account: HashMap<_, _> = accounts
+        .iter()
+        .filter_map(|acc| Some((account::get_str(acc, "uid")?, account::get_str(acc, "id")?)))
+        .collect();
+    let mut collector = SourceCollector::with_accounts(accounts);
 
     for (index, _) in paths.iter().enumerate() {
         let fingerprint = weights[index]
@@ -1045,7 +1259,7 @@ fn ide_source(
             None => std::slice::from_ref(&index),
         };
         let mut session_totals = Totals::default();
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: HashMap<String, AttributedUsage> = HashMap::new();
         for member in members {
             let Ok(text) = std::fs::read_to_string(&paths[*member]) else {
                 collector.note_parse_error();
@@ -1062,13 +1276,19 @@ fn ide_source(
                 &mut collector,
                 requests,
                 cutoff,
-                &model_name,
-                &project,
+                IdeRequestContext {
+                    model: &model_name,
+                    project: &project,
+                    account_id: ide_account_id(&paths[*member], &root, &uid_to_account),
+                },
                 &mut seen,
                 &mut session_totals,
             );
         }
 
+        for record in seen.into_values() {
+            collector.add_account_usage(record);
+        }
         collector.push_session(lead_session_id, title, project, session_totals);
     }
 
@@ -1089,23 +1309,257 @@ pub fn get_statistics(days: Option<i64>) -> Value {
     };
     let cutoff = range_days.map(|value| generated_at - value * 86_400_000);
     let ide_projects = ide_project_by_session();
+    let accounts = account::load_accounts();
     json!({
         "generatedAt": generated_at,
         "rangeDays": range_days,
         "sources": [
-            source_from_roots(&variant_source_roots(WbVariant::Cn), "workbuddy", cutoff, false),
+            source_from_roots_with_accounts(&variant_source_roots(WbVariant::Cn), "workbuddy", cutoff, false,
+                &accounts, |sessions| limits::account_by_session(WbVariant::Cn, sessions)),
             // 国际版独立 source：不与国内版混算（不同账号体系）。
-            source_from_roots(&variant_source_roots(WbVariant::Ai), "workbuddy-ai", cutoff, false),
+            source_from_roots_with_accounts(&variant_source_roots(WbVariant::Ai), "workbuddy-ai", cutoff, false,
+                &accounts, |sessions| limits::account_by_session(WbVariant::Ai, sessions)),
             // 请求明细目前只对 CodeBuddy CLI 开放（见 spec 的 requests 契约）。
-            source(home.join(".codebuddy/projects"), "codebuddy-cli", cutoff, true),
-            ide_source(
+            source_from_roots_with_accounts(&[home.join(".codebuddy/projects")], "codebuddy-cli", cutoff, true,
+                &accounts, |sessions| limits::cli_accounts_by_session(&home.join(".codebuddy/logs"), sessions, &accounts, cutoff)),
+            ide_source_with_accounts(
                 codebuddy_extension_data_dir(),
                 "codebuddy-ide",
                 cutoff,
                 &ide_projects,
+                &accounts,
             ),
         ],
     })
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+    use std::fs;
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("wb-token-accounts-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn accounts() -> Vec<Value> {
+        ["a", "b", "c"]
+            .iter()
+            .map(|id| {
+                json!({
+                    "id": id, "uid": format!("uid-{id}"), "nickname": "同名账号",
+                })
+            })
+            .collect()
+    }
+
+    fn assert_conserved(source: &Value) {
+        let accounts = source["accounts"].as_array().unwrap();
+        for field in [
+            "total",
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "uncachedInput",
+            "records",
+        ] {
+            let sum: u64 = accounts
+                .iter()
+                .map(|acc| acc["summary"][field].as_u64().unwrap())
+                .sum();
+            assert_eq!(
+                sum,
+                source["summary"][field].as_u64().unwrap(),
+                "summary {field}"
+            );
+            for point in source["daily"].as_array().unwrap() {
+                let sum: u64 = accounts
+                    .iter()
+                    .flat_map(|acc| acc["daily"].as_array().unwrap())
+                    .filter(|row| row["key"] == point["key"])
+                    .map(|row| row[field].as_u64().unwrap())
+                    .sum();
+                assert_eq!(sum, point[field].as_u64().unwrap(), "daily {field}");
+            }
+            for (model, points) in source["dailyByModel"].as_object().unwrap() {
+                for point in points.as_array().unwrap() {
+                    let sum: u64 = accounts
+                        .iter()
+                        .filter_map(|acc| acc["dailyByModel"][model].as_array())
+                        .flatten()
+                        .filter(|row| row["key"] == point["key"])
+                        .map(|row| row[field].as_u64().unwrap())
+                        .sum();
+                    assert_eq!(sum, point[field].as_u64().unwrap(), "model {model} {field}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jsonl_accounts_preserve_full_totals_before_the_detail_window() {
+        let fixture = Fixture::new();
+        let now = crate::modules::config::now_ms();
+        let record = |input: u64, ts: Option<i64>, model: &str| {
+            json!({
+                "timestamp": ts, "model": model,
+                "usage": {"input_tokens": input, "output_tokens": input / 10,
+                    "cache_read_input_tokens": input / 4, "cache_creation_input_tokens": input / 20}
+            })
+            .to_string()
+        };
+        let parent = record(100, Some(now), "model-a");
+        fs::write(fixture.0.join("a.jsonl"), format!("{parent}\n")).unwrap();
+        let mut copied = format!("{parent}\n");
+        for index in 0..600 {
+            copied.push_str(&record(
+                200,
+                Some(now + index + 1),
+                if index % 2 == 0 { "model-a" } else { "model-b" },
+            ));
+            copied.push('\n');
+        }
+        fs::write(fixture.0.join("b.jsonl"), copied).unwrap();
+        fs::write(
+            fixture.0.join("c.jsonl"),
+            format!("{}\nnot-json\n", record(20, None, "model-b")),
+        )
+        .unwrap();
+        let mapping = HashMap::from([
+            ("a".into(), "a".into()),
+            ("b".into(), "b".into()),
+            ("c".into(), "removed".into()),
+        ]);
+        let source = source_from_roots_with_accounts(
+            std::slice::from_ref(&fixture.0),
+            "codebuddy-cli",
+            None,
+            true,
+            &accounts(),
+            |_| mapping.clone(),
+        );
+        assert_conserved(&source);
+        assert_eq!(source["requests"].as_array().unwrap().len(), REQUEST_WINDOW);
+        assert_eq!(source["summary"]["records"], 602);
+        assert_eq!(source["parseErrors"], 1);
+        let rows = source["accounts"].as_array().unwrap();
+        let known = rows.iter().find(|acc| acc["accountId"] == "b").unwrap();
+        assert_eq!(known["summary"]["records"], 600);
+        let unknown = rows.iter().find(|acc| acc["accountId"].is_null()).unwrap();
+        assert_eq!(unknown["summary"]["records"], 2);
+        assert_eq!(unknown["summary"]["input"], 120);
+        assert_eq!(unknown["daily"].as_array().unwrap().len(), 1);
+        assert_eq!(unknown["summary"]["total"], 138);
+        let bounded = source_from_roots_with_accounts(
+            std::slice::from_ref(&fixture.0),
+            "workbuddy",
+            Some(now),
+            false,
+            &accounts(),
+            |_| mapping,
+        );
+        assert_conserved(&bounded);
+        assert_eq!(bounded["summary"]["records"], 601);
+        assert!(bounded.get("requests").is_none());
+    }
+
+    #[test]
+    fn ide_and_vscode_account_copies_keep_the_union_and_unassigned_parent() {
+        let fixture = Fixture::new();
+        let now = crate::modules::config::now_ms();
+        let request = |id: &str, input: u64| {
+            json!({
+                "id": id, "startedAt": now, "state": "complete",
+                "usage": {"inputTokens": input, "outputTokens": 0}
+            })
+        };
+        for (uid, store, conv, requests) in [
+            (
+                "uid-a",
+                "CodeBuddyIDE",
+                "original",
+                vec![request("r1", 100)],
+            ),
+            (
+                "uid-b",
+                "VSCode",
+                "copy",
+                vec![request("r1", 100), request("r2", 200)],
+            ),
+            (
+                "uid-c",
+                "CodeBuddyIDE",
+                "fork",
+                vec![request("r1", 100), request("r3", 400)],
+            ),
+        ] {
+            let dir = fixture
+                .0
+                .join(uid)
+                .join(store)
+                .join(uid)
+                .join("history")
+                .join("workspace")
+                .join(conv);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("index.json"),
+                json!({"requests": requests}).to_string(),
+            )
+            .unwrap();
+        }
+        let source = ide_source_with_accounts(
+            fixture.0.clone(),
+            "codebuddy-ide",
+            None,
+            &HashMap::new(),
+            &accounts(),
+        );
+        assert_conserved(&source);
+        assert_eq!(source["summary"]["input"], 700);
+        assert_eq!(source["summary"]["records"], 3);
+        assert_eq!(source["sessions"].as_array().unwrap().len(), 1);
+        for (id, expected) in [(Some("b"), 200), (Some("c"), 400), (None, 100)] {
+            let row = source["accounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|acc| acc["accountId"].as_str() == id)
+                .unwrap();
+            assert_eq!(row["summary"]["input"], expected);
+        }
+        let ids = HashMap::from([("uid-a".into(), "a".into())]);
+        assert!(ide_account_id(
+            &fixture
+                .0
+                .join("uid-a/VSCode/other/history/ws/conv/index.json"),
+            &fixture.0,
+            &ids
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn missing_sources_return_empty_account_aggregates() {
+        let source =
+            source_from_roots_with_accounts(&[], "workbuddy-ai", None, false, &accounts(), |_| {
+                HashMap::new()
+            });
+        assert_eq!(source["accounts"], json!([]));
+        assert_conserved(&source);
+    }
 }
 
 #[cfg(test)]

@@ -34,6 +34,8 @@ import {
   ChartTooltip,
   type ChartConfig,
 } from "@/components/ui/chart";
+import { AccountFilterMenu } from "@/components/account-filter-menu";
+import { buildAccountTokenTrend, tokenAccountKey, tokenTotal, type AccountTokenSeries, type TokenTrendPoint } from "@/lib/token-account-stats";
 import { DemoAction } from "@/components/demo-action";
 import { CodeBuddyCnIdeMark, CodeBuddyMark, WorkBuddyAiMark, WorkBuddyMark } from "@/components/product-marks";
 import {
@@ -142,10 +144,6 @@ function formatTokenCompact(value: number): string {
 function formatTokenExact(value: number): string {
   return exactTokenFormatter.format(value);
 }
-
-/** 展示总量：input 已包含 cacheRead，因此不能再次加上 cacheRead。 */
-const tokenTotal = (value: TokenStatsTotals) =>
-  value.input + value.output + value.cacheWrite;
 
 const percentage = (value: number, sum: number) =>
   sum > 0 ? `${((value / sum) * 100).toFixed(1)}%` : "—";
@@ -423,10 +421,11 @@ function Overview({ source }: { source: TokenStatsSource }) {
   );
 }
 
-type TrendChartPoint = TokenStatsGroup & { date: string };
+type TrendChartPoint = TokenTrendPoint;
 type TokenSeriesKey = "cacheRead" | "uncachedInput" | "output" | "cacheWrite";
 type TokenBarShapeProps = ComponentProps<typeof Rectangle> & {
-  segmentKey: TokenSeriesKey;
+  segmentKey: string;
+  seriesKeys?: string[];
   payload?: TrendChartPoint;
   value?: number | [number, number];
 };
@@ -440,10 +439,11 @@ const TOKEN_SERIES: TokenSeriesKey[] = [
 
 /**
  * 使用真实 Rectangle 形状绘制每个堆叠段：整柱约束分配小段的 5px 视觉保底，
- * 但不修改 data 值；每个日期实际顶部的非零段才使用顶部圆角。
+ * 不修改 data 值，所有分段（含柱顶）统一使用直角矩形。
  */
 function TokenBarShape({
   segmentKey,
+  seriesKeys = TOKEN_SERIES,
   payload,
   x = 0,
   y = 0,
@@ -456,11 +456,11 @@ function TokenBarShape({
   ...rest
 }: TokenBarShapeProps) {
   if (width <= 0 || height <= 0) return null;
-  const segmentIndex = TOKEN_SERIES.indexOf(segmentKey);
+  const segmentIndex = seriesKeys.indexOf(segmentKey);
   const stackStart = Array.isArray(value) ? Number(value[0]) : 0;
   const layout = payload
     ? getStackedSegmentVisualLayout({
-        values: TOKEN_SERIES.map((key) => payload[key]),
+        values: seriesKeys.map((key) => payload.accountTokens?.[key] ?? payload[key as TokenSeriesKey] ?? 0),
         segmentIndex,
         segmentHeight: height,
         segmentY: y,
@@ -491,15 +491,18 @@ function TokenBarShape({
       width={width}
       height={layout.height}
       fill={fill}
-      radius={layout.isTop ? [6, 6, 0, 0] : 0}
+      radius={0}
       stroke={stroke ?? "var(--background)"}
       strokeWidth={strokeWidth ?? 1}
     />
   );
 }
 
-function TrendLegend() {
-  const items = [
+function TrendLegend({ series, total = 0 }: { series?: AccountTokenSeries[]; total?: number }) {
+  const items = series ? [
+    ...series.map((item) => ({ ...item, label: `${item.label} ${formatTokenCompact(item.total)} Token (${percentage(item.total, total)})`, kind: "area" })),
+    { key: "records", label: "调用次数", color: "var(--data-series-indigo)", kind: "line" },
+  ] : [
     { key: "cacheRead", label: "缓存读取", color: "var(--data-series-emerald)", kind: "area" },
     { key: "uncachedInput", label: "新增输入", color: "var(--data-series-teal)", kind: "area" },
     { key: "output", label: "输出", color: "var(--data-series-violet)", kind: "area" },
@@ -509,7 +512,7 @@ function TrendLegend() {
 
   return (
     <div
-      className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground"
+      className="flex max-h-24 min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5 overflow-y-auto text-xs text-muted-foreground"
       aria-label="图表图例"
     >
       {items.map((item) => (
@@ -545,14 +548,19 @@ function TrendLegend() {
 function TrendTooltipContent({
   active,
   payload,
+  series,
 }: {
   active?: boolean;
   payload?: Array<{ payload?: TrendChartPoint }>;
+  series?: AccountTokenSeries[];
 }) {
   if (!active || !payload?.length) return null;
   const point = payload[0]?.payload;
   if (!point) return null;
-  const rows = [
+  const rows = series ? [
+    ...series.map((item) => ({ ...item, value: point.accountTokens?.[item.key] ?? 0 })).filter((row) => row.value > 0),
+    { key: "records", label: "调用次数", value: point.records, color: "var(--data-series-indigo)" },
+  ] : [
     { key: "cacheRead", label: "缓存读取", value: point.cacheRead, color: "var(--data-series-emerald)" },
     {
       key: "uncachedInput",
@@ -579,7 +587,7 @@ function TrendTooltipContent({
           {formatTokenCompact(total)} Token
         </span>
       </div>
-      <div className="grid gap-1.5">
+      <div className="grid max-h-72 gap-1.5 overflow-y-auto">
         {rows.map((row) => (
           <div key={row.key} className="flex items-center gap-2">
             <span
@@ -608,6 +616,150 @@ function TrendTooltipContent({
         ))}
       </div>
     </div>
+  );
+}
+
+function TrendPlot({ points, series }: { points: TrendChartPoint[]; series?: AccountTokenSeries[] }) {
+  const seriesKeys = series?.map((item) => item.key) ?? TOKEN_SERIES;
+  const config: ChartConfig = series
+    ? { ...Object.fromEntries(series.map((item) => [item.key, { label: item.label, color: item.color }])), records: chartConfig.records }
+    : chartConfig;
+  return (
+    <>
+      <div className="mb-1 flex items-center justify-end px-1 text-[11px] font-medium text-muted-foreground">
+        <span className="font-normal">左轴：Token · 右轴：调用次数</span>
+      </div>
+      <ChartContainer config={config} className="h-64 w-full sm:h-72">
+        <ComposedChart
+          data={points}
+          margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+          barCategoryGap="18%"
+        >
+          <CartesianGrid vertical={false} strokeDasharray="3 3" />
+          <XAxis
+            dataKey="date"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+            minTickGap={24}
+            tickFormatter={(value) => formatChartDate(String(value))}
+          />
+          <YAxis
+            yAxisId="tokens"
+            tickLine={false}
+            axisLine={false}
+            width={48}
+            tickFormatter={(value) => formatTokenCompact(Number(value))}
+          />
+          <YAxis
+            yAxisId="calls"
+            orientation="right"
+            tickLine={false}
+            axisLine={false}
+            width={46}
+            allowDecimals={false}
+            tickFormatter={(value) => exact.format(Number(value))}
+          />
+          <ChartTooltip
+            cursor={{ fill: "var(--muted)", opacity: 0.4 }}
+            content={<TrendTooltipContent series={series} />}
+          />
+          {seriesKeys.map((key) => (
+            <Bar
+              key={key}
+              yAxisId="tokens"
+              dataKey={series ? `accountTokens.${key}` : key}
+              stackId="token"
+              fill={`var(--color-${key})`}
+              stroke="var(--background)"
+              strokeWidth={2}
+              maxBarSize={28}
+              shape={<TokenBarShape segmentKey={key} seriesKeys={seriesKeys} />}
+              isAnimationActive={false}
+            >
+            </Bar>
+          ))}
+          <Line
+            yAxisId="calls"
+            type="monotone"
+            dataKey="records"
+            stroke="var(--color-records)"
+            strokeWidth={2}
+            strokeDasharray="7 4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            dot={false}
+            activeDot={{ r: 4, fill: "var(--color-records)", stroke: "var(--background)", strokeWidth: 2 }}
+            isAnimationActive={false}
+          />
+        </ComposedChart>
+      </ChartContainer>
+      <p className="sr-only">
+        {points
+          .map(
+            (point) =>
+              `${point.date} 使用 ${formatTokenCompact(tokenTotal(point))} Token，${exact.format(point.records)} 次调用`,
+          )
+          .join("；")}
+      </p>
+    </>
+  );
+}
+
+function TrendControls({ range, setRange, modelFilter, setModelFilter, modelOptions }: {
+  range: RangeKey;
+  setRange: (range: RangeKey) => void;
+  modelFilter: string;
+  setModelFilter: (model: string) => void;
+  modelOptions: string[];
+}) {
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 max-w-[190px] gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+            aria-label="按模型筛选"
+          >
+            <SlidersHorizontal className="size-3.5 shrink-0" />
+            <span className="truncate">{modelFilter === "all" ? "所有模型" : modelFilter}</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-y-auto">
+          <DropdownMenuItem onSelect={() => setModelFilter("all")}>
+            <SlidersHorizontal className="size-3.5 shrink-0" />
+            所有模型
+            {modelFilter === "all" && <Check className="ml-auto size-3.5 shrink-0" />}
+          </DropdownMenuItem>
+          {modelOptions.length > 0 && <DropdownMenuSeparator />}
+          {modelOptions.map((model) => (
+            <DropdownMenuItem key={model} onSelect={() => setModelFilter(model)}>
+              <span className="min-w-0 flex-1 truncate">{model}</span>
+              {modelFilter === model && <Check className="ml-auto size-3.5 shrink-0" />}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
+      {RANGE_OPTIONS.map((option) => (
+        <button
+          key={option.key}
+          type="button"
+          className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+            range === option.key
+              ? "bg-background font-medium text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setRange(option.key)}
+          aria-pressed={range === option.key}
+        >
+          {option.label}
+        </button>
+      ))}
+      </div>
+    </>
   );
 }
 
@@ -646,50 +798,7 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
               彩色堆叠柱表示每日总 Token 及构成，虚线表示调用次数。
             </CardDescription>
             <div className="flex max-w-full flex-wrap items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 max-w-[190px] gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
-                    aria-label="按模型筛选"
-                  >
-                    <SlidersHorizontal className="size-3.5 shrink-0" />
-                    <span className="truncate">{modelFilter === "all" ? "所有模型" : modelFilter}</span>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-y-auto">
-                  <DropdownMenuItem onSelect={() => setModelFilter("all")}>
-                    <SlidersHorizontal className="size-3.5 shrink-0" />
-                    所有模型
-                    {modelFilter === "all" && <Check className="ml-auto size-3.5 shrink-0" />}
-                  </DropdownMenuItem>
-                  {modelOptions.length > 0 && <DropdownMenuSeparator />}
-                  {modelOptions.map((model) => (
-                    <DropdownMenuItem key={model} onSelect={() => setModelFilter(model)}>
-                      <span className="min-w-0 flex-1 truncate">{model}</span>
-                      {modelFilter === model && <Check className="ml-auto size-3.5 shrink-0" />}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="趋势范围">
-              {RANGE_OPTIONS.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs transition-colors ${
-                    range === option.key
-                      ? "bg-background font-medium text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => setRange(option.key)}
-                  aria-pressed={range === option.key}
-                >
-                  {option.label}
-                </button>
-              ))}
-              </div>
+              <TrendControls range={range} setRange={setRange} modelFilter={modelFilter} setModelFilter={setModelFilter} modelOptions={modelOptions} />
             </div>
           </div>
         </CardHeader>
@@ -703,88 +812,82 @@ function TrendChart({ source }: { source: TokenStatsSource }) {
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <TrendLegend />
               </div>
-              <div className="mb-1 flex items-center justify-end px-1 text-[11px] font-medium text-muted-foreground">
-                <span className="font-normal">左轴：Token · 右轴：调用次数</span>
-              </div>
-              <ChartContainer config={chartConfig} className="h-64 w-full sm:h-72">
-                <ComposedChart
-                  data={chartData}
-                  margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
-                  barCategoryGap="18%"
-                >
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="date"
-                    tickLine={false}
-                    axisLine={false}
-                    tickMargin={8}
-                    minTickGap={24}
-                    tickFormatter={(value) => formatChartDate(String(value))}
-                  />
-                  <YAxis
-                    yAxisId="tokens"
-                    tickLine={false}
-                    axisLine={false}
-                    width={48}
-                    tickFormatter={(value) => formatTokenCompact(Number(value))}
-                  />
-                  <YAxis
-                    yAxisId="calls"
-                    orientation="right"
-                    tickLine={false}
-                    axisLine={false}
-                    width={46}
-                    allowDecimals={false}
-                    tickFormatter={(value) => exact.format(Number(value))}
-                  />
-                  <ChartTooltip
-                    cursor={{ fill: "var(--muted)", opacity: 0.4 }}
-                    content={<TrendTooltipContent />}
-                  />
-                  {TOKEN_SERIES.map((key) => (
-                    <Bar
-                      key={key}
-                      yAxisId="tokens"
-                      dataKey={key}
-                      stackId="token"
-                      fill={`var(--color-${key})`}
-                      stroke="var(--background)"
-                      strokeWidth={2}
-                      maxBarSize={28}
-                      shape={<TokenBarShape segmentKey={key} />}
-                      isAnimationActive={false}
-                    >
-                    </Bar>
-                  ))}
-                  <Line
-                    yAxisId="calls"
-                    type="monotone"
-                    dataKey="records"
-                    stroke="var(--color-records)"
-                    strokeWidth={2}
-                    strokeDasharray="7 4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    dot={false}
-                    activeDot={{ r: 4, fill: "var(--color-records)", stroke: "var(--background)", strokeWidth: 2 }}
-                    isAnimationActive={false}
-                  />
-                </ComposedChart>
-              </ChartContainer>
+              <TrendPlot points={chartData} />
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span>
                   {rangeLabel(range)}合计 {formatTokenCompact(tokenTotal(totals))} Token · {exact.format(totals.records)} 次调用
                 </span>
                 <span>数据覆盖至 {formatDateTime(source.coverageEndAt)}</span>
               </div>
-              <p className="sr-only">
-                {chartData
-                  .map(
-                    (point) =>
-                      `${point.date} 使用 ${formatTokenCompact(tokenTotal(point))} Token，${exact.format(point.records)} 次调用`,
-                  )
-                  .join("；")}
-              </p>
+
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function AccountTrendChart({ source }: { source: TokenStatsSource }) {
+  const [accountFilter, setAccountFilter] = useState<string | null>(null);
+  const [range, setRange] = useState<RangeKey>("30d");
+  const [modelFilter, setModelFilter] = useState("all");
+  const accounts = source.accounts;
+  const filterAccounts = useMemo(() => (accounts ?? []).map((account) => ({
+    accountId: tokenAccountKey(account.accountId), accountName: account.accountName,
+  })), [accounts]);
+  const selectedAccount = accounts?.find((account) => tokenAccountKey(account.accountId) === accountFilter);
+  const modelOptions = useMemo(() => source.models.map((model) => model.key).filter(Boolean), [source.models]);
+  useEffect(() => {
+    if (accountFilter !== null && !selectedAccount) setAccountFilter(null);
+  }, [accountFilter, selectedAccount]);
+  useEffect(() => {
+    if (modelFilter !== "all" && !modelOptions.includes(modelFilter)) setModelFilter("all");
+  }, [modelFilter, modelOptions]);
+  const { start, end } = rangeBounds(range);
+  const overview = useMemo(() => buildAccountTokenTrend(accounts ?? [], modelFilter, start, end), [accounts, modelFilter, start, end]);
+  const daily = selectedAccount
+    ? modelFilter === "all" ? selectedAccount.daily : selectedAccount.dailyByModel[modelFilter] ?? []
+    : overview.points;
+  const points: TrendChartPoint[] = fillRangePoints(rangePoints(daily, range), range)
+    .map((point) => ({ ...point, date: point.key }));
+  const totals = rangeTotals(points);
+  const series = selectedAccount ? undefined : overview.series;
+
+  return (
+    <section className="min-w-0 space-y-2.5" aria-labelledby="token-account-trend-title">
+      <SectionTitle id="token-account-trend-title">账号 Token 与调用情况</SectionTitle>
+      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+        <CardHeader className="gap-0 px-4 pt-3 pb-0 sm:px-5">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <CardDescription className="min-w-0 text-xs">
+              {selectedAccount ? "彩色堆叠柱表示该账号每日 Token 构成，虚线表示调用次数。" : "每日 Token 按账号分色堆叠，虚线表示总调用次数。"}
+            </CardDescription>
+            {accounts && (
+              <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+                <AccountFilterMenu accounts={filterAccounts} accountFilter={selectedAccount ? accountFilter : null} onAccountFilterChange={setAccountFilter} ariaLabel="按账号筛选 Token 趋势" />
+                <TrendControls range={range} setRange={setRange} modelFilter={modelFilter} setModelFilter={setModelFilter} modelOptions={modelOptions} />
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="min-w-0 px-4 pt-3 pb-4 sm:px-5">
+          {accounts === undefined ? (
+            <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+              账号统计暂不可用，当前后端尚未提供账号维度数据。
+            </div>
+          ) : points.length === 0 ? (
+            <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+              当前范围暂无可展示的 Token 数据。
+            </div>
+          ) : (
+            <>
+              <div className="mb-2"><TrendLegend series={series} total={tokenTotal(totals)} /></div>
+              <TrendPlot points={points} series={series} />
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>{rangeLabel(range)}合计 {formatTokenCompact(tokenTotal(totals))} Token · {exact.format(totals.records)} 次调用</span>
+                <span>数据覆盖至 {formatDateTime(source.coverageEndAt)}</span>
+              </div>
             </>
           )}
         </CardContent>
@@ -1420,6 +1523,7 @@ function Dashboard({ source }: { source: TokenStatsSource }) {
     <div className="min-w-0 space-y-12">
       <Overview source={source} />
       <TrendChart source={source} />
+      <AccountTrendChart key={source.source} source={source} />
       <Heatmap groups={source.daily} />
       <Distribution source={source} />
       <SessionRanking groups={source.sessions} denominator={denominator} />

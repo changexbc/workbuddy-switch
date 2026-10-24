@@ -10,9 +10,10 @@
 //!
 //! 扫描范围逐来源判定：**客户端数据根不存在**（本机没装）的来源既不安装 hook 也不扫日志。
 //!
-//! 不新增任何网络请求，也不解析客户端 UI 文案。日志窗口固定为最近 2 天（WorkBuddy 两档位
+//! 不新增任何网络请求，也不解析客户端 UI 文案。限额日志窗口固定为最近 2 天（WorkBuddy 两档位
 //! 与 CLI 是最近 2 个日期目录，两个 IDE 按文件 mtime 收窗）；重置时刻直接采用日志原文 / payload
 //! 原文给出的官方值，不自建限流窗口模型。
+//! Token 统计复用本模块的归属解析，账号索引按其用量范围读取保留日志，不受限额窗口限制。
 //!
 //! 五个来源各扫一遍（PRD D1：插件宿主共享根 `CodeBuddyExtension/Logs/CodeBuddyIDE/` 与 CN
 //! IDE 真身重复记录同一次 429，**不扫**）：
@@ -1034,11 +1035,25 @@ pub(crate) fn account_by_session(
     variant: WbVariant,
     session_ids: &BTreeSet<String>,
 ) -> HashMap<String, String> {
+    account_by_session_at(
+        &workbuddy_db_path(variant),
+        variant,
+        session_ids,
+        &account::load_accounts(),
+    )
+}
+
+fn account_by_session_at(
+    db: &Path,
+    variant: WbVariant,
+    session_ids: &BTreeSet<String>,
+    accounts: &[Value],
+) -> HashMap<String, String> {
     let mut mapping = HashMap::new();
     if session_ids.is_empty() {
         return mapping;
     }
-    let uid_to_account: HashMap<String, String> = account::load_accounts()
+    let uid_to_account: HashMap<String, String> = accounts
         .iter()
         .filter(|acc| account::variant_of(acc) == variant)
         .filter_map(|acc| Some((account::get_str(acc, "uid")?, account::get_str(acc, "id")?)))
@@ -1046,39 +1061,129 @@ pub(crate) fn account_by_session(
     if uid_to_account.is_empty() {
         return mapping;
     }
-    let db = workbuddy_db_path(variant);
     if !db.is_file() {
         return mapping;
     }
-    let Some(conn) = open_db(&db, true) else {
+    let Some(conn) = open_db(db, true) else {
         return mapping;
     };
     if !table_exists(&conn, "sessions") {
         return mapping;
     }
     // 批量查询：逐条查库在事件多时会成为主要开销。
-    let placeholders = vec!["?"; session_ids.len()].join(",");
-    let sql = format!("SELECT id, user_id FROM sessions WHERE id IN ({placeholders})");
-    let Ok(mut statement) = conn.prepare(&sql) else {
-        return mapping;
-    };
-    let Ok(rows) = statement.query_map(rusqlite::params_from_iter(session_ids.iter()), |row| {
-        Ok((
-            row.get::<_, Option<String>>(0)?,
-            row.get::<_, Option<String>>(1)?,
-        ))
-    }) else {
-        return mapping;
-    };
-    for (session_id, user_id) in rows.flatten() {
-        let (Some(session_id), Some(user_id)) = (session_id, user_id) else {
+    let session_ids: Vec<_> = session_ids.iter().collect();
+    // Token history may exceed SQLite's parameter limit; keep each query bounded.
+    for chunk in session_ids.chunks(500) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let sql = format!("SELECT id, user_id FROM sessions WHERE id IN ({placeholders})");
+        let Ok(mut statement) = conn.prepare(&sql) else {
             continue;
         };
-        if let Some(account_id) = uid_to_account.get(&user_id) {
-            mapping.insert(session_id, account_id.clone());
+        let Ok(rows) = statement.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        }) else {
+            continue;
+        };
+        for (session_id, user_id) in rows.flatten() {
+            let (Some(session_id), Some(user_id)) = (session_id, user_id) else {
+                continue;
+            };
+            if let Some(account_id) = uid_to_account.get(&user_id) {
+                mapping.insert(session_id, account_id.clone());
+            }
         }
     }
     mapping
+}
+
+/// Read-only CLI identity index shared with Token statistics. Unlike quota events,
+/// historical usage cannot fall back to the currently active account. Missing or
+/// conflicting identities remain unresolved, including sessions resumed by another account.
+pub(crate) fn cli_accounts_by_session(
+    logs_root: &Path,
+    session_ids: &BTreeSet<String>,
+    accounts: &[Value],
+    cutoff: Option<i64>,
+) -> HashMap<String, String> {
+    if session_ids.is_empty() {
+        return HashMap::new();
+    }
+    let uid_to_account: HashMap<_, _> = accounts
+        .iter()
+        .filter_map(|acc| Some((account::get_str(acc, "uid")?, account::get_str(acc, "id")?)))
+        .collect();
+    if uid_to_account.is_empty() {
+        return HashMap::new();
+    }
+    let mut observed = HashMap::new();
+    for file in windowed_log_files(logs_root, cutoff.unwrap_or(i64::MIN)) {
+        // SDK mirrors have no AuthenticationManager context. They must not
+        // invalidate an identity established in the corresponding business log.
+        if session_from_file_name(&file).is_some() {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        cli_session_owners(&text, session_ids, &uid_to_account, cutoff, &mut observed);
+    }
+    observed
+        .into_iter()
+        .filter_map(|(session, account)| Some((session, account?)))
+        .collect()
+}
+
+fn cli_session_owners(
+    text: &str,
+    session_ids: &BTreeSet<String>,
+    uid_to_account: &HashMap<String, String>,
+    cutoff: Option<i64>,
+    observed: &mut HashMap<String, Option<String>>,
+) {
+    let mut auth_by_process: HashMap<String, (i64, Option<String>)> = HashMap::new();
+    for line in text.lines() {
+        if is_transport_line(line) {
+            continue;
+        }
+        let Some(timestamp) = line_timestamp(line, LogFormat::WorkBuddy) else {
+            continue;
+        };
+        let (tags, _) = split_logger_tags(line);
+        let process = field_after(tags, "pid=")
+            .unwrap_or("")
+            .trim_end_matches(']')
+            .to_string();
+        if line.contains(CLI_AUTH_MARKER) {
+            let account_id = auth_uid(line, AuthMarker::AuthDoInitProbe)
+                .and_then(|uid| uid_to_account.get(uid))
+                .cloned();
+            auth_by_process.insert(process.clone(), (timestamp, account_id));
+        }
+        if cutoff.is_some_and(|minimum| timestamp < minimum) {
+            continue;
+        }
+        let session = request_pair(line)
+            .map(|(_, session)| session)
+            .or_else(|| field_after(line, "sessionId=").map(str::to_string));
+        let Some(session) = session.filter(|id| session_ids.contains(id)) else {
+            continue;
+        };
+        let account_id = auth_by_process
+            .get(&process)
+            .filter(|(authenticated_at, _)| *authenticated_at <= timestamp)
+            .and_then(|(_, id)| id.clone());
+        observed
+            .entry(session)
+            .and_modify(|previous| {
+                if *previous != account_id {
+                    *previous = None;
+                }
+            })
+            .or_insert(account_id);
+    }
 }
 
 /// 账号归因：归因不到账号的事件直接丢弃（不错归给任何账号）。
@@ -1537,6 +1642,140 @@ pub(crate) fn save_rate_limit_config_at(path: &Path, cfg: &Value) -> std::io::Re
         invalidate_scan_cache();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod token_account_tests {
+    use super::*;
+
+    const SESSION_A: &str = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const SESSION_B: &str = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    const SESSION_C: &str = "cccccccc-cccc-4ccc-cccc-cccccccccccc";
+
+    fn line(second: u8, process: u32, body: &str) -> String {
+        format!("[2026/9/15 14:00:{second:02}.000] [info] [pid={process}] {body}")
+    }
+
+    #[test]
+    fn cli_token_accounts_do_not_cross_processes_files_or_auth_changes() {
+        let ids = BTreeSet::from([SESSION_A.into(), SESSION_B.into(), SESSION_C.into()]);
+        let uids = HashMap::from([("uid-a".into(), "a".into()), ("uid-b".into(), "b".into())]);
+        let mut observed = HashMap::new();
+        let text = [
+            line(0, 1, "[AuthDoInitProbe] uid=uid-a"),
+            line(1, 2, "[AuthDoInitProbe] uid=uid-b"),
+            line(2, 1, &format!("[ModelConfig] sessionId={SESSION_A}")),
+            line(3, 2, &format!("[ModelConfig] sessionId={SESSION_B}")),
+            line(
+                4,
+                1,
+                &format!("[SandboxShell] [AuthDoInitProbe] uid=uid-b sessionId={SESSION_A}"),
+            ),
+        ]
+        .join("\n");
+        cli_session_owners(&text, &ids, &uids, None, &mut observed);
+        assert_eq!(observed.get(SESSION_A).unwrap().as_deref(), Some("a"));
+        assert_eq!(observed.get(SESSION_B).unwrap().as_deref(), Some("b"));
+        // A different file cannot borrow the previous file's auth context.
+        cli_session_owners(
+            &line(5, 1, &format!("sessionId={SESSION_C}")),
+            &ids,
+            &uids,
+            None,
+            &mut observed,
+        );
+        assert_eq!(observed.get(SESSION_C), Some(&None));
+        // Resuming A under a different account makes its history ambiguous.
+        let changed = [
+            line(6, 1, "[AuthDoInitProbe] uid=uid-b"),
+            line(7, 1, &format!("sessionId={SESSION_A}")),
+        ]
+        .join("\n");
+        cli_session_owners(&changed, &ids, &uids, None, &mut observed);
+        assert_eq!(observed.get(SESSION_A), Some(&None));
+    }
+
+    #[test]
+    fn cli_token_accounts_never_backfill_missing_or_logged_out_auth() {
+        let ids = BTreeSet::from([SESSION_A.into(), SESSION_B.into()]);
+        let uids = HashMap::from([("uid-a".into(), "a".into())]);
+        let mut observed = HashMap::new();
+        let text = [
+            line(0, 1, &format!("sessionId={SESSION_A}")),
+            line(1, 1, "[AuthDoInitProbe] uid=uid-a"),
+            line(2, 1, &format!("sessionId={SESSION_A}")),
+            line(3, 1, "[AuthDoInitProbe] uid=none"),
+            line(4, 1, &format!("sessionId={SESSION_B}")),
+        ]
+        .join("\n");
+        cli_session_owners(&text, &ids, &uids, None, &mut observed);
+        assert_eq!(observed.get(SESSION_A), Some(&None));
+        assert_eq!(observed.get(SESSION_B), Some(&None));
+    }
+
+    #[test]
+    fn cli_token_index_reads_old_logs_and_ignores_sdk_mirrors() {
+        let root = std::env::temp_dir().join(format!("wb-cli-token-{}", uuid::Uuid::new_v4()));
+        let dated = root.join("2020-01-01");
+        let sdk = dated.join("sdk/conversations");
+        std::fs::create_dir_all(&sdk).unwrap();
+        std::fs::write(
+            dated.join("business.log"),
+            [
+                line(0, 1, "[AuthDoInitProbe] uid=uid-a"),
+                line(1, 1, &format!("sessionId={SESSION_A}")),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            sdk.join(format!("{SESSION_A}.log")),
+            line(2, 1, &format!("sessionId={SESSION_A}")),
+        )
+        .unwrap();
+        let ids = BTreeSet::from([SESSION_A.into(), SESSION_B.into()]);
+        let accounts = vec![json!({"id": "a", "uid": "uid-a"})];
+        let owners = cli_accounts_by_session(&root, &ids, &accounts, None);
+        assert_eq!(owners.get(SESSION_A).map(String::as_str), Some("a"));
+        assert!(!owners.contains_key(SESSION_B));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workbuddy_token_accounts_are_variant_scoped_and_batch_large_histories() {
+        let root = std::env::temp_dir().join(format!("wb-token-owner-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("workbuddy.db");
+        let mut conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT)")
+            .unwrap();
+        let transaction = conn.transaction().unwrap();
+        let mut ids = BTreeSet::new();
+        for index in 0..1100 {
+            let id = format!("session-{index}");
+            transaction
+                .execute("INSERT INTO sessions VALUES (?1, 'uid-shared')", [&id])
+                .unwrap();
+            ids.insert(id);
+        }
+        transaction.commit().unwrap();
+        drop(conn);
+        let accounts = vec![
+            json!({"id":"cn-account", "uid":"uid-shared", "variant":"cn"}),
+            json!({"id":"ai-account", "uid":"uid-shared", "variant":"ai"}),
+        ];
+        let cn = account_by_session_at(&db, WbVariant::Cn, &ids, &accounts);
+        assert_eq!(cn.len(), 1100);
+        assert!(cn.values().all(|id| id == "cn-account"));
+        let ai = account_by_session_at(&db, WbVariant::Ai, &ids, &accounts);
+        assert!(ai.values().all(|id| id == "ai-account"));
+        assert!(account_by_session_at(&db, WbVariant::Cn, &ids, &[]).is_empty());
+        assert!(
+            account_by_session_at(&root.join("absent.db"), WbVariant::Cn, &ids, &accounts)
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]

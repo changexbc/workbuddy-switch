@@ -2,9 +2,10 @@ import type {
   AccountMeta, AppStatus, AutoRotateConfig, CheckinConfig, CheckinLog,
   CodeBuddyCliStatus, CodeBuddyCliSwitchResult, CodeBuddyCnIdeStatus, CreditExpiry, CreditOfficialUsageModel, CreditStatistics,
   DisplayField,
-  GithubConfig, RateLimitHookStatus, RateLimitsPayload, RotateLog, RotateStatus, TokenStatistics, TokenStatsGroup, TokenStatsRequestRow, TokenStatsSource, TokenStatsTotals,
+  GithubConfig, RateLimitHookStatus, RateLimitsPayload, RotateLog, RotateStatus, TokenStatistics, TokenStatsAccount, TokenStatsGroup, TokenStatsRequestRow, TokenStatsSource, TokenStatsTotals,
   Session, SessionLinkPreviewGroup, SessionLinksPreview, SessionSyncVerdict, SessionGroupClient, SessionGroupSummary, SessionGroupDetail, SessionGroupList, SessionGroupPairPreview, SessionMemberVersionStatus, TravelConfig, TravelStatus, VscodeExtStatus, VscodeSessionList,
 } from "./types";
+import { displayName } from "./account-display";
 import { demoModeEnabled } from "./demo-mode";
 import { accountVariant, normalizeVariant, variantSupportsCheckin } from "./variant";
 
@@ -25,8 +26,8 @@ interface AccountUsageSeed {
 
 // 演示数据按档位分组：前三行是国内版 fixture，后两行是国际版；最后一行是企业版
 // （国内）演示账号，只覆盖账号页卡片形态（「企业版」标注 + 企业配额 / 不限量）。
-// 国际版只覆盖账号页（及数据同源的积分统计视图）；Token 统计的 workbuddy-ai 源、
-// 限额台账、签到、旅行、轮换保持原有空态，见 `emptyTokenSource` 与各档位能力函数。
+// 国际版同时覆盖账号页、积分统计与 Token 统计；
+// 限额台账、签到、旅行、轮换保持原有空态，见各档位能力函数。
 const intlAccountA: AccountMeta = { id: "demo-account-ai-a", uid: "demo-intl-001", email: "intl-a@example.com", nickname: "国际版 A", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null, variant: "ai" };
 const intlAccountB: AccountMeta = { id: "demo-account-ai-b", uid: "demo-intl-002", email: "intl-b@example.com", nickname: "国际版 B", enterpriseName: "Demo Workspace", expiresAt: 0, refreshExpiresAt: 0, refreshedAt: 0, createdAt: 0, needsRelogin: false, needsReloginReason: null, variant: "ai" };
 
@@ -568,12 +569,48 @@ function demoTokenRequests(scale: number): TokenStatsRequestRow[] {
   });
 }
 
+function sumDemoTokenGroups(rows: TokenStatsGroup[]): TokenStatsTotals {
+  return rows.reduce((sum, row) => demoTokenTotals(sum.input + row.input, sum.output + row.output, sum.cacheRead + row.cacheRead, sum.cacheWrite + row.cacheWrite, sum.records + row.records), demoTokenTotals(0, 0, 0, 0, 0));
+}
+
+function splitDemoTokenGroup(row: TokenStatsGroup, shares: number[]): TokenStatsGroup[] {
+  const fields = ["input", "output", "cacheRead", "cacheWrite", "records"] as const;
+  const remaining = Object.fromEntries(fields.map((field) => [field, row[field]])) as Record<typeof fields[number], number>;
+  return shares.map((share, index) => {
+    const values = fields.map((field) => {
+      const value = index === shares.length - 1 ? remaining[field] : Math.floor(row[field] * share);
+      remaining[field] -= value;
+      return value;
+    });
+    return demoTokenGroup(row.key, values[0], values[1], values[2], values[3], values[4]);
+  });
+}
+
+function demoTokenAccounts(source: TokenStatsSource["source"], daily: TokenStatsGroup[], models: string[]): Pick<TokenStatsSource, "accounts" | "dailyByModel"> {
+  const candidates = source === "workbuddy" ? accounts.filter((account) => accountVariant(account) === "cn")
+    : source === "workbuddy-ai" ? accounts.filter((account) => accountVariant(account) === "ai") : accounts;
+  const slices = daily.map((row) => splitDemoTokenGroup(row, [0.6, 0.3, 0.1]));
+  const tokenAccounts: TokenStatsAccount[] = [candidates[0], candidates[1], null].map((account, index) => {
+    const accountDaily = slices.map((rows) => rows[index]);
+    const modelSlices = accountDaily.map((row) => splitDemoTokenGroup(row, [0.55, 0.3, 0.15]));
+    return {
+      accountId: account?.id ?? null, accountName: account ? displayName(account) : "未归属",
+      summary: sumDemoTokenGroups(accountDaily), daily: accountDaily,
+      dailyByModel: Object.fromEntries(models.map((model, modelIndex) => [model, modelSlices.map((rows) => rows[modelIndex])])),
+    };
+  });
+  const dailyByModel = Object.fromEntries(models.map((model) => [model, daily.map((row) => ({
+    key: row.key, ...sumDemoTokenGroups(tokenAccounts.flatMap((account) => account.dailyByModel[model].filter((point) => point.key === row.key))),
+  }))]));
+  return { accounts: tokenAccounts, dailyByModel };
+}
+
 function demoTokenSource(source: TokenStatsSource["source"], scale: number): TokenStatsSource {
   const daily = Array.from({ length: 14 }, (_, index) => {
     const wave = [0.62, 0.86, 1.1, 0.72, 1.3, 0.94, 0.38][index % 7] * scale;
     return demoTokenGroup(localDate(13 - index), Math.round(7_600_000 * wave), Math.round(480_000 * wave), Math.round(6_650_000 * wave), Math.round(95_000 * wave), Math.round(24 * wave));
   });
-  const summary = daily.reduce((sum, row) => demoTokenTotals(sum.input + row.input, sum.output + row.output, sum.cacheRead + row.cacheRead, sum.cacheWrite + row.cacheWrite, sum.records + row.records), demoTokenTotals(0, 0, 0, 0, 0));
+  const summary = sumDemoTokenGroups(daily);
   const hours = Array.from({ length: 7 * 24 }, (_, index) => {
     const day = Math.floor(index / 24); const hour = index % 24;
     const active = Math.max(0.02, Math.exp(-Math.pow(hour - (day >= 5 ? 22 : 15), 2) / 22));
@@ -598,6 +635,7 @@ function demoTokenSource(source: TokenStatsSource["source"], scale: number): Tok
   const now = Date.now();
   return {
     source, summary, models, projects, sessions, daily, hours,
+    ...demoTokenAccounts(source, daily, models.map((model) => model.key)),
     filesScanned: source === "workbuddy" ? 63 : source === "codebuddy-ide" ? 17 : 41,
     parseErrors: 0,
     coverageStartAt: now - 13 * 86_400_000,
@@ -607,23 +645,8 @@ function demoTokenSource(source: TokenStatsSource["source"], scale: number): Tok
   };
 }
 
-/** 国际版数据源：演示环境不构造数据，保持真实的「空集」形态（页面显示空状态）。 */
-function emptyTokenSource(source: TokenStatsSource["source"]): TokenStatsSource {
-  return {
-    source,
-    summary: demoTokenTotals(0, 0, 0, 0, 0),
-    models: [],
-    projects: [],
-    sessions: [],
-    daily: [],
-    hours: [],
-    filesScanned: 0,
-    parseErrors: 0,
-  };
-}
-
 function demoTokenStatistics(days?: number): TokenStatistics {
-  return { generatedAt: Date.now(), rangeDays: days ?? null, sources: [demoTokenSource("workbuddy", 1), emptyTokenSource("workbuddy-ai"), demoTokenSource("codebuddy-cli", 0.58), demoTokenSource("codebuddy-ide", 0.36)] };
+  return { generatedAt: Date.now(), rangeDays: days ?? null, sources: [demoTokenSource("workbuddy", 1), demoTokenSource("workbuddy-ai", 0.24), demoTokenSource("codebuddy-cli", 0.58), demoTokenSource("codebuddy-ide", 0.36)] };
 }
 
 /** 演示用的 IDE 会话列表：国内版 / 国际版共用同一套存储，只有来源 uid 不同。 */

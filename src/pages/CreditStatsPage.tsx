@@ -4,7 +4,6 @@ import {
   ArrowUpDown,
   CalendarDays,
   CalendarRange,
-  Check,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -13,7 +12,6 @@ import {
   Sparkles,
   RefreshCw,
   TrendingDown,
-  Users,
   // XCircle, // 最近事件卡片隐藏后未使用
   type LucideIcon,
 } from "lucide-react";
@@ -34,9 +32,10 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { AccountFilterMenu } from "@/components/account-filter-menu";
 import * as api from "@/lib/api";
 import { creditResourceName } from "@/lib/credit-package-names";
+import { dataSeriesColor } from "@/lib/data-series-colors";
 import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
   CreditExpiry,
@@ -319,68 +318,6 @@ function recomputeOfficialUsage(
   };
 }
 
-function AccountFilterMenu({
-  accounts,
-  accountFilter,
-  onAccountFilterChange,
-  ariaLabel,
-  allowAll = true,
-}: {
-  accounts: { accountId: string; accountName?: string | null }[];
-  accountFilter: string | null;
-  onAccountFilterChange: (accountId: string | null) => void;
-  ariaLabel: string;
-  /** false 时隐藏「所有账号」选项，仅允许选择具体账号 */
-  allowAll?: boolean;
-}) {
-  const activeFilterAccount =
-    accountFilter && accounts.some((account) => account.accountId === accountFilter)
-      ? accounts.find((account) => account.accountId === accountFilter)
-      : undefined;
-  const effectiveFilter = activeFilterAccount?.accountId ?? null;
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 max-w-[190px] gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
-          aria-label={ariaLabel}
-        >
-          <Users className="size-3.5 shrink-0" />
-          <span className="truncate">
-            {activeFilterAccount
-              ? accountLabel(activeFilterAccount)
-              : allowAll
-                ? "所有账号"
-                : accounts[0]
-                  ? accountLabel(accounts[0])
-                  : "无账号"}
-          </span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-y-auto">
-        {allowAll && (
-          <>
-            <DropdownMenuItem onSelect={() => onAccountFilterChange(null)}>
-              <Users className="size-3.5 shrink-0" />
-              所有账号
-              {!effectiveFilter && <Check className="ml-auto size-3.5 shrink-0" />}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        {accounts.map((account) => (
-          <DropdownMenuItem key={account.accountId} onSelect={() => onAccountFilterChange(account.accountId)}>
-            <span className="min-w-0 flex-1 truncate">{accountLabel(account)}</span>
-            {effectiveFilter === account.accountId && <Check className="ml-auto size-3.5 shrink-0" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 function isOfficialUsageAvailable(officialUsage?: CreditOfficialUsage): boolean {
   return officialUsage?.status === "complete" || officialUsage?.status === "partial";
@@ -482,22 +419,6 @@ function StatMetric({
   );
 }
 
-/** 模型趋势共享数据色板；颜色由浅色/深色主题 token 提供。 */
-const MODEL_COLORS = [
-  "var(--data-series-emerald)",
-  "var(--data-series-teal)",
-  "var(--data-series-violet)",
-  "var(--data-series-amber)",
-  "var(--data-series-rose)",
-  "var(--data-series-indigo)",
-  "var(--data-series-sky)",
-  "var(--data-series-lime)",
-  "var(--data-series-orange)",
-  "var(--data-series-pink)",
-  "var(--data-series-cyan)",
-  "var(--data-series-slate)",
-];
-
 interface ModelChartPoint {
   date: string;
   total: number;
@@ -545,7 +466,7 @@ function CreditBarShape({
       width={width}
       height={layout?.height ?? height}
       fill={fill}
-      radius={layout?.isTop ? [6, 6, 0, 0] : 0}
+      radius={0}
       stroke={stroke ?? "var(--background)"}
       strokeWidth={strokeWidth ?? 2}
     />
@@ -636,7 +557,7 @@ function TrendChart({
     chartConfig[model] = {
       label: model === "total" ? "总消耗" : model,
       ...(stacked
-        ? { color: MODEL_COLORS[series.indexOf(model) % MODEL_COLORS.length] }
+        ? { color: dataSeriesColor(series.indexOf(model)) }
         : { color: "var(--data-series-emerald)" }),
     };
   }
@@ -722,7 +643,7 @@ function TrendChart({
                     key={model}
                     dataKey={model}
                     stackId="usage"
-                    fill={stacked ? MODEL_COLORS[index % MODEL_COLORS.length] : "var(--color-total)"}
+                    fill={stacked ? dataSeriesColor(index) : "var(--color-total)"}
                     stroke="var(--background)"
                     strokeWidth={2}
                     maxBarSize={28}
@@ -736,7 +657,7 @@ function TrendChart({
               <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
                 {stacked.models.map((model, index) => (
                   <span key={model} className="inline-flex items-center gap-1.5">
-                    <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ backgroundColor: MODEL_COLORS[index % MODEL_COLORS.length] }} aria-hidden="true" />
+                    <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ backgroundColor: dataSeriesColor(index) }} aria-hidden="true" />
                     {model}
                   </span>
                 ))}
