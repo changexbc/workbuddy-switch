@@ -104,6 +104,32 @@ pub fn build_account_obj(acc: &Value) -> Value {
     Value::Object(obj)
 }
 
+/// Export is not a refresh. Retain the newest recorded refresh time, allowing
+/// both Switch refreshes and subsequently collected native refresh metadata.
+/// Unknown/invalid times stay zero instead of starting a new native cooldown.
+fn recorded_refresh_time(acc: &Value, auth: &Map<String, Value>, now: i64) -> i64 {
+    let normalize = |value: &Value| -> Option<i64> {
+        let timestamp = value
+            .as_i64()
+            .or_else(|| value.as_str()?.trim().parse::<i64>().ok())?;
+        if timestamp <= 0 {
+            return None;
+        }
+        let timestamp = if timestamp < 10_000_000_000 {
+            timestamp.checked_mul(1000)?
+        } else {
+            timestamp
+        };
+        (timestamp <= now).then_some(timestamp)
+    };
+    [acc.get("refreshedAt"), auth.get("lastRefreshTime")]
+        .into_iter()
+        .flatten()
+        .filter_map(normalize)
+        .max()
+        .unwrap_or(0)
+}
+
 /// 从账号库记录构造官方 auth 字段。对照 server.py `build_auth_obj`。
 pub fn build_auth_obj(acc: &Value) -> Value {
     let mut obj: Map<String, Value> = Map::new();
@@ -138,7 +164,8 @@ pub fn build_auth_obj(acc: &Value) -> Value {
         "domain".to_string(),
         get_str(acc, "domain").unwrap_or_default().into(),
     );
-    obj.insert("lastRefreshTime".to_string(), json!(now));
+    let last_refresh_time = recorded_refresh_time(acc, &obj, now);
+    obj.insert("lastRefreshTime".to_string(), json!(last_refresh_time));
     setdefault(
         &mut obj,
         "scope",
@@ -517,6 +544,119 @@ mod tests {
         let ai = auth_file_path(WbVariant::Ai);
         assert_eq!(ai.parent(), p.parent());
         assert!(ai.to_string_lossy().ends_with("workbuddy-desktop-ai.info"));
+    }
+
+    #[test]
+    fn auth_export_keeps_latest_known_refresh_time() {
+        let old = 1_700_000_000_000_i64;
+        let recent = old + 3_600_000;
+        for raw in [
+            json!({"lastRefreshTime":old}),
+            json!({"auth":{"lastRefreshTime":old}}),
+        ] {
+            let account = json!({"access_token":"FAKE-AT","refresh_token":"FAKE-RT",
+                "refreshedAt":recent,"auth_raw":raw});
+            let original = account.clone();
+            for _ in 0..2 {
+                assert_eq!(build_auth_obj(&account)["lastRefreshTime"], recent);
+            }
+            assert_eq!(
+                account, original,
+                "Export must not rewrite account metadata"
+            );
+        }
+        // A native refresh collected after a Switch refresh can be newer than
+        // the top-level timestamp; keep that known time instead of moving back.
+        let account = json!({"refreshedAt":old,"auth_raw":{"auth":{"lastRefreshTime":recent}}});
+        assert_eq!(build_auth_obj(&account)["lastRefreshTime"], recent);
+    }
+
+    #[test]
+    fn auth_export_normalizes_existing_refresh_metadata() {
+        let expected = 1_700_000_000_000_i64;
+        for value in [
+            json!(expected),
+            json!(expected.to_string()),
+            json!(expected / 1000),
+            json!(format!(" {} ", expected / 1000)),
+        ] {
+            for account in [
+                json!({"refreshedAt":value}),
+                json!({"auth_raw":{"lastRefreshTime":value}}),
+                json!({"auth_raw":{"auth":{"lastRefreshTime":value}}}),
+            ] {
+                assert_eq!(build_auth_obj(&account)["lastRefreshTime"], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn auth_export_unknown_or_invalid_refresh_time_is_not_export_time() {
+        for invalid in [
+            Value::Null,
+            json!(true),
+            json!("bad"),
+            json!(""),
+            json!(-1),
+            json!(0),
+            json!(i64::MIN),
+            json!(i64::MAX),
+            json!(now_ms() + 86_400_000),
+            json!("1844674407370955161600000"),
+            json!({"value":123}),
+        ] {
+            let account = json!({"createdAt":now_ms(),"refreshedAt":invalid,
+                "auth_raw":{"lastRefreshTime":invalid}});
+            assert_eq!(build_auth_obj(&account)["lastRefreshTime"], 0);
+        }
+        assert_eq!(
+            build_auth_obj(&json!({"createdAt":now_ms()}))["lastRefreshTime"],
+            0
+        );
+        let account = json!({"refreshedAt":now_ms()+86_400_000,
+            "auth_raw":{"lastRefreshTime":1_700_000_000_000_i64}});
+        assert_eq!(
+            build_auth_obj(&account)["lastRefreshTime"],
+            1_700_000_000_000_i64
+        );
+    }
+
+    #[test]
+    fn auth_export_preserves_envelopes_without_fabricating_refresh_time() {
+        let access = json!({"$wbEncrypted":1,"envelope":"FAKE-ENCRYPTED-AT"});
+        let refresh = json!({"$wbEncrypted":1,"envelope":"FAKE-ENCRYPTED-RT"});
+        let account = json!({"access_token":access,"refresh_token":refresh,
+            "auth_raw":{"auth":{"lastRefreshTime":"1700000000"}}});
+        let auth = build_auth_obj(&account);
+        assert_eq!(auth["accessToken"], access);
+        assert_eq!(auth["refreshToken"], refresh);
+        assert_eq!(auth["lastRefreshTime"], 1_700_000_000_000_i64);
+    }
+
+    #[test]
+    fn auth_write_does_not_make_expired_credentials_look_just_refreshed() {
+        let dir = TempAuthDir::new();
+        let current = now_ms();
+        let refreshed = current - 6 * 3_600_000;
+        let account = json!({"uid":"FAKE-LOCAL-ONLY", "access_token":"FAKE-AT", "refresh_token":"FAKE-RT",
+            "refreshedAt":refreshed,"expiresAt":current-60_000});
+        for variant in [WbVariant::Cn, WbVariant::Ai] {
+            let path = dir.auth_path(variant);
+            for _ in 0..2 {
+                write_account_to_auth_file_at(&account, &path).unwrap();
+                let written = read_auth_file_at(&path).unwrap();
+                let auth = &written["auth"];
+                assert_eq!(auth["lastRefreshTime"], refreshed);
+                assert!(
+                    current - auth["lastRefreshTime"].as_i64().unwrap() >= 30_000,
+                    "Export must not create a new native success-cooldown window"
+                );
+                assert_eq!(auth["expiresAt"], current - 60_000);
+                assert_eq!(auth["expiresIn"], 0);
+                assert_eq!(auth["accessToken"], "FAKE-AT");
+                assert_eq!(auth["refreshToken"], "FAKE-RT");
+            }
+        }
     }
 
     #[test]
