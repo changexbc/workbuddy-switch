@@ -1,5 +1,6 @@
 pub mod account;
 pub mod auth_file;
+pub mod auth_transaction;
 pub mod checkin;
 pub mod codebuddy_cli;
 pub mod codebuddy_cn_ide;

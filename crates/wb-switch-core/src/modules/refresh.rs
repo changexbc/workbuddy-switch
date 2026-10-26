@@ -39,6 +39,27 @@ fn refresh_headers(account: &Value, refresh_token: &str) -> HashMap<String, Stri
 ///
 /// 刷新失败（refresh token 失效等）时给账号标记 needs_relogin，避免无限重试。
 pub async fn refresh_account_token(mut account: Value) -> Value {
+    // Cover the request and its persistence with the same cross-process lock as
+    // switch_account's snapshot/export, including all early-return branches.
+    let _guard =
+        match crate::modules::auth_transaction::wait_auth(std::time::Duration::from_secs(30)).await
+        {
+            Ok(guard) => guard,
+            Err(error) => {
+                // A local lock failure must not persist needs_relogin on a healthy account.
+                account["refresh_error"] = json!(error.to_string());
+                return account;
+            }
+        };
+    // The caller may have queued an older snapshot while another refresh ran.
+    let id = crate::modules::account::get_str(&account, "id")
+        .or_else(|| crate::modules::account::get_str(&account, "uid"));
+    if let Some(latest) = id
+        .as_deref()
+        .and_then(crate::modules::account::find_account)
+    {
+        account = latest;
+    }
     let previous_access_token = account
         .get("access_token")
         .and_then(|value| value.as_str())
@@ -211,12 +232,13 @@ pub async fn run_keepalive_cycle() -> Value {
             continue;
         }
         let fresh = refresh_account_token(acc).await;
-        let failed = fresh.get("needs_relogin").and_then(|v| v.as_bool()) == Some(true);
+        let failed = fresh.get("needs_relogin").and_then(|v| v.as_bool()) == Some(true)
+            || fresh.get("refresh_error").is_some();
         results.push(json!({
             "email": crate::modules::account::account_display_name(&fresh),
             "status": if failed { "failed" } else { "ok" },
             "error": if failed {
-                fresh.get("needs_relogin_reason").and_then(|v| v.as_str()).map(|s| s.to_string())
+                fresh.get("refresh_error").or_else(|| fresh.get("needs_relogin_reason")).and_then(|v| v.as_str()).map(|s| s.to_string())
             } else {
                 None
             },

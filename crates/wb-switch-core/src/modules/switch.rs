@@ -146,6 +146,9 @@ pub fn switch_account(
     copy_session_ids: &[String],
     sync_selections: &[SyncSelection],
 ) -> Result<Value, String> {
+    // Snapshot and export must be one transaction with token refresh.
+    // Acquire before backups/process management so a busy switch has no side effects.
+    let auth_guard = crate::modules::auth_transaction::try_auth().map_err(|e| e.to_string())?;
     let progress = |message: &str| {
         eprintln!("[switch] progress: {message}");
         if let Some(p) = progress_fn {
@@ -272,6 +275,8 @@ pub fn switch_account(
     }
     progress("正在写入认证文件…");
     auth_file::write_account_to_auth_file(&acc, variant)?;
+    // Launch may take time and the new client may immediately request a refresh.
+    drop(auth_guard);
     if restart {
         progress("正在启动 WorkBuddy…");
         launch_workbuddy(variant, Some(&progress))?;
