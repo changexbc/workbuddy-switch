@@ -148,6 +148,21 @@ export interface LinkedCopyResult {
   groupId: string;
 }
 
+/**
+ * 置顶状态同步结果（复制 / 同步报告共用）。
+ *
+ * 置顶记录不在 SQLite，而在各账号自己的
+ * `storage/user-<uid>-personal/global/conversations.json`；跨账号复制会换 sessionId，
+ * 因此按关联映射把来源账号的置顶条目单向追加到目标账号。
+ * `skippedReason` 只在没能同步时出现——置顶同步失败不影响复制/同步本身的成败。
+ */
+export interface SessionPinnedSyncInfo {
+  /** 本次追加到目标账号的置顶条目数（已同步过则为 0）。 */
+  added: number;
+  /** 未能同步的原因；成功或无事可做时不出现。 */
+  skippedReason?: string;
+}
+
 /** 切换时的会话复制报告；复制失败时后端只回 `error`（切换本身仍继续）。 */
 export interface SessionCopyReport {
   sourceUid?: string;
@@ -160,6 +175,8 @@ export interface SessionCopyReport {
   errors?: { id: string; error: string }[];
   /** 仍有未完成的会话写入时为 true（失败项可重试，不会产生第二个副本）。 */
   needsRecovery?: boolean;
+  /** 置顶状态同步结果（附属信息，失败只体现在 `skippedReason`）。 */
+  pinned?: SessionPinnedSyncInfo;
   /** 临时备份残留（待清理/待恢复）；无异常时为空数组。 */
   temporaryFiles?: TemporaryFileInfo[];
   error?: string;
@@ -283,6 +300,8 @@ export interface SessionSyncReport {
   errors: { groupId?: string; error: string }[];
   /** 仍有未完成/无法安全恢复的会话写入时为 true。 */
   needsRecovery?: boolean;
+  /** 置顶状态同步结果（附属信息，失败只体现在 `skippedReason`）。 */
+  pinned?: SessionPinnedSyncInfo;
   /** 临时备份残留（待清理/待恢复）；无异常时为空数组。 */
   temporaryFiles?: TemporaryFileInfo[];
 }

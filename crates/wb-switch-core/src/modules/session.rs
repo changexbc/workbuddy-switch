@@ -48,6 +48,7 @@ use crate::modules::session_link::{
     PreviewMemberBinding, RecoveryIssue, RecoveryReport, StoreState, SyncDecision, SyncMode,
     SyncVerdict, NORMALIZATION_VERSION, OPERATION_VERSION,
 };
+use crate::modules::session_pinned;
 use crate::modules::variant::WbVariant;
 
 /// 关联存储的命名空间：决定关联表 / 基线 / 预览凭据 / 存储锁的名字。
@@ -870,6 +871,60 @@ struct CopySide<'a> {
     account_id: Option<String>,
 }
 
+/// 置顶同步的一方：档位数据根 + 档位 + 账号 uid。
+///
+/// 置顶状态不在数据库里，而在账号自己的 `conversations.json`；跨档复制/同步时两侧
+/// 各自解析各自的数据根（CN `.workbuddy` / AI `.workbuddy-ai`），不会串档。
+struct PinnedSide<'a> {
+    paths: &'a SessionPaths,
+    variant: WbVariant,
+    uid: &'a str,
+}
+
+/// 复制/同步写完之后把置顶状态带到目标账号，返回报告里的 `pinned` 片段。
+///
+/// 置顶是附属信息：任何失败只落进 `skippedReason`，不进 `errors`、不置 `needsRecovery`，
+/// 也不改变复制/同步本身的成败。单向追加且幂等，重跑不会写出重复条目，因此不需要
+/// OpPhase 之类的恢复语义。
+fn sync_pinned_after_write(
+    source: PinnedSide<'_>,
+    target: PinnedSide<'_>,
+    mapping: &[(String, String)],
+) -> Value {
+    let backup_dir = target.paths.store_root.join("backups").join("pinned");
+    session_pinned::sync_between(
+        session_pinned::PinnedSyncTarget {
+            data_root: &source.paths.data_root,
+            variant: source.variant,
+            uid: source.uid,
+        },
+        session_pinned::PinnedSyncTarget {
+            data_root: &target.paths.data_root,
+            variant: target.variant,
+            uid: target.uid,
+        },
+        mapping,
+        &backup_dir,
+    )
+    .to_json()
+}
+
+/// 本次复制产生的 source → target sessionId 映射（新建副本与复用的已有副本都算）。
+fn copy_pinned_mapping(copied: &[Value], already_linked: &[Value]) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (items, target_field) in [(copied, "newId"), (already_linked, "sessionId")] {
+        for item in items {
+            if let (Some(id), Some(target)) = (
+                item.get("id").and_then(Value::as_str),
+                item.get(target_field).and_then(Value::as_str),
+            ) {
+                pairs.push((id.to_string(), target.to_string()));
+            }
+        }
+    }
+    pairs
+}
+
 /// 同档与跨档复制的统一流程：双档锁 → 恢复 → 逐会话复制 → 报告。
 ///
 /// `resolve_source_paths` 用于恢复未完成的**跨档**操作时解析其源档数据根；
@@ -974,11 +1029,28 @@ fn run_copy(
     // 本次请求之后仍存在未完成操作（含本次刚留下的）→ 必须提示恢复需求。
     let unfinished_after = session_link::pending_operations(target.paths, target.variant);
     let unusable = !recovery.is_clean() || !unfinished_after.is_empty();
+    // 置顶状态同步（写目标账号自己的 conversations.json）：放在复制结果之后、报告组装
+    // 之前。门禁与档位操作锁都在上面，此处 App 已确认停止写入；任何失败只进报告，
+    // 不影响复制成败与 needsRecovery。
+    let pinned = sync_pinned_after_write(
+        PinnedSide {
+            paths: source.paths,
+            variant: source.variant,
+            uid: &source.uid,
+        },
+        PinnedSide {
+            paths: target.paths,
+            variant: target.variant,
+            uid: &target.uid,
+        },
+        &copy_pinned_mapping(&copied, &already_linked),
+    );
     let mut report = json!({
         "sourceUid": &source.uid,
         "targetUid": &target.uid,
         "copied": copied,
         "alreadyLinked": already_linked,
+        "pinned": pinned,
     });
     // 跨档复制在报告里带两侧档位；同档报告保持原字段（逐字不变）。
     if source.variant != target.variant {
@@ -2591,7 +2663,28 @@ fn sync_sessions_for_switch_at(
 
     let unfinished_after = session_link::pending_operations(paths, variant);
     let needs_recovery = store_broken || !recovery.is_clean() || !unfinished_after.is_empty();
-    let mut report = json!({ "synced": synced, "skipped": skipped, "errors": errors });
+    // 置顶状态同步：映射取自关联表**全量**关联组（不限于本次勾选的组，幂等无害），
+    // 让目标账号的置顶列表跟随来源账号。失败只进 `pinned.skippedReason`。
+    let pinned = sync_pinned_after_write(
+        PinnedSide {
+            paths,
+            variant,
+            uid: &source_uid,
+        },
+        PinnedSide {
+            paths,
+            variant,
+            uid: &target_uid,
+        },
+        &store
+            .as_ref()
+            .map(|store| {
+                session_pinned::link_mapping(store, variant, &source_uid, variant, &target_uid)
+            })
+            .unwrap_or_default(),
+    );
+    let mut report =
+        json!({ "synced": synced, "skipped": skipped, "errors": errors, "pinned": pinned });
     if needs_recovery {
         report["needsRecovery"] = json!(true);
     }
@@ -2780,7 +2873,33 @@ fn sync_sessions_cross_at(
 
     let unfinished_after = session_link::pending_operations(target.paths, variant);
     let needs_recovery = store_broken || !recovery.is_clean() || !unfinished_after.is_empty();
-    let mut report = json!({ "synced": synced, "skipped": skipped, "errors": errors });
+    // 置顶状态同步：源/目标各自的数据根（跨档时不同），映射取自关联表全量关联组。
+    let pinned = sync_pinned_after_write(
+        PinnedSide {
+            paths: source.paths,
+            variant: source.variant,
+            uid: &source.uid,
+        },
+        PinnedSide {
+            paths: target.paths,
+            variant: target.variant,
+            uid: &target.uid,
+        },
+        &store
+            .as_ref()
+            .map(|store| {
+                session_pinned::link_mapping(
+                    store,
+                    source.variant,
+                    &source.uid,
+                    target.variant,
+                    &target.uid,
+                )
+            })
+            .unwrap_or_default(),
+    );
+    let mut report =
+        json!({ "synced": synced, "skipped": skipped, "errors": errors, "pinned": pinned });
     if needs_recovery {
         report["needsRecovery"] = json!(true);
     }
@@ -4513,6 +4632,41 @@ mod tests {
         fn first_copy_id(&self, report: &Value) -> String {
             report["copied"][0]["newId"].as_str().unwrap().to_string()
         }
+
+        /// 某账号的置顶状态文件（客户端真实位置：`storage/user-<uid>-personal/global`）。
+        fn pinned_file(&self, uid: &str) -> PathBuf {
+            session_pinned::conversations_file(&self.paths.data_root, uid)
+        }
+
+        /// 造一份账号置顶文件（`pinned` 为客户端里的 `pinned` 数组内容）。
+        fn write_pinned(&self, uid: &str, pinned: Value) {
+            let file = self.pinned_file(uid);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, json!({ "pinned": pinned }).to_string()).unwrap();
+        }
+
+        /// 读某账号的置顶文件原文（不存在返回 None）。
+        fn read_pinned_document(&self, uid: &str) -> Option<Value> {
+            let text = std::fs::read_to_string(self.pinned_file(uid)).ok()?;
+            Some(serde_json::from_str(&text).unwrap())
+        }
+
+        /// 某账号置顶文件里的 id 列表（顺序即客户端顺序；文件不存在返回空）。
+        fn pinned_ids(&self, uid: &str) -> Vec<String> {
+            self.read_pinned_document(uid)
+                .and_then(|document| {
+                    document
+                        .get("pinned")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item["id"].as_str().map(str::to_string))
+                                .collect()
+                        })
+                })
+                .unwrap_or_default()
+        }
     }
 
     impl Drop for Env {
@@ -6226,6 +6380,147 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
+    // 置顶状态同步（#205：置顶记录在账号自己的 conversations.json，不在 SQLite）
+    // ---------------------------------------------------------------------------
+
+    /// 复制已置顶的会话 → 目标账号的置顶文件出现映射后的新 id，groupKey 原样跟随。
+    #[test]
+    fn copy_brings_pinned_state_to_target_account() {
+        let env = ready_env("pinned-copy");
+        env.write_pinned("uid-a", json!([{"id": "sess-1", "groupKey": "/ws/a"}]));
+
+        let report = copy(&env, "uid-b", &["sess-1"]);
+        assert!(report.get("errors").is_none(), "{report}");
+        let new_id = env.first_copy_id(&report);
+        assert_eq!(report["pinned"]["added"], 1, "{report}");
+        assert!(
+            report["pinned"].get("skippedReason").is_none(),
+            "成功时不该出现原因：{report}"
+        );
+
+        let document = env
+            .read_pinned_document("uid-b")
+            .expect("目标账号的置顶文件必须被创建");
+        assert_eq!(document["pinned"][0]["id"], new_id.as_str());
+        assert_eq!(document["pinned"][0]["groupKey"], "/ws/a");
+        // 源账号自己的置顶文件不动；目标文件原本不存在，所以没有可备份的原字节。
+        assert_eq!(env.pinned_ids("uid-a"), vec!["sess-1".to_string()]);
+        assert!(!env.paths.store_root.join("backups").join("pinned").exists());
+    }
+
+    /// 目标账号已有的置顶保持在前；二次复制命中已有关联 → 幂等零新增、文件不改动。
+    #[test]
+    fn copy_keeps_existing_target_pins_and_is_idempotent() {
+        let env = ready_env("pinned-copy-idempotent");
+        env.write_pinned("uid-a", json!([{"id": "sess-1", "groupKey": "/ws/a"}]));
+        env.write_pinned("uid-b", json!([{"id": "own", "groupKey": "/ws/z"}]));
+
+        let first = copy(&env, "uid-b", &["sess-1"]);
+        let new_id = env.first_copy_id(&first);
+        assert_eq!(first["pinned"]["added"], 1, "{first}");
+        assert_eq!(
+            env.pinned_ids("uid-b"),
+            vec!["own".to_string(), new_id.clone()],
+            "目标已有条目顺序在前，新条目追加到尾部"
+        );
+
+        // 写前备份的是覆盖前的原字节（只含目标自己的那条置顶）。
+        let backup_dir = env.paths.store_root.join("backups").join("pinned");
+        let backups: Vec<PathBuf> = std::fs::read_dir(&backup_dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        assert_eq!(backups.len(), 1, "每次改写前留一份备份");
+        assert!(backups[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("cn-uid-b-"));
+        let backed_up: Value =
+            serde_json::from_str(&std::fs::read_to_string(&backups[0]).unwrap()).unwrap();
+        assert_eq!(backed_up["pinned"].as_array().unwrap().len(), 1);
+        assert_eq!(backed_up["pinned"][0]["id"], "own");
+
+        // 二次复制：该会话已在关联组里 → 复用同一副本，置顶不重复追加。
+        let before = std::fs::read_to_string(env.pinned_file("uid-b")).unwrap();
+        let second = copy(&env, "uid-b", &["sess-1"]);
+        assert_eq!(
+            second["alreadyLinked"].as_array().unwrap().len(),
+            1,
+            "{second}"
+        );
+        assert_eq!(second["pinned"]["added"], 0, "{second}");
+        assert_eq!(
+            std::fs::read_to_string(env.pinned_file("uid-b")).unwrap(),
+            before
+        );
+        assert_eq!(env.pinned_ids("uid-b").len(), 2);
+    }
+
+    /// 目标置顶文件损坏：只进 `pinned.skippedReason`，复制照旧成功、不置 needsRecovery。
+    #[test]
+    fn copy_survives_corrupt_target_pinned_file() {
+        let env = ready_env("pinned-copy-corrupt");
+        env.write_pinned("uid-a", json!([{"id": "sess-1", "groupKey": "/ws/a"}]));
+        let file = env.pinned_file("uid-b");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{ 坏掉的置顶文件").unwrap();
+
+        let report = copy(&env, "uid-b", &["sess-1"]);
+        assert_eq!(report["copied"].as_array().unwrap().len(), 1, "{report}");
+        assert!(report.get("errors").is_none(), "{report}");
+        assert!(report["needsRecovery"].is_null(), "{report}");
+        assert_eq!(report["pinned"]["added"], 0, "{report}");
+        assert!(
+            report["pinned"]["skippedReason"]
+                .as_str()
+                .unwrap()
+                .contains("目标账号置顶记录不可用"),
+            "{report}"
+        );
+        // 损坏文件一字不改（不覆盖、不新建）。
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ 坏掉的置顶文件");
+    }
+
+    /// 源账号没有置顶：不创建目标文件（复制本身照常成功）。
+    #[test]
+    fn copy_without_pinned_source_leaves_target_file_alone() {
+        let env = ready_env("pinned-copy-none");
+        let report = copy(&env, "uid-b", &["sess-1"]);
+        assert_eq!(report["pinned"]["added"], 0, "{report}");
+        assert!(report["pinned"].get("skippedReason").is_none(), "{report}");
+        assert!(!env.pinned_file("uid-b").exists());
+        assert!(!env.paths.store_root.join("backups").join("pinned").exists());
+    }
+
+    /// 切号同步路径：置顶映射取自关联表，复制之后才置顶的会话在同步时补到目标账号。
+    #[test]
+    fn sync_brings_pinned_state_to_target_account() {
+        let env = ready_env("pinned-sync");
+        let (group_id, token, target_id) = fast_forward_scene(&env);
+        assert!(
+            !env.pinned_file("uid-b").exists(),
+            "复制时源账号还没有置顶，目标不应出现文件"
+        );
+        // 复制之后才置顶：只有同步路径能把它带过去。
+        env.write_pinned("uid-a", json!([{"id": "sess-1", "groupKey": "/ws/a"}]));
+
+        let report = sync(
+            &env,
+            "uid-b",
+            &[selection(&group_id, &token, SyncMode::FastForward)],
+        );
+        assert_eq!(report["synced"].as_array().unwrap().len(), 1, "{report}");
+        assert_eq!(report["pinned"]["added"], 1, "{report}");
+        assert_eq!(env.pinned_ids("uid-b"), vec![target_id]);
+        assert_eq!(
+            env.read_pinned_document("uid-b").unwrap()["pinned"][0]["groupKey"],
+            "/ws/a"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
     // 跨档复制（WorkBuddy 国内版 ↔ 国际版）
     // ---------------------------------------------------------------------------
 
@@ -6371,6 +6666,19 @@ mod tests {
             let conn = Connection::open(self.paths(variant).workbuddy_db()).unwrap();
             conn.execute("DELETE FROM sessions WHERE id = ?1", [id])
                 .unwrap();
+        }
+
+        /// 某档某账号的置顶状态文件（客户端真实位置）。
+        fn pinned_file(&self, variant: WbVariant, uid: &str) -> PathBuf {
+            let paths = self.paths(variant);
+            session_pinned::conversations_file(&paths.data_root, uid)
+        }
+
+        /// 造一份某档某账号的置顶文件。
+        fn write_pinned(&self, variant: WbVariant, uid: &str, pinned: Value) {
+            let file = self.pinned_file(variant, uid);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, json!({ "pinned": pinned }).to_string()).unwrap();
         }
     }
 
@@ -6553,6 +6861,47 @@ mod tests {
         assert_eq!(source_member.variant, Some(WbVariant::Cn));
         let target_member = session_link::find_member(group, "uid-b", &new_id).unwrap();
         assert_eq!(target_member.variant, Some(WbVariant::Ai));
+    }
+
+    /// 跨档置顶同步：源/目标各自的数据根，源档只读、目标档只写自己的账号文件。
+    #[test]
+    fn cross_copy_syncs_pinned_into_target_variant_data_root() {
+        let env = CrossEnv::new("pinned-cn-to-ai");
+        env.create_db(WbVariant::Cn, "");
+        env.create_edge_db(WbVariant::Cn);
+        env.create_db(WbVariant::Ai, "");
+        env.create_edge_db(WbVariant::Ai);
+        env.add_session(WbVariant::Cn, "sess-1", "uid-a", "标题一");
+        env.add_body(WbVariant::Cn, "sess-1", &body_text("sess-1"));
+        env.write_pinned(
+            WbVariant::Cn,
+            "uid-a",
+            json!([{"id": "sess-1", "groupKey": "/ws/a"}]),
+        );
+
+        let report = cross_copy(
+            &env,
+            WbVariant::Cn,
+            "uid-a",
+            WbVariant::Ai,
+            "uid-b",
+            &["sess-1"],
+        );
+        let new_id = report["copied"][0]["newId"].as_str().unwrap().to_string();
+        assert_eq!(report["pinned"]["added"], 1, "{report}");
+
+        // 目标档数据根下的目标账号文件才有新置顶，条目 id 已换成本档新副本。
+        let target_file = env.pinned_file(WbVariant::Ai, "uid-b");
+        let document: Value =
+            serde_json::from_str(&std::fs::read_to_string(&target_file).unwrap()).unwrap();
+        assert_eq!(document["pinned"][0]["id"], new_id.as_str());
+        assert_eq!(document["pinned"][0]["groupKey"], "/ws/a");
+        // 两条数据根互不串：源档没有目标账号文件，目标档没有改源账号文件。
+        assert!(!env.pinned_file(WbVariant::Cn, "uid-b").exists());
+        let source_file = env.pinned_file(WbVariant::Cn, "uid-a");
+        let source_document: Value =
+            serde_json::from_str(&std::fs::read_to_string(&source_file).unwrap()).unwrap();
+        assert_eq!(source_document["pinned"][0]["id"], "sess-1");
     }
 
     /// 目标档列集合与源档不同（双向缺列）时按目标列取交集：不写 NULL、不报错。
