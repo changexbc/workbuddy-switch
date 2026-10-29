@@ -563,7 +563,8 @@ fn session_row_owner(paths: &SessionPaths, cid: &str) -> Option<String> {
     .flatten()
 }
 
-/// 在 workbuddy.db 中把源会话行复制为新 id（动态列，覆盖 id/user_id/时间戳）。
+/// 在 workbuddy.db 中把源会话行复制为新 id（动态列，覆盖 id/user_id/updated_at，
+/// created_at 透传源值）。
 ///
 /// 跨档时源行与目标行分属两个库：源行从 `source_paths` 读取（跨档用只读连接），
 /// 目标行按**目标表列序取交集**写入——目标存在而源没有的列不写，由库默认值补齐，
@@ -626,7 +627,15 @@ fn insert_session_copy(
         let value = match col.as_str() {
             "id" => rusqlite::types::Value::Text(new_cid.to_string()),
             "user_id" => rusqlite::types::Value::Text(target_uid.to_string()),
-            "created_at" | "updated_at" => rusqlite::types::Value::Integer(now_ms()),
+            // created_at 是会话历史起点，复制不伪造：源值原样透传，只有源值为 NULL
+            // （旧库没记）时才回退到当前时间，避免把 NULL 下传破坏客户端的时间排序。
+            "created_at" => match value {
+                rusqlite::types::Value::Null => rusqlite::types::Value::Integer(now_ms()),
+                source => source,
+            },
+            // updated_at 恒写当前时间：它驱动「最近更新」排序，副本沿用源值会直接沉底，
+            // 而且副本此刻确实刚被创建。
+            "updated_at" => rusqlite::types::Value::Integer(now_ms()),
             "deleted_at" => rusqlite::types::Value::Null,
             _ => value,
         };
@@ -1627,10 +1636,15 @@ pub const REASON_PREVIEW_STALE: &str = "previewStale";
 const SESSION_STATUS_ARCHIVED: &str = "archived";
 /// 允许被传导为归档的**目标终态**白名单。
 ///
-/// 只列非活跃终态：`active`（当前激活）与 `working`（生成中）必须排除，避免把正在
-/// 使用的会话收进归档。精确匹配而非「非 active/working 即允许」——NULL、未知值与
-/// 缺列都不授予归档权限（真实库存在 `Pending` 这类合法但语义未定的默认值）。
-const ARCHIVE_TARGET_TERMINAL_STATUSES: [&str; 3] = ["completed", "error", "terminated"];
+/// 排除 `working`（生成中）：正在生成的会话不能被收进归档。精确匹配而非「非
+/// working 即允许」——NULL、未知值与缺列都不授予归档权限（真实库存在 `Pending`
+/// 这类合法但语义未定的默认值）。
+///
+/// `active`（当前激活）在列内：切号前客户端被关掉时，目标行常残留一个陈旧的
+/// `active`，把它排除会导致该会话的归档状态永远无法与来源收敛。写入侧已有三重防线
+/// 兜住真正的活跃会话——`app_running` 门禁拦住 App 在跑的目标档、`planned_status_change`
+/// 写前重核、以及事务内按前置状态等值匹配的条件 UPDATE（前置值已变则零行命中）。
+const ARCHIVE_TARGET_TERMINAL_STATUSES: [&str; 4] = ["completed", "error", "terminated", "active"];
 /// 预览项与预览绑定里的归档动作取值。
 const ARCHIVE_ACTION_STATUS_ONLY: &str = "statusOnly";
 
@@ -1772,7 +1786,8 @@ fn read_member_status(paths: &SessionPaths, cid: &str) -> Result<SessionStatus, 
 
 /// 单向粘滞归档资格：来源已归档，且目标处于允许被归档的终态。
 ///
-/// 不反向传导取消归档；缺列、NULL、未知值与活跃态一律不授权。
+/// 不反向传导取消归档；缺列、NULL、未知值与生成中（`working`）一律不授权。
+/// 陈旧 `active` 视作可归档终态，由写入侧门禁兜底（见白名单注释）。
 fn archive_qualifies(source: &SessionStatus, target: &SessionStatus) -> bool {
     let SessionStatus::Present(Some(source_status)) = source else {
         return false;
@@ -2139,8 +2154,9 @@ fn preview_group_item(
         .iter()
         .map(|mode| mode.as_str())
         .collect();
-    // 归档资格：独立于正文判定，只看双方会话行的状态。来源已归档 + 目标处于非活跃
-    // 终态才授权；缺列/NULL/活跃态一律不授权，也不因此影响既有正文判定的结果。
+    // 归档资格：独立于正文判定，只看双方会话行的状态。来源已归档 + 目标处于终态白名单
+    // 才授权；缺列/NULL/生成中（working）一律不授权，陈旧 active 放行（写入侧门禁兜底），
+    // 也不因此影响既有正文判定的结果。
     // 不可验证的判定不提供任何动作：此时既没有正文模式也不会下发凭据，若仍写出
     // archiveAction，前端摘要会显示「仅同步归档」而用户实际勾不了，等于误导。
     let mut archive = preview_archive_state(
@@ -4371,21 +4387,30 @@ mod tests {
         ///
         /// 默认值与真实库一致（`Pending`，不在终态白名单内），避免「缺省即可归档」。
         fn create_db_with_status(&self) {
+            self.create_db_with_status_column("status TEXT NOT NULL DEFAULT 'Pending'");
+        }
+
+        /// `status` 可空的历史形态：验证「NULL 不授予归档权限」时必须能真的写出 NULL。
+        fn create_db_with_nullable_status(&self) {
+            self.create_db_with_status_column("status TEXT");
+        }
+
+        fn create_db_with_status_column(&self, status_column: &str) {
             let conn = Connection::open(self.paths.workbuddy_db()).unwrap();
-            conn.execute_batch(
+            conn.execute_batch(&format!(
                 "CREATE TABLE sessions (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     title TEXT,
                     custom_title TEXT,
-                    status TEXT NOT NULL DEFAULT 'Pending',
+                    {status_column},
                     cwd TEXT,
                     created_at INTEGER,
                     updated_at INTEGER,
                     deleted_at INTEGER,
                     is_playground INTEGER
-                );",
-            )
+                );"
+            ))
             .unwrap();
         }
 
@@ -4432,6 +4457,13 @@ mod tests {
             .unwrap();
         }
 
+        /// 把状态置为 NULL（旧库/NULL 语义），验证白名单不授予 NULL 归档权限。
+        fn set_status_null(&self, id: &str) {
+            let conn = Connection::open(self.paths.workbuddy_db()).unwrap();
+            conn.execute("UPDATE sessions SET status = NULL WHERE id = ?1", [id])
+                .unwrap();
+        }
+
         /// 设置更新时间戳（构造「本次时间戳已落库」的中断现场）。
         fn set_updated_at(&self, id: &str, updated_at: i64) {
             let conn = Connection::open(self.paths.workbuddy_db()).unwrap();
@@ -4440,6 +4472,38 @@ mod tests {
                 rusqlite::params![updated_at, id],
             )
             .unwrap();
+        }
+
+        /// 设置历史起点时间戳（`None` 造 NULL：旧库没记下创建时间的形态）。
+        fn set_created_at(&self, id: &str, created_at: Option<i64>) {
+            let conn = Connection::open(self.paths.workbuddy_db()).unwrap();
+            conn.execute(
+                "UPDATE sessions SET created_at = ?1 WHERE id = ?2",
+                rusqlite::params![created_at, id],
+            )
+            .unwrap();
+        }
+
+        fn created_at_of(&self, id: &str) -> Option<i64> {
+            let conn = Connection::open(self.paths.workbuddy_db()).unwrap();
+            conn.query_row(
+                "SELECT created_at FROM sessions WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+        }
+
+        fn updated_at_of(&self, id: &str) -> Option<i64> {
+            let conn = Connection::open(self.paths.workbuddy_db()).unwrap();
+            conn.query_row(
+                "SELECT updated_at FROM sessions WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
         }
 
         fn status_of(&self, id: &str) -> Option<String> {
@@ -5102,6 +5166,62 @@ mod tests {
         assert!(session_backup::scan_lifecycle(&env.paths)
             .records
             .is_empty());
+    }
+
+    /// 复制保留源 `created_at`（会话历史起点不伪造），`updated_at` 仍写当前时间。
+    ///
+    /// `updated_at` 驱动客户端「最近更新」排序：副本沿用源的旧值会直接沉底，而副本
+    /// 此刻确实刚被创建，写当前时间才符合事实。
+    #[test]
+    fn copy_preserves_source_created_at_and_refreshes_updated_at() {
+        let env = ready_env("copy-created-at");
+        // 源行由 add_session 写成 created_at=1000 / updated_at=2000。
+        let report = copy(&env, "uid-b", &["sess-1"]);
+        let new_id = env.first_copy_id(&report);
+
+        assert_eq!(env.created_at_of("sess-1"), Some(1000), "源行 created_at");
+        assert_eq!(
+            env.created_at_of(&new_id),
+            Some(1000),
+            "副本必须沿用源的 created_at"
+        );
+        let copied_updated_at = env.updated_at_of(&new_id).expect("副本必须有 updated_at");
+        assert!(
+            copied_updated_at > 2000,
+            "副本 updated_at 必须是本次时间而不是源的旧值：{copied_updated_at}"
+        );
+        assert_eq!(
+            env.updated_at_of("sess-1"),
+            Some(2000),
+            "源行时间戳不得被复制改动"
+        );
+    }
+
+    /// 源行 `created_at` 为 NULL（旧库没记）时回退当前时间：NULL 下传会破坏客户端排序。
+    #[test]
+    fn copy_falls_back_to_now_when_source_created_at_is_null() {
+        let env = ready_env("copy-created-at-null");
+        env.add_session("sess-2", "uid-a", "标题二");
+        env.add_body("sess-2", &body_text("sess-2"));
+        env.set_created_at("sess-2", None);
+        assert_eq!(
+            env.created_at_of("sess-2"),
+            None,
+            "源行 created_at 必须是 NULL"
+        );
+
+        let before = now_ms();
+        let report = copy(&env, "uid-b", &["sess-2"]);
+        let new_id = env.first_copy_id(&report);
+        let after = now_ms();
+
+        let copied_created_at = env
+            .created_at_of(&new_id)
+            .expect("源值为 NULL 时必须回退为具体时间，不得下传 NULL");
+        assert!(
+            (before..=after).contains(&copied_created_at),
+            "回退值必须是本次时间：{copied_created_at} 不在 [{before}, {after}]"
+        );
     }
 
     /// 批量复制逐项清理：进入下一项之前，上一成功项的临时目录已经消失（不累积备份）。
@@ -6149,11 +6269,30 @@ mod tests {
         assert_eq!(outcome, DbCopyOutcome::Inserted);
 
         let conn = Connection::open(env.paths.workbuddy_db()).unwrap();
-        let (id, user_id, title, deleted_at, is_playground): (String, String, String, Option<i64>, i64) =
-            conn.query_row(
-                "SELECT id, user_id, title, deleted_at, is_playground FROM sessions WHERE id = 'new-uuid-1'",
+        let (id, user_id, title, deleted_at, is_playground, created_at, updated_at): (
+            String,
+            String,
+            String,
+            Option<i64>,
+            i64,
+            Option<i64>,
+            Option<i64>,
+        ) = conn
+            .query_row(
+                "SELECT id, user_id, title, deleted_at, is_playground, created_at, updated_at \
+                 FROM sessions WHERE id = 'new-uuid-1'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(id, "new-uuid-1");
@@ -6161,6 +6300,11 @@ mod tests {
         assert_eq!(title, "旧标题"); // 普通列原样保留
         assert_eq!(deleted_at, None);
         assert_eq!(is_playground, 0);
+        assert_eq!(created_at, Some(1000), "created_at 必须是源的会话起点");
+        assert!(
+            updated_at.is_some_and(|value| value > 2000),
+            "updated_at 必须刷新为本次时间：{updated_at:?}"
+        );
     }
 
     #[test]
@@ -8632,6 +8776,17 @@ mod tests {
         env
     }
 
+    /// 同上的历史形态：`status` 列可空（用来验证 NULL 不授予归档权限）。
+    fn ready_env_with_nullable_status(name: &str) -> Env {
+        let env = Env::new(name);
+        env.create_db_with_nullable_status();
+        env.create_edge_db(WbVariant::Cn);
+        env.set_login("uid-a");
+        env.add_session("sess-1", "uid-a", "标题一");
+        env.add_body("sess-1", &body_text("sess-1"));
+        env
+    }
+
     fn member_last_synced_at(env: &Env, group_id: &str, uid: &str) -> Option<i64> {
         group_snapshot(env, group_id)
             .members
@@ -8781,10 +8936,14 @@ mod tests {
         assert_eq!(env.body_files().len(), 2, "不得产生第二份正文");
     }
 
-    /// 终态白名单：completed / error / terminated 可归档；活跃态与未知值一律不授权。
+    /// 终态白名单：completed / error / terminated / active 可归档；`working`、`Pending`、
+    /// NULL 与未知值一律不授权。
+    ///
+    /// `active` 在列内（issue #204）：切号前客户端被关掉常留下陈旧 `active`，排除它会让
+    /// 归档状态永远无法与来源收敛；真正的活跃会话由写入侧三重门禁兜底。
     #[test]
     fn status_sync_accepts_only_terminal_target_statuses() {
-        for allowed in ["completed", "error", "terminated"] {
+        for allowed in ["completed", "error", "terminated", "active"] {
             let env = ready_env_with_status(&format!("status-allow-{allowed}"));
             let (group_id, token, target_id) = archive_scene(&env, allowed);
             let report = sync(
@@ -8803,7 +8962,7 @@ mod tests {
                 "{allowed}"
             );
         }
-        for denied in ["active", "working", "Pending", "unknown-value"] {
+        for denied in ["working", "Pending", "unknown-value"] {
             let env = ready_env_with_status(&format!("status-deny-{denied}"));
             let (_, target_id) = archive_row_scene(&env, denied);
             let preview_report = preview(&env, "uid-b");
@@ -8819,6 +8978,80 @@ mod tests {
                 "{denied}: 不得写入状态"
             );
         }
+        // status 为 NULL：非终态，不授权（列可空的旧库才写得进 NULL）。
+        let env = ready_env_with_nullable_status("status-deny-null");
+        let report = copy(&env, "uid-b", &["sess-1"]);
+        let target_id = env.first_copy_id(&report);
+        env.set_status("sess-1", "archived");
+        env.set_status_null(&target_id);
+        let preview_report = preview(&env, "uid-b");
+        let group = &preview_report["groups"][0];
+        assert_eq!(group["verdict"], "identical", "{preview_report}");
+        assert!(group["archiveAction"].is_null(), "NULL: {group}");
+        assert!(
+            group["previewToken"].is_null(),
+            "NULL: 无动作即无凭据 {group}"
+        );
+        assert_eq!(env.status_of(&target_id), None, "NULL: 不得写入状态");
+    }
+
+    /// issue #204：目标停在切号前残留的陈旧 `active` 时，归档必须仍能收敛。
+    ///
+    /// 场景＝上次切号后客户端被关掉/崩掉，目标行停在 `active` 且没有在跑的生成；
+    /// 旧白名单把它当活跃态排除，会让该会话的归档状态永久卡住。
+    #[test]
+    fn status_sync_archives_stale_active_target() {
+        let env = ready_env_with_status("status-stale-active");
+        let (group_id, token, target_id) = archive_scene(&env, "active");
+        let before = preview(&env, "uid-b");
+        let group = &before["groups"][0];
+        assert_eq!(group["archiveAction"], "statusOnly", "{before}");
+        assert_eq!(group["availableModes"], json!([]), "归档不是正文覆盖");
+        assert_eq!(group["defaultChecked"], false, "归档默认不勾选");
+        let body_before = body_bytes(&env, &target_id);
+
+        let report = sync(
+            &env,
+            "uid-b",
+            &[selection(&group_id, &token, SyncMode::StatusOnly)],
+        );
+        assert_eq!(report["synced"].as_array().unwrap().len(), 1, "{report}");
+        assert_eq!(report["synced"][0]["mode"], "statusOnly");
+        assert_eq!(report["synced"][0]["verdict"], "identical");
+        assert_eq!(
+            env.status_of(&target_id).as_deref(),
+            Some("archived"),
+            "陈旧 active 目标必须被归档"
+        );
+        assert_eq!(
+            body_bytes(&env, &target_id),
+            body_before,
+            "只改状态，正文不得变化"
+        );
+    }
+
+    /// 陈旧的 `active` 目标一旦真的开始生成（`working`），归档立刻重新被拒绝。
+    ///
+    /// 放行 `active` 靠的是「生成中的会话不会停在 active」这个前提：客户端在生成时
+    /// 先把状态写成 `working`，所以 `working` 仍在白名单外，仍是硬拦截。
+    #[test]
+    fn status_sync_denies_when_stale_active_target_starts_generating() {
+        let env = ready_env_with_status("status-active-to-working");
+        let (group_id, token, target_id) = archive_scene(&env, "active");
+        env.set_status(&target_id, "working");
+
+        let report = sync(
+            &env,
+            "uid-b",
+            &[selection(&group_id, &token, SyncMode::StatusOnly)],
+        );
+        assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
+        assert_eq!(report["skipped"][0]["reasonCode"], REASON_PREVIEW_STALE);
+        assert_eq!(
+            env.status_of(&target_id).as_deref(),
+            Some("working"),
+            "生成中的会话不得被收进归档"
+        );
     }
 
     /// 单向粘滞：来源未归档、目标已归档时，绝不反向取消归档。
@@ -8917,6 +9150,45 @@ mod tests {
         assert_eq!(report["synced"].as_array().unwrap().len(), 1, "{report}");
         assert_eq!(report["synced"][0]["mode"], "fastForward");
         assert_eq!(env.status_of(&target_id).as_deref(), Some("archived"));
+        assert_eq!(
+            std::fs::read_to_string(env.body_path(&target_id)).unwrap(),
+            incoming_text(&env, "sess-1", &target_id),
+            "正文必须含来源新记录"
+        );
+        assert_ne!(
+            session_row(&env, &target_id).3,
+            updated_before,
+            "正文写入照旧更新时间"
+        );
+    }
+
+    /// 陈旧 `active` 目标 + 正文快进：归档作为正文写入的副作用一并生效。
+    ///
+    /// 正文模式的状态写入走 `planned_status_change`（写前重核，不查白名单）与事务内
+    /// 按前置状态等值匹配的条件 UPDATE，因此 active 目标既能被归档、现场被改成
+    /// `working` 时又会被跳过。
+    #[test]
+    fn fast_forward_archives_stale_active_target_as_side_effect() {
+        let env = ready_env_with_status("status-ff-stale-active");
+        let (group_id, token, target_id) = fast_forward_archive_scene(&env, "active");
+        let preview = preview(&env, "uid-b");
+        let group = &preview["groups"][0];
+        assert_eq!(group["availableModes"], json!(["fastForward"]));
+        assert_eq!(group["archiveAction"], "statusOnly");
+
+        let updated_before = session_row(&env, &target_id).3;
+        let report = sync(
+            &env,
+            "uid-b",
+            &[selection(&group_id, &token, SyncMode::FastForward)],
+        );
+        assert_eq!(report["synced"].as_array().unwrap().len(), 1, "{report}");
+        assert_eq!(report["synced"][0]["mode"], "fastForward");
+        assert_eq!(
+            env.status_of(&target_id).as_deref(),
+            Some("archived"),
+            "陈旧 active 目标必须随正文一并归档"
+        );
         assert_eq!(
             std::fs::read_to_string(env.body_path(&target_id)).unwrap(),
             incoming_text(&env, "sess-1", &target_id),
