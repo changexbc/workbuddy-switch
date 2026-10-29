@@ -305,7 +305,7 @@ pub async fn get_codebuddy_ide_status() -> Result<Value, String> {
         .map_err(|error| format!("查询 CodeBuddy IDE 状态失败: {error}"))
 }
 
-/// GET /api/jetbrains/status —— JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件状态。
+/// GET /api/jetbrains/status —— JetBrains IDE（全家桶）/ Android Studio CodeBuddy 插件状态。
 ///
 /// async + spawn_blocking：状态检测会跑 CIM / tasklist 等子进程，账号页每次挂载
 /// 都会刷新，若在主线程执行会造成页面卡顿/闪窗。

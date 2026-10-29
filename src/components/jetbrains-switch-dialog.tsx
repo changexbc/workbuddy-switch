@@ -30,10 +30,42 @@ interface Props {
 }
 
 /**
+ * 配置目录名前缀 → 产品展示名。顺序敏感：长前缀在前（`PyCharmCE` 先于
+ * `PyCharm`），否则 CE 会被当成专业版。未知前缀回退为原始目录名。
+ */
+const PRODUCT_LABELS: Array<[prefix: string, label: string]> = [
+  ["IntelliJIdea", "IntelliJ IDEA"],
+  ["IdeaIC", "IntelliJ IDEA CE"],
+  ["PyCharmCE", "PyCharm CE"],
+  ["PyCharm", "PyCharm"],
+  ["WebStorm", "WebStorm"],
+  ["PhpStorm", "PhpStorm"],
+  ["GoLand", "GoLand"],
+  ["CLion", "CLion"],
+  ["RubyMine", "RubyMine"],
+  ["DataGrip", "DataGrip"],
+  ["Rider", "Rider"],
+  ["DataSpell", "DataSpell"],
+  ["Aqua", "Aqua"],
+  ["AppCode", "AppCode"],
+  ["MPS", "MPS"],
+  ["AndroidStudio", "Android Studio"],
+];
+
+/** `GoLand2025.2` → `GoLand 2025.2`；`AndroidStudio2024.1` → `Android Studio 2024.1`。 */
+function productLabel(configDir: string): string {
+  const hit = PRODUCT_LABELS.find(([prefix]) => configDir.startsWith(prefix));
+  if (!hit) return configDir;
+  const version = configDir.slice(hit[0].length);
+  return version ? `${hit[1]} ${version}` : hit[1];
+}
+
+/**
  * JetBrains 插件切换弹窗：选择要写入的 IDE（配置目录）后执行切换。
  *
- * 检测到多个装了插件的 IDE 时可只切其中一个；缺省全选（与「一次切换全家生效」
- * 的缺省行为一致）。只装了一个时同样弹窗——把切换范围显式化，不引入第二种交互。
+ * 目标覆盖 JetBrains 全家桶与 Android Studio；检测到多个装了插件的 IDE 时可只切
+ * 其中一个；缺省全选（与「一次切换全家生效」的缺省行为一致）。只装了一个时同样
+ * 弹窗——把切换范围显式化，不引入第二种交互。
  */
 export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsStatus, onDone }: Props) {
   const targets = useMemo(
@@ -63,7 +95,7 @@ export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsSt
     if (!account || checked.length === 0 || busy) return;
     setBusy(true);
     const toastId = toast.loading("正在切换 JetBrains IDE…", {
-      description: "将注入凭证，运行中的 IDEA / PyCharm 会先退出再自动重开",
+      description: "将注入凭证，运行中的 IDE 会先退出再自动重开",
     });
     try {
       const result = await api.switchJetbrainsAccount(
@@ -106,8 +138,8 @@ export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsSt
 
         {targets.length === 0 ? (
           <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-            未检测到已安装 CodeBuddy 插件的 JetBrains IDE。请先在 IDEA / PyCharm 中安装「Tencent Cloud
-            CodeBuddy」插件后重试。
+            未检测到已安装 CodeBuddy 插件的 JetBrains IDE / Android Studio。请先在任一
+            IDE 中安装「Tencent Cloud CodeBuddy」插件后重试。
           </p>
         ) : (
           <div className="space-y-1">
@@ -132,7 +164,7 @@ export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsSt
                   onCheckedChange={(on) => toggle(t.configDir, Boolean(on))}
                   aria-label={`写入 ${t.configDir}`}
                 />
-                <span className="min-w-0 flex-1 truncate">{t.configDir}</span>
+                <span className="min-w-0 flex-1 truncate">{productLabel(t.configDir)}</span>
                 {t.running && (
                   <span className="flex-none rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
                     运行中

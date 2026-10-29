@@ -409,7 +409,7 @@ export function getJetbrainsStatus(): Promise<JetbrainsStatus> {
 }
 
 /**
- * 切换 JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件账号。
+ * 切换 JetBrains IDE（全家桶）/ Android Studio 的 CodeBuddy 插件账号。
  *
  * `restart` 默认 true：IDE 运行时由后端先优雅退出、写入后再重新打开；
  * 传 false 退回「请先完全退出 IDE」的手动模式（不在 IDE 中自动操作）。

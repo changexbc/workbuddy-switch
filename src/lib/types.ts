@@ -929,9 +929,9 @@ export interface VscodeExtSwitchResult {
   sessionSync?: VscodeSessionSyncReport;
 }
 
-/** JetBrains IDE 的一条配置目录状态（IDEA / PyCharm 各自独立）。 */
+/** JetBrains / Android Studio 的一条配置目录状态（各产品独立）。 */
 export interface JetbrainsTargetStatus {
-  /** 配置目录名（如 "PyCharm2026.2"）。 */
+  /** 配置目录名（如 "PyCharm2026.2"、"GoLand2025.2"、"AndroidStudio2024.1"）。 */
   configDir: string;
   /** 是否安装了 CodeBuddy 插件（plugins/coding-copilot* 目录存在）。 */
   pluginInstalled: boolean;
@@ -942,7 +942,7 @@ export interface JetbrainsTargetStatus {
 }
 
 export interface JetbrainsStatus {
-  /** 是否存在任一受支持的 JetBrains 配置目录。 */
+  /** 是否存在任一受支持的 JetBrains / Android Studio 配置目录。 */
   installed: boolean;
   /** 是否至少一个配置目录安装了 CodeBuddy 插件。 */
   pluginInstalled: boolean;
@@ -950,7 +950,8 @@ export interface JetbrainsStatus {
   running: boolean;
   /** 是否任一装了插件的目标存在登录态。 */
   loggedIn: boolean;
-  configRoot: string | null;
+  /** 配置根目录列表：JetBrains 根 + Android Studio 的 Google 根。 */
+  configRoots: string[];
   targets: JetbrainsTargetStatus[];
   activeAccountId: string | null;
   activeAccountName: string | null;

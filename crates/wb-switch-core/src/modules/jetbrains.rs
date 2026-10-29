@@ -1,4 +1,4 @@
-//! JetBrains IDE（IntelliJ IDEA / PyCharm）内 CodeBuddy 插件账号切换。
+//! JetBrains IDE（全家桶）/ Android Studio 内 CodeBuddy 插件账号切换。
 //!
 //! 插件（marketplace id 24379，安装目录 `coding-copilot-jetbrains`）把登录态存在
 //! **应用级配置目录** `options/secret-storage.xml`：插件自定义的 `SecretStorage`
@@ -9,9 +9,12 @@
 //! `Tencent-Cloud.coding-copilot.new.accessToken`，值为完整会话 JSON——载荷构造
 //! 直接复用 [`crate::modules::vscode_ext::build_ext_session_json`]。
 //!
-//! 支持的产品（按配置目录名前缀）：`IntelliJIdea`（IDEA 旗舰）、`IdeaIC`（社区）、
-//! `PyCharm`（专业）、`PyCharmCE`（社区）。扫描所有已安装产品，一次切换写入全部
-//! 装有插件的 IDE（多产品共用同一份账号）。
+//! 支持的产品（按配置目录名前缀）：JetBrains 全家桶——`IntelliJIdea`（IDEA 旗舰）、
+//! `IdeaIC`（社区）、`PyCharm`（专业）、`PyCharmCE`（社区）、`WebStorm`、`PhpStorm`、
+//! `GoLand`、`CLion`、`RubyMine`、`DataGrip`、`Rider`、`Aqua`、`DataSpell`、
+//! `AppCode`（已停更，旧安装仍支持）、`MPS`，外加 Google 系的 `AndroidStudio`
+//! （配置目录在 Google 根下，不在 JetBrains 根下，见 [`jetbrains_config_roots`]）。
+//! 扫描所有已安装产品，一次切换写入全部装有插件的 IDE（多产品共用同一份账号）。
 //!
 //! 与 VS Code 端同一时序（运行中写入会被 IDE 内存态覆盖）：优雅退出 → 写 XML →
 //! 重新打开。IDE 进程与配置目录的对应关系用安装目录 `product-info.json` 的
@@ -40,11 +43,45 @@ const PLUGIN_DIR_PREFIX: &str = "coding-copilot";
 const SECRET_RELATIVE: &str = "options/secret-storage.xml";
 
 /// 支持的产品：配置目录 / `product-info.json#dataDirectoryName` 前缀。
-const PRODUCT_PREFIXES: [&str; 4] = ["IntelliJIdea", "IdeaIC", "PyCharm", "PyCharmCE"];
+const PRODUCT_PREFIXES: [&str; 16] = [
+    "IntelliJIdea", // IDEA 旗舰
+    "IdeaIC",       // IDEA 社区
+    "PyCharm",      // PyCharm 专业
+    "PyCharmCE",    // PyCharm 社区
+    "WebStorm",
+    "PhpStorm",
+    "GoLand",
+    "CLion",
+    "RubyMine",
+    "DataGrip",
+    "Rider",
+    "Aqua",
+    "DataSpell",
+    "AppCode", // 已停更，旧安装存在时照常支持
+    "MPS",
+    "AndroidStudio", // 配置目录在 Google 根下，而非 JetBrains 根
+];
 
 /// Windows 主进程映像名（`<product>64.exe`；zip / exe 安装通用）。
 #[cfg(target_os = "windows")]
-const WINDOWS_IMAGE_NAMES: [&str; 4] = ["idea64.exe", "pycharm64.exe", "idea.exe", "pycharm.exe"];
+const WINDOWS_IMAGE_NAMES: [&str; 16] = [
+    "idea64.exe",
+    "idea.exe",
+    "pycharm64.exe",
+    "pycharm.exe",
+    "webstorm64.exe",
+    "phpstorm64.exe",
+    "goland64.exe",
+    "clion64.exe",
+    "rubymine64.exe",
+    "datagrip64.exe",
+    "rider64.exe",
+    "dataspell64.exe",
+    "aqua64.exe",
+    "mps64.exe",
+    "studio64.exe",
+    "studio.exe",
+];
 
 fn state_path() -> PathBuf {
     store_dir().join(STATE_FILE)
@@ -84,23 +121,31 @@ fn active_account_id_from_state() -> Option<String> {
         .map(str::to_string)
 }
 
-/// JetBrains 配置根目录（应用级，各产品 `<产品><版本>` 子目录并列）。
+/// 受支持产品的配置根目录（应用级，各产品 `<产品><版本>` 子目录并列）。
 ///
-/// - Windows: `%APPDATA%\JetBrains`
-/// - macOS: `~/Library/Application Support/JetBrains`
-/// - Linux: `$XDG_CONFIG_HOME/JetBrains`（缺省 `~/.config/JetBrains`）
-pub fn jetbrains_config_root() -> Option<PathBuf> {
+/// JetBrains 全系产品在 `JetBrains` 根下；Android Studio 用 Google 自己的根
+/// （`AndroidStudio<版本>` 子目录）：
+///
+/// - Windows: `%APPDATA%\JetBrains`、`%APPDATA%\Google`
+/// - macOS: `~/Library/Application Support/JetBrains`、同级的 `Google`
+/// - Linux: `$XDG_CONFIG_HOME/JetBrains`、`$XDG_CONFIG_HOME/Google`（缺省 `~/.config`）
+pub fn jetbrains_config_roots() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        Some(crate::modules::config::home_dir().join("Library/Application Support/JetBrains"))
+        let base = crate::modules::config::home_dir().join("Library/Application Support");
+        vec![base.join("JetBrains"), base.join("Google")]
     }
     #[cfg(target_os = "windows")]
     {
-        dirs::data_dir().map(|d| d.join("JetBrains"))
+        dirs::data_dir()
+            .map(|d| vec![d.join("JetBrains"), d.join("Google")])
+            .unwrap_or_default()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        dirs::config_dir().map(|d| d.join("JetBrains"))
+        dirs::config_dir()
+            .map(|d| vec![d.join("JetBrains"), d.join("Google")])
+            .unwrap_or_default()
     }
 }
 
@@ -358,10 +403,17 @@ fn running_ide_from_row(row: &process::WindowsProcessRow) -> RunningIde {
 #[cfg(target_os = "windows")]
 fn windows_ide_process_rows() -> Vec<process::WindowsProcessRow> {
     let self_pid = std::process::id();
-    let script = "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | \
-                  Where-Object { $_.Name -in 'idea64.exe','pycharm64.exe','idea.exe','pycharm.exe' } | \
-                  ForEach-Object { '{0}|{1}|{2}' -f $_.ProcessId, $_.Name, $_.ExecutablePath }";
-    let mut rows: Vec<_> = process::ps_output(script, 8)
+    let in_list: Vec<String> = WINDOWS_IMAGE_NAMES
+        .iter()
+        .map(|n| format!("'{n}'"))
+        .collect();
+    let script = format!(
+        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | \
+          Where-Object {{ $_.Name -in {} }} | \
+          ForEach-Object {{ '{{0}}|{{1}}|{{2}}' -f $_.ProcessId, $_.Name, $_.ExecutablePath }}",
+        in_list.join(",")
+    );
+    let mut rows: Vec<_> = process::ps_output(&script, 8)
         .map(|stdout| {
             process::parse_windows_process_rows(&stdout)
                 .into_iter()
@@ -371,7 +423,7 @@ fn windows_ide_process_rows() -> Vec<process::WindowsProcessRow> {
         .unwrap_or_default();
     if rows.is_empty() {
         // CIM 不可用时退回 tasklist（拿到 PID 关闭，但丢失 exe 路径 → 无法重开）。
-        for image in ["idea64.exe", "pycharm64.exe", "idea.exe", "pycharm.exe"] {
+        for image in WINDOWS_IMAGE_NAMES {
             rows.extend(process::windows_tasklist_image_rows(image));
         }
     }
@@ -395,14 +447,26 @@ fn running_ides() -> Vec<RunningIde> {
     }
     #[cfg(target_os = "macos")]
     {
-        // 进程 cmdline 形如 `/Applications/IntelliJ IDEA.app/Contents/MacOS/idea`；
+        // 进程 cmdline 形如 `/Applications/GoLand.app/Contents/MacOS/goland`；
         // bundle 路径回溯后读 `Contents/Resources/product-info.json`。
-        // 产品名集合（.app 名）：IntelliJ IDEA、IntelliJ IDEA CE、PyCharm、PyCharm CE。
+        // 产品名集合（.app 名）：JetBrains 全家桶 + Android Studio。
         let patterns: Vec<String> = [
             "IntelliJ IDEA.app/Contents/MacOS",
             "IntelliJ IDEA CE.app/Contents/MacOS",
             "PyCharm.app/Contents/MacOS",
             "PyCharm CE.app/Contents/MacOS",
+            "WebStorm.app/Contents/MacOS",
+            "PhpStorm.app/Contents/MacOS",
+            "GoLand.app/Contents/MacOS",
+            "CLion.app/Contents/MacOS",
+            "RubyMine.app/Contents/MacOS",
+            "DataGrip.app/Contents/MacOS",
+            "Rider.app/Contents/MacOS",
+            "Aqua.app/Contents/MacOS",
+            "DataSpell.app/Contents/MacOS",
+            "AppCode.app/Contents/MacOS",
+            "MPS.app/Contents/MacOS",
+            "Android Studio.app/Contents/MacOS",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -443,7 +507,25 @@ fn running_ides() -> Vec<RunningIde> {
                     _ => continue,
                 };
                 let lower = cmdline.to_ascii_lowercase();
-                if !["idea", "pycharm"].iter().any(|name| {
+                // 各产品 bin 启动器名（`<root>/bin/<name>`；Android Studio 为
+                // `bin/studio`）。java 直启统一靠 `-Didea.home.path=` 兜底。
+                if ![
+                    "idea",
+                    "pycharm",
+                    "webstorm",
+                    "phpstorm",
+                    "goland",
+                    "clion",
+                    "rubymine",
+                    "datagrip",
+                    "rider",
+                    "aqua",
+                    "dataspell",
+                    "mps",
+                    "studio",
+                ]
+                .iter()
+                .any(|name| {
                     lower.contains(&format!("/bin/{name} "))
                         || lower.contains(&format!("/bin/{name}\""))
                         || lower.ends_with(&format!("/bin/{name}"))
@@ -487,7 +569,7 @@ const CLOSE_TIMEOUT_SECS: i64 = 60;
 
 /// 运行中 + 手动模式的报错文案。
 const RUNNING_MANUAL_HINT: &str =
-    "检测到 JetBrains IDE（IDEA / PyCharm）正在运行，请先完全退出后再切换，否则写入会被 IDE 覆盖。";
+    "检测到 JetBrains IDE / Android Studio 正在运行，请先完全退出后再切换，否则写入会被 IDE 覆盖。";
 
 fn close_timeout_error(alive: &[u32]) -> String {
     let pids: Vec<String> = alive.iter().map(|pid| pid.to_string()).collect();
@@ -799,27 +881,31 @@ impl Target {
 }
 
 /// 扫描配置根，列出受支持产品的配置目录（存在即列出，无论是否装插件）。
+///
+/// 扫两个根：JetBrains 全系在 `JetBrains` 根下，Android Studio 在 `Google` 根下；
+/// 目录名前缀过滤已确保 `Google` 根下的无关目录（如浏览器数据）不会误入。
 fn list_targets() -> Vec<Target> {
-    let Some(root) = jetbrains_config_root() else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return Vec::new();
-    };
-    let mut targets: Vec<Target> = entries
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            (entry.path(), name)
-        })
-        .filter(|(_, name)| is_supported_config_dir_name(name))
-        .map(|(path, name)| Target {
-            plugin_installed: plugin_dir(&path).is_some(),
-            config_dir: path,
-            name,
-        })
-        .collect();
+    let mut targets: Vec<Target> = Vec::new();
+    for root in jetbrains_config_roots() {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        targets.extend(
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    (entry.path(), name)
+                })
+                .filter(|(_, name)| is_supported_config_dir_name(name))
+                .map(|(path, name)| Target {
+                    plugin_installed: plugin_dir(&path).is_some(),
+                    config_dir: path,
+                    name,
+                }),
+        );
+    }
     targets.sort_by(|a, b| a.name.cmp(&b.name));
     targets
 }
@@ -858,7 +944,10 @@ pub fn status() -> Value {
         "pluginInstalled": plugin_installed,
         "running": is_running,
         "loggedIn": logged_in,
-        "configRoot": jetbrains_config_root().map(|p| p.to_string_lossy().to_string()),
+        "configRoots": jetbrains_config_roots()
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>(),
         "targets": targets.iter().map(|t| t.to_status_json(&running_dirs)).collect::<Vec<_>>(),
         "activeAccountId": active_account_id,
         "activeAccountName": active_account_name,
@@ -907,8 +996,8 @@ fn validate_switch_target(
         return Err("账号 access_token 为空".to_string());
     }
 
-    if jetbrains_config_root().is_none() {
-        return Err("无法定位 JetBrains 配置目录".to_string());
+    if jetbrains_config_roots().is_empty() {
+        return Err("无法定位 JetBrains / Android Studio 配置目录".to_string());
     }
     let targets: Vec<Target> = list_targets()
         .into_iter()
@@ -916,7 +1005,8 @@ fn validate_switch_target(
         .collect();
     if targets.is_empty() {
         return Err(
-            "未找到已安装 CodeBuddy 插件的 JetBrains IDE。请先在 IDEA / PyCharm 中安装「Tencent Cloud CodeBuddy」插件后重试。".to_string(),
+            "未找到已安装 CodeBuddy 插件的 JetBrains IDE / Android Studio。请先在任一 IDE 中安装「Tencent Cloud CodeBuddy」插件后重试。"
+                .to_string(),
         );
     }
     let targets = filter_targets_by_selection(targets, config_dirs)?;
@@ -990,11 +1080,11 @@ fn switch_message(
         format!("，目标: {}", written.join("、"))
     };
     match (restarted, relaunch_error) {
-        (true, _) => format!("已写入 JetBrains IDE CodeBuddy 插件凭证（{name}{scope}），IDE 已重新打开。"),
+        (true, _) => format!("已写入 JetBrains / Android Studio 插件凭证（{name}{scope}），IDE 已重新打开。"),
         (false, Some(err)) => format!(
-            "已写入 JetBrains IDE CodeBuddy 插件凭证（{name}{scope}），但自动重新打开 IDE 失败：{err}；请手动打开 IDE 生效。"
+            "已写入 JetBrains / Android Studio 插件凭证（{name}{scope}），但自动重新打开 IDE 失败：{err}；请手动打开 IDE 生效。"
         ),
-        (false, None) => format!("已写入 JetBrains IDE CodeBuddy 插件凭证（{name}{scope}）；请打开 IDE 生效。"),
+        (false, None) => format!("已写入 JetBrains / Android Studio 插件凭证（{name}{scope}）；请打开 IDE 生效。"),
     }
 }
 
@@ -1009,7 +1099,7 @@ fn relaunch_closed_on_error(closed: &[RunningIde], error: String) -> String {
     messages.join("\n\n")
 }
 
-/// 切换 JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件账号。
+/// 切换 JetBrains IDE（全家桶）/ Android Studio 的 CodeBuddy 插件账号。
 ///
 /// `config_dirs`：目标配置目录名列表（如 `["PyCharm2026.2"]`）。`None` / 空列表
 /// = 全部装了插件的 IDE；非空时只写所选目录、只关闭/重开这些目录的运行实例。
@@ -1104,6 +1194,18 @@ mod tests {
             "IdeaIC2025.1",
             "PyCharm2026.2",
             "PyCharmCE2025.1",
+            "WebStorm2026.1",
+            "PhpStorm2025.3",
+            "GoLand2025.2",
+            "CLion2026.1",
+            "RubyMine2025.3",
+            "DataGrip2025.1",
+            "Rider2024.3",
+            "Aqua2025.1",
+            "DataSpell2025.2",
+            "AppCode2023.1",
+            "MPS2024.1",
+            "AndroidStudio2024.1",
         ] {
             assert!(is_supported_config_dir_name(name), "{name} 应被接受");
         }
@@ -1116,6 +1218,9 @@ mod tests {
             "PyCharm",
             "PyCharmBackup",
             "IntelliJIdeaX",
+            "AndroidStudio",
+            "AndroidStudioX",
+            "Chrome",
             "PyCharm2026.2-backup",
         ] {
             assert!(!is_supported_config_dir_name(name), "{name} 应被拒绝");
@@ -1248,6 +1353,15 @@ mod tests {
         assert_eq!(
             data_dir_name_for_install_root(&dir).as_deref(),
             Some("IntelliJIdea2026.2")
+        );
+        std::fs::write(
+            dir.join("product-info.json"),
+            r#"{"name":"Android Studio","version":"2024.1.1","dataDirectoryName":"AndroidStudio2024.1"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            data_dir_name_for_install_root(&dir).as_deref(),
+            Some("AndroidStudio2024.1")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

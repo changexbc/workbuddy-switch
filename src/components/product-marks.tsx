@@ -184,7 +184,7 @@ export function VscodeExtAiMark({ size = 32, className }: MarkProps) {
 }
 
 /**
- * JetBrains IDE（IntelliJ IDEA / PyCharm）标记：官方 2021 品牌字块的简化版。
+ * JetBrains IDE（全家桶）/ Android Studio 标记：官方 2021 品牌字块的简化版。
  *
  * 黑色圆角方块 + 右下角品牌渐变斜条（粉→黄→绿），不用真实 logo 资产，
  * 与相邻的深色 CodeBuddy / VS Code 字块视觉密度一致。

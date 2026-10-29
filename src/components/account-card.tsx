@@ -197,7 +197,7 @@ function vscodeExtTooltip(installed?: boolean, extensionInstalled?: boolean): st
 function jetbrainsTooltip(installed?: boolean, pluginInstalled?: boolean): string {
   if (!installed) return "未检测到 JetBrains IDE";
   if (!pluginInstalled) return "未检测到 JetBrains IDE CodeBuddy 插件";
-  return "切换 JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件账号（可自动关闭并重开）";
+  return "切换 JetBrains 全家桶 / Android Studio 的 CodeBuddy 插件账号（可自动关闭并重开）";
 }
 
 /** 倒计时：`2h14m 后恢复`；不足 1 分钟按「即将恢复」，已过期由调用方过滤。 */
@@ -304,7 +304,7 @@ interface Props {
   /** 当前卡片是否为正在切换的目标账号。 */
   vscodeExtLoading?: boolean;
   onSwitchVscodeExt?: (a: AccountMeta) => void;
-  /** JetBrains 配置目录是否存在（IDEA / PyCharm 任一）。 */
+  /** JetBrains / Android Studio 配置目录是否存在（任一受支持产品）。 */
   jetbrainsInstalled?: boolean;
   /** 是否任一配置目录安装了 CodeBuddy 插件。 */
   jetbrainsPluginInstalled?: boolean;

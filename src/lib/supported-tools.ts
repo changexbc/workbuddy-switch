@@ -50,8 +50,9 @@ export const SUPPORTED_TOOLS: ToolDef[] = [
   },
   {
     id: "jetbrains",
-    label: "JetBrains IDE 插件（IDEA / PyCharm）",
-    description: "IntelliJ IDEA / PyCharm 内 CodeBuddy 插件账号切换",
+    label: "JetBrains IDE 插件（全家桶 / Android Studio）",
+    description:
+      "JetBrains 全家桶（IDEA / PyCharm / WebStorm / GoLand / CLion / Rider 等）与 Android Studio 内 CodeBuddy 插件账号切换",
     defaultEnabled: false,
   },
 ];
