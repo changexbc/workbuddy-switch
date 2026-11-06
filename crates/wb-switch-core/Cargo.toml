@@ -7,7 +7,9 @@ description = "wb-switch 核心逻辑（账号/切换/会话/签到/更新），
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# stream：国际版每日活跃要走 SSE 长连接（ACP over streamable HTTP），
+# 需要 `Response::chunk()` 增量读取，一次性 `bytes()` 读不完。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 dirs = "5"

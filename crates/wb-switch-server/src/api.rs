@@ -22,7 +22,7 @@ use wb_switch_core::modules::{
     codebuddy_ide_session, codebuddy_ide_session_sync, config, credit_usage, credits,
     export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
-    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
+    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync, web_activity,
 };
 
 /// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
@@ -197,6 +197,14 @@ pub fn router() -> Router {
         )
         .route("/api/checkin", post(api_checkin))
         .route("/api/checkin/all", post(api_checkin_all))
+        // 国际版每日活跃会话（网页通道）：与签到完全独立的一条链路。
+        .route("/api/activity/daily", post(api_daily_activity))
+        .route("/api/activity/daily/all", post(api_daily_activity_all))
+        .route(
+            "/api/activity/config",
+            get(api_activity_config).post(api_save_activity_config),
+        )
+        .route("/api/activity/status", get(api_activity_status))
         .route(
             "/api/checkin/config",
             get(api_checkin_config).post(api_save_checkin_config),
@@ -1484,8 +1492,46 @@ async fn api_checkin(Json(body): Json<Value>) -> Response {
     json_ok(checkin::checkin_account(&acc).await)
 }
 
-async fn api_checkin_all(body: Option<Json<Value>>) -> Response {
-    // 缺省（无 body / 无 variant）= 全部档位，保持与桌面端 set 前的行为一致。
+/// POST /api/activity/daily —— 国际版每日活跃会话（网页通道）。
+///
+/// body: `{"accountId": "..."}`。与签到是两条独立链路：签到走 billing 体系、
+/// 由服务端 `active` 开关决定；每日活跃走 `/console/as/conversations/` + ACP，
+/// 跑完一轮即计分。国际版没有签到活动，能拿到官方奖励的只有这一条。
+async fn api_daily_activity(Json(body): Json<Value>) -> Response {
+    let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
+    json_ok(web_activity::run_daily_activity(id).await)
+}
+
+/// POST /api/activity/daily/all —— 对所有国际版账号各跑一次。
+async fn api_daily_activity_all() -> Response {
+    json_ok(web_activity::run_daily_activity_all().await)
+}
+
+/// GET /api/activity/config —— 每日活跃开关（默认开启）。
+async fn api_activity_config() -> Response {
+    json_ok(web_activity::load_activity_config())
+}
+
+/// GET /api/activity/status —— 各账号今日活跃状态（账号页 chip 用）。
+async fn api_activity_status() -> Response {
+    json_ok(web_activity::activity_status())
+}
+
+/// POST /api/activity/config —— 保存每日活跃开关。
+///
+/// 时间段不在这里配：它跟随签到配置的 `checkin_start` / `checkin_end`，一处设置
+/// 同时管两个功能。
+async fn api_save_activity_config(Json(body): Json<Value>) -> Response {
+    match web_activity::save_activity_config(&body) {
+        Ok(()) => json_ok(web_activity::load_activity_config()),
+        Err(error) => json_err(
+            format!("保存每日活跃配置失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+async fn api_checkin_all(body: Option<Json<Value>>) -> Response {    // 缺省（无 body / 无 variant）= 全部档位，保持与桌面端 set 前的行为一致。
     let variant = body
         .as_ref()
         .and_then(|Json(value)| value.get("variant"))

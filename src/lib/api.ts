@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountMeta,
   AccountRecord,
+  ActivityConfig,
+  ActivityResult,
+  ActivityStatus,
   AppNotification,
   AppStatus,
   AutoRotateConfig,
@@ -176,6 +179,11 @@ const ROUTES: Record<string, Route> = {
   get_auto_checkin_config: { method: "GET", path: "/api/checkin/config" },
   save_auto_checkin_config: { method: "POST", path: "/api/checkin/config" },
   get_checkin_logs: { method: "GET", path: "/api/checkin/logs" },
+  daily_activity: { method: "POST", path: "/api/activity/daily" },
+  daily_activity_all: { method: "POST", path: "/api/activity/daily/all" },
+  get_activity_config: { method: "GET", path: "/api/activity/config" },
+  get_activity_status: { method: "GET", path: "/api/activity/status" },
+  save_activity_config: { method: "POST", path: "/api/activity/config" },
   list_notifications: { method: "GET", path: "/api/notifications" },
   record_notification: { method: "POST", path: "/api/notifications/record" },
   clear_notifications: { method: "POST", path: "/api/notifications/clear" },
@@ -913,6 +921,39 @@ export function saveAutoCheckinConfig(config: CheckinConfig): Promise<CheckinCon
 
 export function getCheckinLogs(): Promise<{ logs: CheckinLog[] }> {
   return call("get_checkin_logs");
+}
+
+/**
+ * 国际版每日活跃会话（网页通道）。
+ *
+ * 与签到是两条完全独立的链路：签到走 billing 体系、由服务端 `active` 开关决定；
+ * 每日活跃走 `/console/as/conversations/` + ACP，跑完一轮即计分。国际版没有签到
+ * 活动，能拿到官方 30/50 积分奖励的只有这一条。
+ *
+ * 不切换当前登录账号——后端直接用账号库里该账号自己的 token 直连。
+ * 同一天重复调用返回 `skipped`，不会重复消耗额度。
+ */
+export function dailyActivity(accountId: string): Promise<ActivityResult> {
+  return call("daily_activity", { accountId });
+}
+
+/** 对所有国际版账号各跑一次每日活跃（手动触发，不受开关与时间段限制）。 */
+export function dailyActivityAll(): Promise<{ accounts: { accountId: string; uid: string; result: ActivityResult }[] }> {
+  return call("daily_activity_all");
+}
+
+export function getActivityStatus(): Promise<ActivityStatus> {
+  return call("get_activity_status");
+}
+
+export function getActivityConfig(): Promise<ActivityConfig> {
+  return call("get_activity_config");
+}
+
+export function saveActivityConfig(config: ActivityConfig): Promise<ActivityConfig> {
+  return call("save_activity_config", {
+    config: config as unknown as Record<string, unknown>,
+  });
 }
 
 export async function getTravelStatus(accountId: string): Promise<TravelStatus> {

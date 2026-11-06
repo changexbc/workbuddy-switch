@@ -269,6 +269,15 @@ interface Props {
   todayCheckedIn?: boolean;
   /** 单账号参与许可，独立于全局开关；undefined 表示配置尚未加载。 */
   autoCheckinAllowed?: boolean;
+  /**
+   * 国际版每日活跃（网页通道）是否今日已完成。
+   * undefined = 该档位没有这个功能（国内版），不渲染任何相关 UI。
+   */
+  todayActivityDone?: boolean;
+  /** 该账号的每日活跃正在跑（阻止重复触发）。 */
+  activityRunning?: boolean;
+  /** 手动跑一次每日活跃。不切换当前登录账号，用账号自己的 token 直连。 */
+  onDailyActivity?: (a: AccountMeta) => void;
   /** 今日旅行状态（undefined=查询中/未知，不渲染标签） */
   travelStatus?: TravelStatus;
   /** 该账号当前受限的模型（来自本机日志台账）；空/缺失=无受限，不渲染图标。 */
@@ -409,7 +418,7 @@ function CreditResourceRow({ resource, compact, placeholderLabel }: { resource?:
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInfo, onSwitch, todayCheckedIn, autoCheckinAllowed, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, enabledTools, featuresDisabled = true, compact = false }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInfo, onSwitch, todayCheckedIn, autoCheckinAllowed, todayActivityDone, activityRunning, onDailyActivity, travelStatus, rateLimits, credit, creditLoading, creditUpdatedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodeExtInstalled, vscodeExtExtensionInstalled, vscodeExtAvailable, vscodeExtActive, vscodeExtBusy, vscodeExtLoading, onSwitchVscodeExt, jetbrainsInstalled, jetbrainsPluginInstalled, jetbrainsAvailable, jetbrainsActive, jetbrainsBusy, jetbrainsLoading, onSwitchJetbrains, enabledTools, featuresDisabled = true, compact = false }: Props) {
   /** 支持工具开关：关闭的端整块不渲染（缺省视为开启）。 */
   const toolEnabled = (id: ToolId) => enabledTools?.[id] !== false;
   const [resourcesOpen, setResourcesOpen] = useState(false);
@@ -466,6 +475,17 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
           variant: todayCheckedIn ? "success" : "secondary",
         })}
       {travelChip(travelStatus)}
+      {/* 国际版每日活跃（网页通道）：国内版没有这个功能，todayActivityDone 为
+          undefined 时整块不渲染。 */}
+      {todayActivityDone !== undefined &&
+        statusIconChip({
+          icon: todayActivityDone ? <Sparkles className="size-3.5" /> : <Clock3 className="size-3.5" />,
+          label: todayActivityDone ? "今日活跃已完成" : "今日活跃未完成",
+          tooltip: todayActivityDone
+            ? "国际版每日活跃会话今天已跑完（网页通道 completed）"
+            : "国际版每日活跃会话今天还没跑；签到时间段内会自动执行，也可在菜单里立即触发",
+          variant: todayActivityDone ? "success" : "secondary",
+        })}
       {rateLimitChip(rateLimits, now)}
       {(account.needsRelogin || expired) && <Badge variant="warning" className={chipClass}>{account.needsRelogin ? "需重新登录" : "Token 已过期"}</Badge>}
       {creditPriority && (
@@ -558,6 +578,12 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
               {!demoModeEnabled && onCheckin && todayCheckedIn !== true && (
                 <DropdownMenuItem disabled={featuresDisabled || !onCheckin} onSelect={() => onCheckin?.(account)}>
                   <CircleCheck />手动签到
+                </DropdownMenuItem>
+              )}
+              {!demoModeEnabled && onDailyActivity && (
+                <DropdownMenuItem disabled={featuresDisabled || activityRunning} onSelect={() => onDailyActivity?.(account)}>
+                  {activityRunning ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                  {activityRunning ? "每日活跃进行中…" : "立即跑每日活跃"}
                 </DropdownMenuItem>
               )}
               {!demoModeEnabled && (

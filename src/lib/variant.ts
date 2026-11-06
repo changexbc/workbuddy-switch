@@ -52,6 +52,14 @@ export function variantSupportsCheckin(variant: WbVariant): boolean {
   return variant !== "ai";
 }
 
+/**
+ * 每日活跃会话仅国际版开放：走网页通道的 agent 会话，跑完一轮即计分。
+ * 国内版走签到，没有这条链路。
+ */
+export function variantSupportsActivity(variant: WbVariant): boolean {
+  return variant === "ai";
+}
+
 /** 国际版 Tab 切 CodeBuddy.app；国内版 Tab 仍切 CodeBuddy CN。 */
 export function variantUsesIntlCodebuddyIde(variant: WbVariant): boolean {
   return variant === "ai";

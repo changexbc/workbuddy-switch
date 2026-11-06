@@ -74,6 +74,16 @@ fn spawn_background_loops(app: tauri::AppHandle) {
         }
     });
 
+    // 国际版每日活跃：启动即查一轮，之后按固定间隔轮询（靠状态文件做当天去重，
+    // 时间段跟随签到配置）。不切换账号，直接用账号库里的 token 直连网页通道。
+    tauri::async_runtime::spawn(async move {
+        let _ = modules::web_activity::run_daily_activity_cycle().await;
+        loop {
+            tokio::time::sleep(modules::web_activity::cycle_interval()).await;
+            let _ = modules::web_activity::run_daily_activity_cycle().await;
+        }
+    });
+
     // 派猫猫旅行：启动即派发，之后周期性补派（并重试 no-buddy / 瞬时错误）。
     // 档位过滤在 core（`travel_capable_accounts`）：不支持成长中心的档位不会发请求。
     tauri::async_runtime::spawn(async move {
@@ -274,6 +284,11 @@ pub fn run() {
             commands::save_rate_limit_config,
             commands::checkin,
             commands::checkin_all,
+            commands::daily_activity,
+            commands::daily_activity_all,
+            commands::get_activity_config,
+            commands::get_activity_status,
+            commands::save_activity_config,
             commands::get_auto_checkin_config,
             commands::save_auto_checkin_config,
             commands::get_checkin_logs,
