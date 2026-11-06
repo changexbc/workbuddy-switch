@@ -432,6 +432,36 @@ export interface SwitchResult {
   sessionRecovery?: SessionRecoveryReport;
 }
 
+/** 国际版每日活跃开关。时间段不在这里配：跟随签到配置的 checkin_start/checkin_end。 */
+export interface ActivityConfig {
+  enabled: boolean;
+}
+
+/** 单账号每日活跃会话的结果（网页通道）。 */
+export interface ActivityResult {
+  ok: boolean;
+  /** 今天已经跑过，本轮未发任何请求。 */
+  skipped?: boolean;
+  /** 非国际版账号（国内版走签到，没有每日活跃）。 */
+  unsupportedVariant?: boolean;
+  /** 会话状态：completed / working / failed。 */
+  status?: string;
+  conversation?: string;
+  /** 实际使用的模型（hy3 免费，失败回退 deepseek-v4.1-flash）。 */
+  model?: string;
+  modelsTried?: string[];
+  elapsedMs?: number;
+  msg?: string;
+  error?: string;
+  phase?: "create" | "session" | "turn";
+}
+
+/** 各账号今日活跃状态：`accounts[uid] === today` 即为今日已完成。 */
+export interface ActivityStatus {
+  today: string;
+  accounts: Record<string, string>;
+}
+
 export interface CheckinConfig {
   enabled: boolean;
   /** 关闭自动签到的账号 id；状态展示和刷新附带签到也跳过，主动手动签到不受影响。 */

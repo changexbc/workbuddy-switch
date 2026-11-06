@@ -55,7 +55,7 @@ import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib
 import { useUpdateState } from "@/lib/use-update-state";
 import { changeCompanionEnabled, reloadCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { cn } from "@/lib/utils";
-import { accountVariant, variantSupportsCheckin, variantSupportsTravel, variantUsesIntlCodebuddyIde } from "@/lib/variant";
+import { accountVariant, variantSupportsActivity, variantSupportsCheckin, variantSupportsTravel, variantUsesIntlCodebuddyIde } from "@/lib/variant";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { DemoAction } from "@/components/demo-action";
 import { CodeBuddyAiIdeMark, CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyAiMark, WorkBuddyMark } from "@/components/product-marks";
@@ -376,6 +376,8 @@ function AutoCheckinCard() {
    * 用 multiple 而非 single：三块内容彼此独立，用户可能同时对照参数与账号名单。
    */
   const [openSections, setOpenSections] = useState<string[]>([]);
+  /** 国际版每日活跃开关（独立于签到，但共用签到时间段）。 */
+  const [activityCfg, setActivityCfg] = useState<{ enabled: boolean } | null>(null);
   const logsOpen = openSections.includes("logs");
   const [logs, setLogs] = useState<CheckinLog[] | null>(null);
   const [logsError, setLogsError] = useState("");
@@ -597,6 +599,28 @@ function AutoCheckinCard() {
     setNumDraft((prev) => ({ ...prev, [key]: text }));
   }
 
+  useEffect(() => {
+    if (!variantSupportsActivity(variant)) return;
+    void api
+      .getActivityConfig()
+      .then(setActivityCfg)
+      .catch(() => {
+        /* 读取失败按默认开启显示 */
+      });
+  }, [variant]);
+
+  /** 每日活跃开关：独立落盘，不并入签到配置的提交链。 */
+  async function onToggleActivity(enabled: boolean) {
+    setActivityCfg({ enabled });
+    try {
+      const saved = await api.saveActivityConfig({ enabled });
+      setActivityCfg(saved);
+    } catch (e) {
+      setActivityCfg({ enabled: !enabled });
+      toast.error("每日活跃设置保存失败", { description: api.asError(e) });
+    }
+  }
+
   function clearNumDraft(key: CheckinNumberKey) {
     setNumDraft((prev) => {
       const next = { ...prev };
@@ -619,6 +643,32 @@ function AutoCheckinCard() {
         <Accordion type="multiple" value={openSections} onValueChange={setOpenSections}>
           {cfg ? (
             <>
+              {variantSupportsActivity(variant) && (
+                <AccordionSettingsRow
+                  value="activity"
+                  label="国际版每日活跃"
+                  description="每天在签到时间段内跑一次网页会话，拿官方每日活跃积分；不切换当前登录账号"
+                  actions={
+                    <DemoAction>
+                      <Switch
+                        aria-label="启用国际版每日活跃"
+                        checked={activityCfg?.enabled ?? true}
+                        onCheckedChange={(next) => void onToggleActivity(next)}
+                      />
+                    </DemoAction>
+                  }
+                >
+                  <div className={INSET_PANEL}>
+                    <SettingsFieldRow
+                      className={PANEL_ROW}
+                      label="执行方式"
+                      description="建一条网页会话并驱动它跑完（ACP），完成即计入官方每日活跃。模型优先 hy3（免费），失败回退 deepseek-v4.1-flash。"
+                    >
+                      <span className="text-xs text-muted-foreground">跟随签到时间段</span>
+                    </SettingsFieldRow>
+                  </div>
+                </AccordionSettingsRow>
+              )}
               <AccordionSettingsRow
                 value="params"
                 label="启用自动签到"

@@ -12,7 +12,7 @@ use wb_switch_core::modules::{
     codebuddy_ide_session, codebuddy_ide_session_sync, credit_usage, credits, error_log,
     export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
-    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
+    variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync, web_activity,
 };
 
 #[derive(Serialize)]
@@ -1098,8 +1098,7 @@ pub async fn checkin(account_id: String) -> Result<Value, String> {
     Ok(checkin::checkin_account(&acc).await)
 }
 
-/// POST /api/checkin/all —— 全部账号批量签到（每个账号按自身档位）。
-/// `variant` 缺省为 `None`（全部档位，保持原行为）；显式传入时只处理该档位。
+/// POST /api/checkin/all —— 全部账号批量签到（每个账号按自身档位）。/// `variant` 缺省为 `None`（全部档位，保持原行为）；显式传入时只处理该档位。
 /// 关闭自动签到的账号逐账号返回 skipped 原因（设置页与托盘同样遵守）。
 /// `respectWindow` 只由账号页「刷新并签到」传 `true`：窗口生效且当前不在时间段内
 /// 时整轮跳过（逐账号 `skipped` / `outside_checkin_window`）；缺省 `false` =
@@ -1108,6 +1107,46 @@ pub async fn checkin(account_id: String) -> Result<Value, String> {
 pub async fn checkin_all(variant: Option<String>, respect_window: Option<bool>) -> Value {
     let variant = variant.as_deref().map(|raw| WbVariant::parse(Some(raw)));
     checkin::run_checkin_all(variant, respect_window.unwrap_or(false)).await
+}
+
+/// POST /api/activity/daily —— 国际版每日活跃会话（网页通道）。
+///
+/// 与签到是两条完全独立的链路：签到走 `billing` 体系、由服务端 `active` 开关
+/// 决定；每日活跃走 `/console/as/conversations/` + ACP，跑完一轮即计分。国际版
+/// 没有签到活动，能拿到官方奖励的只有这一条。
+///
+/// 只对国际版账号有效；国内版返回 `unsupportedVariant`。同一天重复调用会被
+/// `daily_activity_state.json` 拦成 `skipped`，避免重复消耗额度。
+#[tauri::command]
+pub async fn daily_activity(account_id: String) -> Value {
+    web_activity::run_daily_activity(&account_id).await
+}
+
+/// POST /api/activity/daily/all —— 对所有国际版账号各跑一次每日活跃。
+#[tauri::command]
+pub async fn daily_activity_all() -> Value {
+    web_activity::run_daily_activity_all().await
+}
+
+/// GET /api/activity/config —— 每日活跃开关（默认开启）。
+#[tauri::command]
+pub fn get_activity_config() -> Value {
+    web_activity::load_activity_config()
+}
+
+/// GET /api/activity/status —— 各账号今日活跃状态（账号页 chip 用）。
+#[tauri::command]
+pub fn get_activity_status() -> Value {
+    web_activity::activity_status()
+}
+
+/// POST /api/activity/config —— 保存每日活跃开关。
+///
+/// 时间段跟随签到配置（`checkin_start` / `checkin_end`），不单独设置。
+#[tauri::command]
+pub fn save_activity_config(config: Value) -> Result<Value, String> {
+    web_activity::save_activity_config(&config).map_err(|e| format!("保存失败: {e}"))?;
+    Ok(web_activity::load_activity_config())
 }
 
 /// GET /api/checkin/config —— 自动签到配置。

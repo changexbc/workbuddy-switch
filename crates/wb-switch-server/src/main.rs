@@ -54,6 +54,16 @@ fn spawn_background_loops() {
         }
     });
 
+    // 国际版每日活跃：启动即查一轮，之后按固定间隔轮询（靠状态文件做当天去重，
+    // 时间段跟随签到配置）。不切换账号，直接用账号库里的 token 直连网页通道。
+    tokio::spawn(async move {
+        let _ = wb_switch_core::modules::web_activity::run_daily_activity_cycle().await;
+        loop {
+            tokio::time::sleep(wb_switch_core::modules::web_activity::cycle_interval()).await;
+            let _ = wb_switch_core::modules::web_activity::run_daily_activity_cycle().await;
+        }
+    });
+
     // 派猫猫旅行：启动即派发，之后周期性补派（并重试 no-buddy / 瞬时错误）。
     tokio::spawn(async move {
         let _ = travel::run_travel_cycle().await;

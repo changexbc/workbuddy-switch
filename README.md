@@ -48,6 +48,7 @@ xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
 | JetBrains IDE 插件 | 支持切换 IntelliJ IDEA / PyCharm 内的 CodeBuddy 插件账号，一次切换写入所有装了插件的 IDE；IDE 运行时可自动关闭并在写入后重新打开 |
 | 插件会话复制 | 切换插件账号时，可把当前插件账号的会话复制给目标账号（加法，源账号不变） |
 | 自动轮换 | 后台把积分最紧迫的账号设为 CodeBuddy CLI 后续启动账号；检测到 CLI 会话运行时会跳过 |
+| 每日活跃（国际版） | 国际版没有签到，改为在网页端建一条 agent 会话并驱动它跑完，拿官方每日活跃积分；跟随签到时间段自动执行，不切换当前登录账号 |
 | 自动更新 | 从 GitHub Releases 检查新版本，整包更新经签名校验 |
 | 会话悬浮窗 | 桌面版内置 Agent Companion 悬浮栏，在桌面集中显示 Codex / WorkBuddy / CodeBuddy / Codeg 会话的运行中 / 待确认 / 已完成状态；悬停查看详情，支持跳转时点击回到原会话，托盘可临时隐藏 |
 | 权限检测 | macOS 授权引导（App 管理 / 完全磁盘访问拖拽授权 + 自动检测） |

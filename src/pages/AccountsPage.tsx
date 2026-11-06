@@ -54,6 +54,7 @@ import {
   variantCodebuddyIdeName,
   variantDownloadDomain,
   variantLabel,
+  variantSupportsActivity,
   variantSupportsCheckin,
   variantSupportsTravel,
   variantUsesIntlCodebuddyIde,
@@ -197,6 +198,10 @@ export default function AccountsPage() {
   const [autoCheckinSettled, setAutoCheckinSettled] = useState(false);
   /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
   const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
+  /** 账号 id -> 今日每日活跃是否已完成（仅国际版；国内版不查询）。 */
+  const [activityMap, setActivityMap] = useState<Record<string, boolean>>({});
+  /** 正在跑每日活跃的账号 id 集合（阻止重复触发）。 */
+  const [activityRunningIds, setActivityRunningIds] = useState<Set<string>>(() => new Set());
   /** 账号 id -> 今日旅行状态（undefined=查询中/未知） */
   const [travelMap, setTravelMap] = useState<Record<string, TravelStatus>>({});
   /**
@@ -241,6 +246,8 @@ export default function AccountsPage() {
   const appName = variantAppName(variant);
   const travelAvailable = variantSupportsTravel(variant);
   const checkinAvailable = variantSupportsCheckin(variant);
+  /** 每日活跃仅国际版有：走网页通道的 agent 会话，跑完一轮即计分。 */
+  const activityAvailable = variantSupportsActivity(variant);
   /** 旅行 chip 与旅行状态轮询只在自动旅行开启后生效（配置未读到 = 未开启）。 */
   const autoTravelEnabled = travelAvailable && autoTravelConfig?.enabled === true;
   /** 刷新按钮文案：国际版没有签到接口，只刷新积分。 */
@@ -402,6 +409,29 @@ export default function AccountsPage() {
       cancelled = true;
     };
   }, [accounts.length, variant, enabledTools]);
+
+  // 国际版每日活跃：读后端状态文件（uid -> 最后成功日期），映射到账号 id。
+  useEffect(() => {
+    if (!activityAvailable || !visibleAccounts.length) return;
+    let cancelled = false;
+    void api
+      .getActivityStatus()
+      .then((status) => {
+        if (cancelled) return;
+        const next: Record<string, boolean> = {};
+        for (const account of visibleAccounts) {
+          const uid = account.uid ?? "";
+          next[account.id] = Boolean(uid) && status.accounts[uid] === status.today;
+        }
+        setActivityMap(next);
+      })
+      .catch(() => {
+        /* 状态读不到不影响主流程，chip 显示为未完成 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activityAvailable, visibleAccounts]);
 
   // 配置就绪后查询未关闭自动签到的账号；国际版没有签到接口，不查询状态。
   useEffect(() => {
@@ -647,6 +677,38 @@ export default function AccountsPage() {
   }
 
   /** 刷新附带的签到遵守账号开关与签到时间段；所有账号照常刷新积分，提示实际忽略/未到时间段数量。 */
+  /**
+   * 手动跑一次每日活跃（国际版网页通道）。
+   *
+   * 不切换当前登录账号——后端直接用该账号自己的 token 直连，当前 WorkBuddy
+   * 登录态不受影响。同日重复调用后端会返回 skipped，不会重复消耗额度。
+   */
+  async function onDailyActivity(account: AccountMeta) {
+    if (activityRunningIds.has(account.id)) return;
+    setActivityRunningIds((prev) => new Set(prev).add(account.id));
+    try {
+      const res = await api.dailyActivity(account.id);
+      if (res.skipped) {
+        setActivityMap((prev) => ({ ...prev, [account.id]: true }));
+        toast.info("今日活跃已完成，无需重复");
+      } else if (res.ok) {
+        setActivityMap((prev) => ({ ...prev, [account.id]: true }));
+        toast.success(res.msg ?? "每日活跃会话完成");
+        void onRefreshCredits();
+      } else {
+        toast.error("每日活跃失败", { description: res.error ?? "未知错误" });
+      }
+    } catch (e) {
+      toast.error("每日活跃请求失败", { description: api.asError(e) });
+    } finally {
+      setActivityRunningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(account.id);
+        return next;
+      });
+    }
+  }
+
   async function onRefreshCredits() {
     if (!visibleAccounts.length || refreshingCredits || checkinAllRunning) return;
     setCheckinAllRunning(true);
@@ -1097,6 +1159,9 @@ export default function AccountsPage() {
                 onSwitch={setSwitchAccount}
                 onShowInfo={setInfoTarget}
                 onCheckin={checkinAvailable ? onCheckin : undefined}
+                onDailyActivity={activityAvailable ? onDailyActivity : undefined}
+                todayActivityDone={activityAvailable ? activityMap[a.id] : undefined}
+                activityRunning={activityRunningIds.has(a.id)}
                 onRefresh={onRefresh}
                 todayCheckedIn={checkinMap[a.id]}
                 autoCheckinAllowed={checkinAvailable && autoCheckinSettled ? !excludedCheckinIds.has(a.id) : undefined}
