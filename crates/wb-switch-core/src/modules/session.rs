@@ -563,6 +563,148 @@ fn session_row_owner(paths: &SessionPaths, cid: &str) -> Option<String> {
     .flatten()
 }
 
+/// 统一 Windows / POSIX 路径写法，供空间路径比对（客户端存反斜杠，会话 cwd 存正斜杠）。
+fn normalized_space_path(path: &str) -> String {
+    path.trim()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
+}
+
+/// 把会话 cwd 拆成「客户端落盘用的原生路径」与「分组名」（末段目录名）。
+fn space_folder_path_and_name(cwd: &str) -> Option<(String, String)> {
+    let trimmed = cwd.trim().trim_end_matches(|c| c == '/' || c == '\\');
+    let unified = trimmed.replace('\\', "/");
+    let name = unified.rsplit('/').next().unwrap_or("").trim();
+    if name.is_empty() || unified.is_empty() {
+        return None;
+    }
+    let path = if cfg!(windows) {
+        unified.replace('/', "\\")
+    } else {
+        unified.clone()
+    };
+    Some((path, name.to_string()))
+}
+
+/// 在目标账号的活跃空间里找与会话 cwd 同路径的分组；找不到就按客户端结构补建一个。
+///
+/// WorkBuddy 5.11 起按 `sessions.space_id` 关联 `spaces` 分组，且要求空间属于当前登录账号；
+/// 迁移时原样复制源账号的 space_id 会让会话游离甚至从空间页消失。目标账号没有对应分组时
+/// 必须补建：客户端的 `spaces_seeded_v2` 播种标记已置位，留空门票不会被自动回填。
+/// 路径绑定到多个空间、或补建条件不足时才返回 None，由调用方置空。
+fn resolve_or_create_target_space_id(
+    conn: &Connection,
+    source_row: &[(String, rusqlite::types::Value)],
+    target_uid: &str,
+) -> Option<String> {
+    let cwd = source_row
+        .iter()
+        .find(|(name, _)| name == "cwd")
+        .and_then(|(_, value)| match value {
+            rusqlite::types::Value::Text(path) => Some(path.as_str()),
+            _ => None,
+        })?;
+    let key = normalized_space_path(cwd);
+    if key.is_empty() {
+        return None;
+    }
+
+    let spaces: Vec<(String, Option<String>)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, primary_folder_path FROM spaces \
+                 WHERE user_id = ?1 AND status = 'active' AND deleted_at < 0",
+            )
+            .ok()?;
+        let rows = stmt
+            .query_map(rusqlite::params![target_uid], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })
+            .ok()?
+            .filter_map(|row| row.ok())
+            .collect();
+        rows
+    };
+
+    let mut matched = Vec::new();
+    for (id, primary) in spaces {
+        let mut paths = Vec::new();
+        if let Some(path) = primary {
+            paths.push(path);
+        }
+        if let Ok(mut stmt) = conn.prepare("SELECT path FROM space_folders WHERE space_id = ?1") {
+            if let Ok(rows) = stmt.query_map(rusqlite::params![id], |row| row.get::<_, String>(0)) {
+                paths.extend(rows.filter_map(|row| row.ok()));
+            }
+        }
+        if paths.iter().any(|path| normalized_space_path(path) == key) {
+            matched.push(id);
+        }
+    }
+    if matched.len() == 1 {
+        return matched.pop();
+    }
+    if matched.len() > 1 {
+        return None;
+    }
+    create_target_space(conn, cwd, target_uid)
+}
+
+/// 按现有 user space 的字段结构补建分组，并绑定工作目录。
+///
+/// `device_id` 沿用本机已有空间的值（同一台设备所有账号共用）；目标库一个分组都没有时
+/// 用新 UUID 兜底（客户端查询 spaces 不按 device_id 过滤）。分组行与目录绑定在同一
+/// 事务里，防止后续匹配不到而重复建组。
+fn create_target_space(conn: &Connection, cwd: &str, target_uid: &str) -> Option<String> {
+    let (path, name) = space_folder_path_and_name(cwd)?;
+    let device_id: String = conn
+        .query_row(
+            "SELECT device_id FROM spaces WHERE device_id IS NOT NULL AND device_id <> '' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+    let sort_order: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM spaces WHERE user_id = ?1",
+            [target_uid],
+            |row| row.get(0),
+        )
+        .unwrap_or(1);
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = now_ms();
+
+    if conn.execute_batch("BEGIN").is_err() {
+        return None;
+    }
+    let inserted = conn
+        .execute(
+            "INSERT INTO spaces (id,user_id,device_id,name,primary_folder_path,create_folder_path,\
+             pinned,sort_order,status,transport,conversation_origin,deleted_at,created_at,updated_at,source_kind) \
+             VALUES (?1,?2,?3,?4,?5,?5,0,?6,'active','local',NULL,-1,?7,?7,'user')",
+            rusqlite::params![id, target_uid, device_id, name, path, sort_order, now],
+        )
+        .is_ok()
+        && (!table_exists(conn, "space_folders")
+            || conn
+                .execute(
+                    "INSERT OR IGNORE INTO space_folders (space_id,path,sort_order) VALUES (?1,?2,0)",
+                    rusqlite::params![id, path],
+                )
+                .is_ok());
+    if inserted {
+        let _ = conn.execute_batch("COMMIT");
+        Some(id)
+    } else {
+        let _ = conn.execute_batch("ROLLBACK");
+        None
+    }
+}
+
 /// 在 workbuddy.db 中把源会话行复制为新 id（动态列，覆盖 id/user_id/时间戳）。
 ///
 /// 跨档时源行与目标行分属两个库：源行从 `source_paths` 读取（跨档用只读连接），
@@ -632,6 +774,18 @@ fn insert_session_copy(
         };
         cols.push(col.clone());
         vals.push(value);
+    }
+
+    // 5.11+ 的 space_id 属于源账号，跨账号复制必须换成目标账号同路径分组，否则会话不归组；
+    // 目标账号没有对应分组时按客户端结构补建。放在所有校验之后，避免失败时留下空分组。
+    // 旧版无 space_id 列或 spaces 表时保持原有写入逻辑。
+    if let Some(idx) = cols.iter().position(|col| col == "space_id") {
+        if table_exists(&conn, "spaces") {
+            vals[idx] = match resolve_or_create_target_space_id(&conn, &source_row, target_uid) {
+                Some(id) => rusqlite::types::Value::Text(id),
+                None => rusqlite::types::Value::Null,
+            };
+        }
     }
 
     let placeholders = cols.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
@@ -4302,6 +4456,165 @@ mod tests {
     use super::*;
     use crate::modules::session_link::{LinkStore, MemberState, Operation, StoreState};
     use serde_json::json;
+
+    fn count_spaces(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM spaces", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// 5.11 空间重映射：已有分组直接命中，新分组自动补建，重复迁移不重复建组。
+    #[test]
+    fn resolve_or_create_space_id_creates_missing_space_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE spaces (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                primary_folder_path TEXT,
+                create_folder_path TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER,
+                status TEXT NOT NULL DEFAULT 'active',
+                transport TEXT NOT NULL DEFAULT 'local',
+                conversation_origin TEXT,
+                deleted_at INTEGER NOT NULL DEFAULT -1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source_kind TEXT
+            );
+            CREATE TABLE space_folders (
+                space_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (space_id, path)
+            );
+            INSERT INTO spaces (id,user_id,device_id,name,primary_folder_path,create_folder_path,
+                pinned,sort_order,status,transport,deleted_at,created_at,updated_at,source_kind)
+            VALUES ('space-dk30','uid-target','device-1','DK-30','D:\\WorkBuddy\\project\\DK-30',
+                'D:\\WorkBuddy\\project\\DK-30',0,0,'active','local',-1,1,1,'user');
+            INSERT INTO space_folders (space_id,path,sort_order)
+            VALUES ('space-dk30','D:\\WorkBuddy\\project\\DK-30',0);",
+        )
+        .unwrap();
+
+        let row = |cwd: &str| {
+            vec![(
+                "cwd".to_string(),
+                rusqlite::types::Value::Text(cwd.to_string()),
+            )]
+        };
+
+        let hit = resolve_or_create_target_space_id(
+            &conn,
+            &row("D:/WorkBuddy/project/DK-30"),
+            "uid-target",
+        );
+        assert_eq!(hit.as_deref(), Some("space-dk30"));
+        assert_eq!(count_spaces(&conn), 1);
+
+        let id = resolve_or_create_target_space_id(
+            &conn,
+            &row("D:/WorkBuddy/project/HK-614"),
+            "uid-target",
+        )
+        .expect("新分组应被补建");
+        assert_eq!(count_spaces(&conn), 2);
+        let (name, primary, kind, status, deleted, device): (
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT name,primary_folder_path,source_kind,status,deleted_at,device_id \
+                 FROM spaces WHERE id=?1",
+                rusqlite::params![id.as_str()],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(name, "HK-614");
+        assert_eq!(
+            normalized_space_path(&primary),
+            normalized_space_path("D:/WorkBuddy/project/HK-614")
+        );
+        assert_eq!(kind, "user");
+        assert_eq!(status, "active");
+        assert_eq!(deleted, -1);
+        assert_eq!(device, "device-1");
+        let bound: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM space_folders WHERE space_id=?1",
+                rusqlite::params![id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bound, 1);
+
+        let again = resolve_or_create_target_space_id(
+            &conn,
+            &row("D:/WorkBuddy/project/HK-614"),
+            "uid-target",
+        );
+        assert_eq!(again.as_deref(), Some(id.as_str()));
+        assert_eq!(count_spaces(&conn), 2);
+    }
+
+    /// 目标库一个分组都没有时也要能补建（device_id 走兜底），否则全新账号仍会游离。
+    #[test]
+    fn resolve_or_create_space_id_handles_empty_spaces_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE spaces (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT NOT NULL,
+                name TEXT NOT NULL, primary_folder_path TEXT, create_folder_path TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0, sort_order INTEGER,
+                status TEXT NOT NULL DEFAULT 'active', transport TEXT NOT NULL DEFAULT 'local',
+                conversation_origin TEXT, deleted_at INTEGER NOT NULL DEFAULT -1,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, source_kind TEXT
+            );
+            CREATE TABLE space_folders (
+                space_id TEXT NOT NULL, path TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (space_id, path)
+            );",
+        )
+        .unwrap();
+        let row = vec![(
+            "cwd".to_string(),
+            rusqlite::types::Value::Text("D:/WorkBuddy/project/REACH.PHM".to_string()),
+        )];
+        let id = resolve_or_create_target_space_id(&conn, &row, "uid-new")
+            .expect("空 spaces 表也应补建分组");
+        assert_eq!(count_spaces(&conn), 1);
+        let device: String = conn
+            .query_row(
+                "SELECT device_id FROM spaces WHERE id=?1",
+                rusqlite::params![id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!device.is_empty());
+        let bound: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM space_folders WHERE space_id=?1",
+                rusqlite::params![id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bound, 1);
+    }
 
     struct Env {
         root: PathBuf,
