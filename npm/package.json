@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-switch",
-  "version": "0.1.62",
+  "version": "0.1.63",
   "description": "Account switcher for WorkBuddy and CodeBuddy: a local webui you drive in the browser, plus a desktop app you run with workbuddy-switch",
   "bin": {
     "workbuddy-switch": "bin/workbuddy-switch.js"
@@ -10,10 +10,10 @@
     "scripts"
   ],
   "optionalDependencies": {
-    "workbuddy-switch-darwin-arm64": "0.1.62",
-    "workbuddy-switch-darwin-x64": "0.1.62",
-    "workbuddy-switch-win32-x64": "0.1.62",
-    "workbuddy-switch-linux-x64": "0.1.62"
+    "workbuddy-switch-darwin-arm64": "0.1.63",
+    "workbuddy-switch-darwin-x64": "0.1.63",
+    "workbuddy-switch-win32-x64": "0.1.63",
+    "workbuddy-switch-linux-x64": "0.1.63"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"
