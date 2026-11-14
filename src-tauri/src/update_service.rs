@@ -22,17 +22,40 @@ use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_updater::UpdaterExt;
 
 use wb_switch_core::modules::config::now_secs;
-use wb_switch_core::modules::update;
+use wb_switch_core::modules::{i18n, update};
 
 /// 后台首次检查延迟：启动 15 秒后（替代前端 30 分钟轮询的首屏延迟）。
 pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(15);
 /// 后台检查间隔（30 分钟）。
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
-const BUSY_MESSAGE: &str = "更新任务正在进行中，请稍候";
-const NO_PACKAGE_MESSAGE: &str = "没有可安装的更新包，请先下载更新包";
-const DEMO_DOWNLOAD_MESSAGE: &str = "演示模式已跳过更新下载";
-const DEMO_RESTART_MESSAGE: &str = "演示模式已跳过更新安装";
+fn busy_message() -> &'static str {
+    i18n::tr(
+        "An update is already running. Wait for it to finish.",
+        "업데이트 작업이 이미 실행 중입니다. 잠시 기다려 주세요.",
+    )
+}
+
+fn no_package_message() -> &'static str {
+    i18n::tr(
+        "No update package to install. Download one first.",
+        "설치할 업데이트 패키지가 없습니다. 먼저 업데이트를 내려받으세요.",
+    )
+}
+
+fn demo_download_message() -> &'static str {
+    i18n::tr(
+        "Demo mode skipped the update download",
+        "데모 모드에서는 업데이트를 내려받지 않습니다",
+    )
+}
+
+fn demo_restart_message() -> &'static str {
+    i18n::tr(
+        "Demo mode skipped the update install",
+        "데모 모드에서는 업데이트를 설치하지 않습니다",
+    )
+}
 
 /// 更新阶段。前端与托盘菜单都只读这一份状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -294,8 +317,8 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>, proxy: Option<&str>, force: b
         eprintln!("[更新] 已有任务在跑，跳过本次检查");
         let mut value = json!({
             "ok": false,
-            "error": BUSY_MESSAGE,
-            "message": BUSY_MESSAGE,
+            "error": busy_message(),
+            "message": busy_message(),
         });
         value["releaseUrl"] = json!(release_url());
         return value;
@@ -317,11 +340,11 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>, proxy: Option<&str>, force: b
 /// 都不需要等网络；重复调用由 `BUSY` 拒绝。
 pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if crate::is_screenshot_demo() {
-        return Err(DEMO_DOWNLOAD_MESSAGE.to_string());
+        return Err(demo_download_message().to_string());
     }
     let Some(busy) = BusyGuard::acquire() else {
         eprintln!("[更新] 已有任务在跑，跳过本次下载");
-        return Err(BUSY_MESSAGE.to_string());
+        return Err(busy_message().to_string());
     };
     eprintln!("[更新] 启动下载任务");
     let app = app.clone();
@@ -337,8 +360,11 @@ pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 reset_tooltip(&app);
                 notify(
                     &app,
-                    "更新已就绪",
-                    &format!("v{version} 已下载完成，点「重启以完成升级」后生效"),
+                    i18n::tr("Update ready", "업데이트 준비 완료"),
+                    &i18n::pick(
+                        format!("v{version} downloaded. It applies after you click Restart to finish updating."),
+                        format!("v{version} 내려받기 완료. \"재시작하여 업데이트 완료\"를 누르면 적용됩니다."),
+                    ),
                 );
             }
             // 更新源已无可用包（版本已追平）。
@@ -354,7 +380,7 @@ pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 eprintln!("[更新] 下载失败：{message}");
                 set_phase(&app, fail(message.clone()));
                 reset_tooltip(&app);
-                notify(&app, "更新下载失败", &message);
+                notify(&app, i18n::tr("Update download failed", "업데이트 내려받기 실패"), &message);
             }
         }
     });
@@ -366,13 +392,13 @@ pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 /// 无包时返回可读错误（不 panic）；安装失败置 Error + 通知，并释放已暂存的包。
 pub async fn restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if crate::is_screenshot_demo() {
-        return Err(DEMO_RESTART_MESSAGE.to_string());
+        return Err(demo_restart_message().to_string());
     }
     // 无包时返回可读错误（不 panic）。
     let package = take_package_for_install()?;
     let Some(_busy) = BusyGuard::acquire() else {
         store_package(package);
-        return Err(BUSY_MESSAGE.to_string());
+        return Err(busy_message().to_string());
     };
 
     let DownloadedPackage {
@@ -391,25 +417,34 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             Ok(()) => Ok(()),
             Err(error) => {
                 // 包已装好，重启失败只剩「手动重启」一条路：明确告知，避免用户以为要重下。
-                let message = format!("v{version} 已安装，请手动重启应用完成升级：{error}");
+                let message = i18n::pick(
+                    format!("v{version} is installed. Restart the app by hand to finish updating: {error}"),
+                    format!("v{version} 설치가 끝났습니다. 앱을 직접 다시 시작하면 업데이트가 적용됩니다: {error}"),
+                );
                 eprintln!("[更新] 重启失败：{message}");
                 set_phase(app, fail(message.clone()));
-                notify(app, "更新已安装", &message);
+                notify(app, i18n::tr("Update installed", "업데이트 설치 완료"), &message);
                 Err(message)
             }
         },
         Ok(Err(error)) => {
-            let message = format!("安装 v{version} 失败：{error}");
+            let message = i18n::pick(
+                format!("Failed to install v{version}: {error}"),
+                format!("v{version} 설치 실패: {error}"),
+            );
             eprintln!("[更新] {message}");
             set_phase(app, fail(message.clone()));
-            notify(app, "更新安装失败", &message);
+            notify(app, i18n::tr("Update install failed", "업데이트 설치 실패"), &message);
             Err(message)
         }
         Err(error) => {
-            let message = format!("安装 v{version} 失败：{error}");
+            let message = i18n::pick(
+                format!("Failed to install v{version}: {error}"),
+                format!("v{version} 설치 실패: {error}"),
+            );
             eprintln!("[更新] {message}");
             set_phase(app, fail(message.clone()));
-            notify(app, "更新安装失败", &message);
+            notify(app, i18n::tr("Update install failed", "업데이트 설치 실패"), &message);
             Err(message)
         }
     }
@@ -446,11 +481,17 @@ async fn download_package<R: Runtime>(
     };
     let updater = builder
         .build()
-        .map_err(|error| format!("初始化更新器失败：{error}"))?;
+        .map_err(|error| i18n::pick(
+            format!("Failed to initialize the updater: {error}"),
+            format!("업데이터 초기화 실패: {error}"),
+        ))?;
     let update = updater
         .check()
         .await
-        .map_err(|error| format!("检查更新包失败：{error}"))?;
+        .map_err(|error| i18n::pick(
+            format!("Failed to check for an update: {error}"),
+            format!("업데이트 확인 실패: {error}"),
+        ))?;
     let Some(update) = update else {
         return Ok(None);
     };
@@ -468,7 +509,10 @@ async fn download_package<R: Runtime>(
             || {},
         )
         .await
-        .map_err(|error| format!("下载更新包失败：{error}"))?;
+        .map_err(|error| i18n::pick(
+            format!("Failed to download the update: {error}"),
+            format!("업데이트 내려받기 실패: {error}"),
+        ))?;
     Ok(Some(DownloadedPackage {
         version,
         bytes,
@@ -494,8 +538,11 @@ fn on_download_chunk<R: Runtime>(app: &AppHandle<R>, downloaded: u64, total: Opt
 
 fn download_tooltip(percent: Option<u8>) -> String {
     match percent {
-        Some(percent) => format!("正在下载更新 {percent}%"),
-        None => "正在下载更新…".to_string(),
+        Some(percent) => i18n::pick(
+            format!("Downloading update {percent}%"),
+            format!("업데이트 내려받는 중 {percent}%"),
+        ),
+        None => i18n::tr("Downloading update…", "업데이트 내려받는 중…").to_string(),
     }
 }
 
@@ -517,7 +564,7 @@ fn store_package(package: DownloadedPackage) {
 
 /// 取出待安装的包；无包时返回可读错误（不 panic）。
 fn take_package_for_install() -> Result<DownloadedPackage, String> {
-    take_package().ok_or_else(|| NO_PACKAGE_MESSAGE.to_string())
+    take_package().ok_or_else(|| no_package_message().to_string())
 }
 
 fn take_package() -> Option<DownloadedPackage> {
@@ -752,7 +799,7 @@ mod tests {
             Ok(_) => panic!("无包时不应返回可安装的更新包"),
             Err(error) => error,
         };
-        assert!(error.contains("没有可安装的更新包"), "{error}");
+        assert!(error.contains("No update package to install"), "{error}");
     }
 
     #[test]
@@ -813,7 +860,7 @@ mod tests {
 
     #[test]
     fn download_tooltip_reports_percent_or_unknown() {
-        assert_eq!(download_tooltip(Some(42)), "正在下载更新 42%");
-        assert_eq!(download_tooltip(None), "正在下载更新…");
+        assert_eq!(download_tooltip(Some(42)), "Downloading update 42%");
+        assert_eq!(download_tooltip(None), "Downloading update…");
     }
 }

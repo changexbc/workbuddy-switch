@@ -45,6 +45,16 @@ src/                 # frontend: components, pages, lib, stores
 npm/                 # npm package: package.json, bin, scripts/install.js
 ```
 
+## Translations
+
+English is the default language and Korean is the second. The app has two catalogs, one per process boundary.
+
+The webview catalog lives in `src/lib/i18n/messages/`. Each surface owns one pair of files, `en.ts` and `ko.ts`. The English file defines the key set, so a misspelled key fails the type check. The Korean file is partial and falls back to English, and `messages.test.ts` fails when a key or a placeholder is missing. Components read strings through `useT()` from `src/lib/i18n`; plain modules call `translate()` from `src/lib/i18n/translate`.
+
+The Rust catalog is `crates/wb-switch-core/src/modules/i18n.rs`, which covers what the host draws outside the webview: tray menu labels, notifications, and the messages the backend returns to the interface. Call sites pass both languages, as in `i18n::tr("Open main window", "주 창 열기")`, so a missing translation is a compile error rather than a runtime fallback. The frontend reports the selected language through the `set_locale` command, which also stores it in `~/.wb-switch/locale` so the tray renders in the right language on the next start.
+
+`index.html` keeps its own copy of the first-paint and startup-failure strings, because that inline script runs before the bundle.
+
 ## Privacy notes
 
 - Do not commit local data. `.gitignore` excludes `accounts.json`, authentication files, keys, and tokens.

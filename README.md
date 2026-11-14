@@ -53,6 +53,7 @@ An npm / webui version also runs in the browser — see [npm / webui version](#n
 | Auto update | Checks GitHub Releases for new versions; full-package updates are signature-verified |
 | Session rail | Built-in Agent Companion rail on desktop, showing running / awaiting-confirmation / completed status for Codex / WorkBuddy / CodeBuddy / Codeg sessions; hover for details, click to jump back to the original session, hide it from the tray |
 | Permission check | macOS authorization guide (App Management / Full Disk Access drag-to-authorize, plus automatic detection) |
+| Language | English by default, Korean selectable; applies to the desktop app, the tray menu and the webui |
 
 ## Supported Tools
 
@@ -98,6 +99,7 @@ More details and the standalone version: [Agent Companion repository](https://gi
 6. **Toggle client entry points**: Settings → "Supported tools" enables or disables each client; a disabled client is hidden on the accounts page and no longer polled, without affecting the account library. JetBrains is off by default
 7. **Auto rotation**: Settings → CodeBuddy CLI auto rotation; when enabled, the default account is set automatically by credit urgency
 8. **Updates**: The app checks public GitHub Releases automatically; upgrade from the bottom-left corner when a new version is found, or open the release page from settings to download manually
+9. **Change the language**: Settings → Appearance → Language; the choice applies to the desktop app, the tray menu and the webui, and survives a restart
 
 ## Screenshots
 

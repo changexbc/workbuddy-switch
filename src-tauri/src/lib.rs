@@ -193,6 +193,11 @@ pub fn run() {
                 // notify 之前拦下正常第二实例，丢掉「再点开 → 既有窗口弹出」。
                 #[cfg(target_os = "macos")]
                 instance_lock::acquire_or_exit(app.handle());
+                // The tray is built during setup, so the stored locale has to be
+                // in place before it renders its first menu.
+                wb_switch_core::modules::i18n::set_locale(
+                    wb_switch_core::modules::i18n::load_locale(),
+                );
                 tray::setup(app)?;
                 // 主窗口由配置创建为不可见；在事件循环呈现前决定本次启动是否静默。
                 // 仅系统自启（精确 `--hidden` 参数）进入静默托盘，普通启动立即显示主窗口。
@@ -298,6 +303,7 @@ pub fn run() {
             commands::record_notification,
             commands::list_notifications,
             commands::clear_notifications,
+            commands::set_locale,
             commands::log_error,
             commands::get_error_log_path,
             commands::reveal_error_log,

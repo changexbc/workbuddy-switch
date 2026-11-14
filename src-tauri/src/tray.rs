@@ -11,7 +11,7 @@ use tauri::{
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
-use wb_switch_core::modules::{checkin, update};
+use wb_switch_core::modules::{checkin, i18n, update};
 
 use crate::update_service::{UpdatePhase, UpdateSnapshot};
 
@@ -387,7 +387,7 @@ impl<R: Runtime> Drop for CheckinBusyGuard<R> {
 
 fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, "README 截图演示模式");
+        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
         return;
     }
     if CHECKIN_BUSY
@@ -398,7 +398,7 @@ fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
     }
     bump_tooltip_generation();
     refresh_tray_menu(app);
-    set_tray_tooltip(app, "正在签到…");
+    set_tray_tooltip(app, i18n::tr("Checking in…", "출석 처리 중…"));
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -421,7 +421,7 @@ fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
 /// 菜单回调和「一键签到」同在主线程，异步检查必须 spawn（见 `start_checkin_all`）。
 fn start_update_check<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, "README 截图演示模式");
+        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
         return;
     }
     let app = app.clone();
@@ -435,7 +435,7 @@ fn start_update_check<R: Runtime>(app: &AppHandle<R>) {
 /// 互斥与演示模式短路都在更新服务内（下载是长任务，托盘不持有它的生命周期）。
 fn start_update_download<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, "README 截图演示模式");
+        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
         return;
     }
     let _ = crate::update_service::start_download(app);
@@ -446,7 +446,7 @@ fn start_update_download<R: Runtime>(app: &AppHandle<R>) {
 /// 安装会解压整包 / 替换应用（macOS 未授权时弹系统授权框），必须离开主线程执行。
 fn start_update_restart<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, "README 截图演示模式");
+        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
         return;
     }
     let app = app.clone();
@@ -573,42 +573,60 @@ impl UpdateMenuAction {
 /// `Error` 按是否已知目标版本区分两种重试文案：已知版本 → 重试下载；未知 → 重试检查。
 fn update_menu_spec(snapshot: &UpdateSnapshot) -> (UpdateMenuAction, String, bool) {
     match snapshot.phase {
-        UpdatePhase::Idle | UpdatePhase::UpToDate => {
-            (UpdateMenuAction::Check, "检查更新".to_string(), true)
-        }
-        UpdatePhase::Checking => (UpdateMenuAction::Check, "正在检查…".to_string(), false),
+        UpdatePhase::Idle | UpdatePhase::UpToDate => (
+            UpdateMenuAction::Check,
+            i18n::tr("Check for updates", "업데이트 확인").to_string(),
+            true,
+        ),
+        UpdatePhase::Checking => (
+            UpdateMenuAction::Check,
+            i18n::tr("Checking…", "확인 중…").to_string(),
+            false,
+        ),
         UpdatePhase::Available => (
             UpdateMenuAction::Download,
             match snapshot.latest.as_deref() {
-                Some(latest) => format!("升级到 v{latest}"),
-                None => "升级到新版本".to_string(),
+                Some(latest) => i18n::pick(
+                    format!("Update to v{latest}"),
+                    format!("v{latest}(으)로 업데이트"),
+                ),
+                None => i18n::tr("Update to the new version", "새 버전으로 업데이트")
+                    .to_string(),
             },
             true,
         ),
         UpdatePhase::Downloading => (
             UpdateMenuAction::Download,
             match snapshot.percent {
-                Some(percent) => format!("正在下载更新 {percent}%"),
-                None => "正在下载更新…".to_string(),
+                Some(percent) => i18n::pick(
+                    format!("Downloading update {percent}%"),
+                    format!("업데이트 내려받는 중 {percent}%"),
+                ),
+                None => i18n::tr("Downloading update…", "업데이트 내려받는 중…").to_string(),
             },
             false,
         ),
         UpdatePhase::ReadyToRestart => (
             UpdateMenuAction::Restart,
-            "重启以完成升级".to_string(),
+            i18n::tr("Restart to finish updating", "재시작하여 업데이트 완료").to_string(),
             true,
         ),
         UpdatePhase::Error => {
             if snapshot.latest.is_some() {
                 (
                     UpdateMenuAction::Download,
-                    "更新失败，点击重试".to_string(),
+                    i18n::tr("Update failed. Click to retry.", "업데이트 실패. 클릭하여 다시 시도.")
+                        .to_string(),
                     true,
                 )
             } else {
                 (
                     UpdateMenuAction::Check,
-                    "检查更新失败，点击重试".to_string(),
+                    i18n::tr(
+                        "Update check failed. Click to retry.",
+                        "업데이트 확인 실패. 클릭하여 다시 시도.",
+                    )
+                    .to_string(),
                     true,
                 )
             }
@@ -617,17 +635,29 @@ fn update_menu_spec(snapshot: &UpdateSnapshot) -> (UpdateMenuAction, String, boo
 }
 
 fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
-    let open_item = MenuItem::with_id(app, "open-main-window", "打开主界面", true, None::<&str>)?;
-    let github_item = MenuItem::with_id(app, "open-github", "打开 GitHub", true, None::<&str>)?;
+    let open_item = MenuItem::with_id(
+        app,
+        "open-main-window",
+        i18n::tr("Open main window", "주 창 열기"),
+        true,
+        None::<&str>,
+    )?;
+    let github_item = MenuItem::with_id(
+        app,
+        "open-github",
+        i18n::tr("Open GitHub", "GitHub 열기"),
+        true,
+        None::<&str>,
+    )?;
     // 档位区分在 core 判定：无签到活动的档位（国际版）不参与「待签到」集合，
     // 否则这些账号永远不会产生签到日志，托盘会一直显示「可签到」。
     let checked_in = checkin::all_accounts_checked_in_today();
     let (checkin_label, checkin_enabled) = if CHECKIN_BUSY.load(Ordering::Acquire) {
-        ("一键签到", false)
+        (i18n::tr("Check in all", "전체 출석"), false)
     } else if checked_in {
-        ("已签到", false)
+        (i18n::tr("Checked in", "출석 완료"), false)
     } else {
-        ("一键签到", true)
+        (i18n::tr("Check in all", "전체 출석"), true)
     };
     let checkin_item = MenuItem::with_id(
         app,
@@ -648,7 +678,7 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
     let lightweight_item = CheckMenuItem::with_id(
         app,
         "lightweight-mode",
-        "轻量模式",
+        i18n::tr("Lightweight mode", "라이트 모드"),
         true,
         LIGHTWEIGHT_MODE.load(Ordering::Acquire),
         None::<&str>,
@@ -658,18 +688,24 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
     let companion_toggle = MenuItem::with_id(
         app,
         "companion-toggle",
-        "显示 / 隐藏悬浮窗",
+        i18n::tr("Show / hide the rail", "레일 표시 / 숨기기"),
         companion_enabled,
         None::<&str>,
     )?;
     let companion_settings = MenuItem::with_id(
         app,
         "companion-settings",
-        "悬浮窗设置",
+        i18n::tr("Rail settings", "레일 설정"),
         companion_enabled,
         None::<&str>,
     )?;
-    let quit_item = MenuItem::with_id(app, "quit-app", "退出应用", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(
+        app,
+        "quit-app",
+        i18n::tr("Quit", "종료"),
+        true,
+        None::<&str>,
+    )?;
 
     MenuBuilder::new(app)
         .item(&open_item)
@@ -869,13 +905,17 @@ fn format_checkin_tooltip(value: &Value) -> String {
     if value.get("status").and_then(Value::as_str) == Some("skipped")
         && value.get("reason").and_then(Value::as_str) == Some("already_running")
     {
-        return "签到任务正在进行，请稍后再试".to_string();
+        return i18n::tr(
+            "A check-in is already running. Try again shortly.",
+            "출석 작업이 이미 실행 중입니다. 잠시 후 다시 시도하세요.",
+        )
+        .to_string();
     }
     let Some(accounts) = value.get("accounts").and_then(Value::as_array) else {
-        return "没有可签到的账号".to_string();
+        return i18n::tr("No account to check in", "출석할 계정이 없습니다").to_string();
     };
     if accounts.is_empty() {
-        return "没有可签到的账号".to_string();
+        return i18n::tr("No account to check in", "출석할 계정이 없습니다").to_string();
     }
 
     let mut ok = 0;
@@ -891,10 +931,16 @@ fn format_checkin_tooltip(value: &Value) -> String {
             _ => {}
         }
     }
-    let mut text = format!("签到完成：成功 {ok}，已签 {already}，失败 {err}");
+    let mut text = i18n::pick(
+        format!("Check-in finished: {ok} succeeded, {already} already done, {err} failed"),
+        format!("출석 완료: 성공 {ok}, 이미 완료 {already}, 실패 {err}"),
+    );
     // 国际版无签到活动：单列「未开放」，避免被误读成失败或漏报。
     if inactive > 0 {
-        text.push_str(&format!("，未开放 {inactive}"));
+        text.push_str(&i18n::pick(
+            format!(", {inactive} not available"),
+            format!(", 미지원 {inactive}"),
+        ));
     }
     text
 }
@@ -1105,13 +1151,13 @@ mod tests {
     fn tooltip_when_no_accounts() {
         assert_eq!(
             format_checkin_tooltip(&json!({"accounts": []})),
-            "没有可签到的账号"
+            "No account to check in"
         );
     }
 
     #[test]
     fn tooltip_when_accounts_missing() {
-        assert_eq!(format_checkin_tooltip(&json!({})), "没有可签到的账号");
+        assert_eq!(format_checkin_tooltip(&json!({})), "No account to check in");
     }
 
     #[test]
@@ -1122,7 +1168,7 @@ mod tests {
                 "status": "skipped",
                 "reason": "already_running"
             })),
-            "签到任务正在进行，请稍后再试"
+            "A check-in is already running. Try again shortly."
         );
     }
 
@@ -1140,7 +1186,7 @@ mod tests {
         });
         assert_eq!(
             format_checkin_tooltip(&payload),
-            "签到完成：成功 2，已签 1，失败 3"
+            "Check-in finished: 2 succeeded, 1 already done, 3 failed"
         );
     }
 
@@ -1155,7 +1201,7 @@ mod tests {
         });
         assert_eq!(
             format_checkin_tooltip(&payload),
-            "签到完成：成功 1，已签 0，失败 0，未开放 1"
+            "Check-in finished: 1 succeeded, 0 already done, 0 failed, 1 not available"
         );
     }
 
@@ -1214,7 +1260,7 @@ mod tests {
         });
         assert_eq!(
             format_checkin_tooltip(&payload),
-            "签到完成：成功 1，已签 0，失败 0"
+            "Check-in finished: 1 succeeded, 0 already done, 0 failed"
         );
     }
 
@@ -1234,22 +1280,22 @@ mod tests {
 
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::Idle, None, None)),
-            (UpdateMenuAction::Check, "检查更新".to_string(), true)
+            (UpdateMenuAction::Check, "Check for updates".to_string(), true)
         );
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::UpToDate, None, None)),
-            (UpdateMenuAction::Check, "检查更新".to_string(), true)
+            (UpdateMenuAction::Check, "Check for updates".to_string(), true)
         );
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::Checking, None, None)),
-            (UpdateMenuAction::Check, "正在检查…".to_string(), false),
+            (UpdateMenuAction::Check, "Checking…".to_string(), false),
             "检查中不可重复点击"
         );
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::Available, Some("0.1.48"), None)),
             (
                 UpdateMenuAction::Download,
-                "升级到 v0.1.48".to_string(),
+                "Update to v0.1.48".to_string(),
                 true
             )
         );
@@ -1261,7 +1307,7 @@ mod tests {
             )),
             (
                 UpdateMenuAction::Download,
-                "正在下载更新 42%".to_string(),
+                "Downloading update 42%".to_string(),
                 false
             )
         );
@@ -1269,7 +1315,7 @@ mod tests {
             update_menu_spec(&snapshot(UpdatePhase::Downloading, Some("0.1.48"), None)),
             (
                 UpdateMenuAction::Download,
-                "正在下载更新…".to_string(),
+                "Downloading update…".to_string(),
                 false
             ),
             "总量未知时只显示进行中，不显示假百分比"
@@ -1278,7 +1324,7 @@ mod tests {
             update_menu_spec(&snapshot(UpdatePhase::ReadyToRestart, Some("0.1.48"), None)),
             (
                 UpdateMenuAction::Restart,
-                "重启以完成升级".to_string(),
+                "Restart to finish updating".to_string(),
                 true
             ),
             "重启时机由用户决定，不自动重启"
@@ -1287,7 +1333,7 @@ mod tests {
             update_menu_spec(&snapshot(UpdatePhase::Error, Some("0.1.48"), None)),
             (
                 UpdateMenuAction::Download,
-                "更新失败，点击重试".to_string(),
+                "Update failed. Click to retry.".to_string(),
                 true
             ),
             "已知目标版本 → 重试的是下载"
@@ -1296,7 +1342,7 @@ mod tests {
             update_menu_spec(&snapshot(UpdatePhase::Error, None, None)),
             (
                 UpdateMenuAction::Check,
-                "检查更新失败，点击重试".to_string(),
+                "Update check failed. Click to retry.".to_string(),
                 true
             ),
             "未知版本 → 重试的是检查"

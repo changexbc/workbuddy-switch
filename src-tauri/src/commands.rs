@@ -10,7 +10,7 @@ use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
     codebuddy_ide_session, codebuddy_ide_session_sync, credit_usage, credits, error_log,
-    export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
+    export_import, i18n, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
     variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
@@ -1465,4 +1465,15 @@ pub async fn list_notifications() -> Result<Value, String> {
 #[tauri::command]
 pub async fn clear_notifications() -> Result<(), String> {
     notifications::clear()
+}
+
+/// Records the interface language so the tray and the next start use it.
+#[tauri::command]
+pub fn set_locale(app: tauri::AppHandle, locale: String) {
+    let Some(parsed) = i18n::Locale::parse(&locale) else {
+        return;
+    };
+    i18n::set_locale(parsed);
+    let _ = i18n::save_locale(parsed);
+    crate::tray::refresh_tray_menu(&app);
 }
