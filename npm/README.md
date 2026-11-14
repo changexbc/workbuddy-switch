@@ -1,72 +1,74 @@
 # workbuddy-switch
 
-WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号切换工具，浏览器中操作（webui），四者均支持国内版 / 国际版，并提供积分到期与 Token 用量监控。同时提供桌面 App（Tauri）版本。
+**English** | [한국어](./README.ko.md)
 
-多账号共享登录态，一键切换 WorkBuddy 登录账号。**会话复制**：把当前账号的会话以新 id 复制给目标账号，源账号数据不受影响，云端归属目标账号。
+An account switcher for WorkBuddy, CodeBuddy IDE, CodeBuddy CLI and the VS Code CodeBuddy extension, running in the browser (webui). All four support both the Domestic and International editions, and the app adds credit-expiry and token-usage monitoring. A desktop app (Tauri) is also available.
 
-**在线演示**：[打开 GitHub Pages 演示](https://changexbc.github.io/workbuddy-switch/)（只读演示；账号、积分与请求记录均为虚构数据，所有业务操作均已禁用）
+Multiple accounts share one login state, and the WorkBuddy login account switches with a single click. **Session copy** duplicates the current account's sessions under new ids for a target account — the source account's data is untouched and the copies belong to the target account in the cloud.
 
-## 快速开始
+**Live demo**: [Open the GitHub Pages demo](https://changexbc.github.io/workbuddy-switch/) (read-only; accounts, credits and request records are fictional, all business actions are disabled)
 
-### npm 安装（webui）
+## Quick Start
+
+### npm install (webui)
 
 ```bash
 npm i -g workbuddy-switch
-workbuddy-switch              # 启动本地服务 + 自动打开浏览器
-workbuddy-switch status       # 终端查看当前账号
+workbuddy-switch              # start the local server and open the browser
+workbuddy-switch status       # show the current account in the terminal
 ```
 
-webui 界面与桌面 App 一致，功能覆盖下方全部模块。
+The webui matches the desktop app and covers every module below.
 
-### 桌面 App
+### Desktop app
 
-从 [GitHub Releases](https://github.com/changexbc/workbuddy-switch/releases/latest) 下载 macOS / Windows / Linux 安装包（Tauri，推荐日常使用）。
+Download the macOS / Windows / Linux installer from [GitHub Releases](https://github.com/changexbc/workbuddy-switch/releases/latest) (Tauri; recommended for daily use).
 
-> **macOS 提示「已损坏，无法打开」？** 未签名应用会触发隔离机制，在终端执行一次即可：
+> **macOS says "is damaged and can't be opened"?** An unsigned app triggers the quarantine mechanism; run this once in a terminal:
 >
 > ```bash
 > xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
 > ```
 
-应用能启动但切换账号时提示无权限，请参阅下方 [macOS 权限说明](#macos-权限说明)。
+If the app launches but switching accounts reports a permission error, see [macOS Permissions](#macos-permissions) below.
 
-## 功能
+## Features
 
-| 模块 | 说明 |
+| Module | Description |
 | --- | --- |
-| 账号管理 | OAuth 扫码登录、导入导出账号、删除账号 |
-| 账号切换 | 一键切换 WorkBuddy 登录账号，切换过程实时显示进度 |
-| 会话复制 | 把当前账号勾选的会话复制给目标账号，源账号数据不受影响 |
-| 积分到期查询 | 自动查询每个账号的积分剩余量与到期时间；7 天内到期高亮，并按紧迫程度排序、标注「建议优先使用」 |
-| 积分统计 | 汇总官方请求用量：总览、近 30 天趋势、模型分类、账号消耗与请求明细 |
-| Token 统计 | 按来源查看 Token 总览与趋势，含构成占比、活跃热力图、项目/模型 Top 10 与会话排行 |
-| CodeBuddy CLI | 与 WorkBuddy 复用同一账号库，默认账号独立；切换后立即生效，无需重启 CLI |
-| CodeBuddy IDE | 支持切换 CodeBuddy IDE 桌面客户端账号，与 CodeBuddy CLI 相互独立 |
-| VS Code CodeBuddy 插件 | 支持切换 VS Code 内的 CodeBuddy 插件账号；VS Code 运行时可自动关闭并在写入后重新打开 |
-| 插件会话复制 | 切换插件账号时，可把当前插件账号的会话复制给目标账号（加法，源账号不变） |
-| 自动轮换 | 后台把积分最紧迫的账号设为 CodeBuddy CLI 后续启动账号；检测到 CLI 会话运行时会跳过 |
-| 自动更新 | 从 GitHub Releases 检查新版本，整包更新经签名校验 |
-| 权限检测 | macOS 授权引导（App 管理 / 完全磁盘访问拖拽授权 + 自动检测） |
+| Account management | OAuth QR-code sign-in, import/export accounts, delete accounts |
+| Account switching | One-click switch of the WorkBuddy login account, with live progress |
+| Session copy | Copy the sessions selected on the current account to a target account; the source account is untouched |
+| Credit expiry | Automatically queries each account's remaining credits and expiry date; anything expiring within 7 days is highlighted, sorted by urgency and marked "use first" |
+| Credit statistics | Aggregates official request usage: overview, 30-day trend, model breakdown, per-account consumption and request details |
+| Token statistics | Token overview and trends by source, including composition share, activity heatmap, project/model Top 10 and session ranking |
+| CodeBuddy CLI | Shares the same account library as WorkBuddy with an independent default account; changes take effect immediately, no CLI restart required |
+| CodeBuddy IDE | Switch the CodeBuddy IDE desktop client account; independent of CodeBuddy CLI |
+| VS Code CodeBuddy extension | Switch the CodeBuddy extension account inside VS Code; VS Code can be closed automatically and reopened after the write |
+| Extension session copy | When switching extension accounts, optionally copy the current extension account's sessions to the target (additive; the source stays unchanged) |
+| Auto rotation | In the background, sets the account with the most urgent credits as the next CodeBuddy CLI launch account; skipped while a CLI session is running |
+| Auto update | Checks GitHub Releases for new versions; full-package updates are signature-verified |
+| Permission check | macOS authorization guide (App Management / Full Disk Access drag-to-authorize, plus automatic detection) |
 
-## 使用
+## Usage
 
-1. **添加与导出账号**：账号页 →「OAuth 扫码登录」「导入备份」；「导出」可将勾选账号备份为 JSON
-2. **切换账号与账号信息**：账号卡片 →「切换」，可勾选复制当前会话；「账号信息」可给账号添加备注，并选择卡片上显示账号名 / 手机号 / 备注
-3. **查看积分与统计**：账号页自动查询各账号积分到期情况，点「刷新积分」手动更新；侧栏进入「积分统计」「Token 统计」查看用量明细
-4. **切换各客户端账号**：CodeBuddy CLI、CodeBuddy IDE、VS Code CodeBuddy 插件均可在账号卡片一键切换；其中 VS Code 插件支持在弹窗中勾选复制当前账号的会话。CodeBuddy IDE 首次使用前需先手动打开并登录一次
-5. **自动轮换**：设置 → CodeBuddy CLI 自动轮换，开启后按积分紧迫程度自动设置默认账号
-6. **更新**：设置 → 自动更新可检查公开 GitHub Releases 源；npm 版本也可通过 `npm update -g workbuddy-switch` 升级
+1. **Add and export accounts**: Accounts page → "OAuth QR sign-in", "Import backup"; "Export" backs up the selected accounts as JSON
+2. **Switch accounts and edit account info**: Account card → "Switch", with an option to copy the current session; "Account info" lets you add a note and choose whether the card shows the account name, phone number or note
+3. **Check credits and statistics**: The accounts page queries credit expiry automatically; click "Refresh credits" to update manually. Open "Credit statistics" and "Token statistics" from the sidebar for usage details
+4. **Switch accounts for each client**: CodeBuddy CLI, CodeBuddy IDE and the VS Code CodeBuddy extension can all be switched from the account card; the VS Code extension supports copying the current account's sessions in the dialog. CodeBuddy IDE must be opened and signed in manually once before first use
+5. **Auto rotation**: Settings → CodeBuddy CLI auto rotation; when enabled, the default account is set automatically by credit urgency
+6. **Updates**: Settings → auto update checks the public GitHub Releases source; the npm version can also be upgraded with `npm update -g workbuddy-switch`
 
-## macOS 权限说明
+## macOS Permissions
 
-切换账号需要写入 WorkBuddy 认证文件，macOS 要求授权「App 管理」（或「完全磁盘访问」）：
+Switching accounts writes WorkBuddy's authentication files, which macOS gates behind "App Management" (or "Full Disk Access"):
 
-1. 首次切换报「无权限」时，点「打开系统设置」
-2. 优先在 **App 管理** 里打开 workbuddy-switch 开关；若没有，则去 **完全磁盘访问** 把 workbuddy-switch 拖进带箭头的框
-3. 授权后重启本应用生效；设置页「权限检测」可随时验证
+1. When the first switch reports "no permission", click "Open System Settings"
+2. Prefer enabling workbuddy-switch under **App Management**; if it is not listed there, drag workbuddy-switch into the arrowed box under **Full Disk Access**
+3. Restart the app after granting; Settings → "Permission check" verifies at any time
 
-> webui 模式：由启动服务的终端进程权限决定；若终端已授权完全磁盘访问则无需额外操作。
+> webui mode: permissions follow the terminal process that started the server; if that terminal already has Full Disk Access, nothing else is needed.
 
-## 许可
+## License
 
 [MIT](./LICENSE)
