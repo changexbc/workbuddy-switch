@@ -15,6 +15,7 @@ import {
 import { JetbrainsMark } from "@/components/product-marks";
 import * as api from "@/lib/api";
 import { displayName } from "@/lib/account-display";
+import { useT } from "@/lib/i18n";
 import type { AccountMeta, JetbrainsStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,7 @@ interface Props {
  * 的缺省行为一致）。只装了一个时同样弹窗——把切换范围显式化，不引入第二种交互。
  */
 export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsStatus, onDone }: Props) {
+  const t = useT();
   const targets = useMemo(
     () => (jetbrainsStatus?.targets ?? []).filter((t) => t.pluginInstalled),
     [jetbrainsStatus],
@@ -62,8 +64,8 @@ export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsSt
   async function onConfirm() {
     if (!account || checked.length === 0 || busy) return;
     setBusy(true);
-    const toastId = toast.loading("正在切换 JetBrains IDE…", {
-      description: "将注入凭证，运行中的 IDEA / PyCharm 会先退出再自动重开",
+    const toastId = toast.loading(t("dialogs.jetbrains.switching"), {
+      description: t("dialogs.jetbrains.switchingDescription"),
     });
     try {
       const result = await api.switchJetbrainsAccount(
@@ -72,13 +74,13 @@ export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsSt
         checked.length === targets.length ? undefined : checked,
       );
       await onDone?.();
-      toast.success("JetBrains IDE 已切换", {
+      toast.success(t("dialogs.jetbrains.switched"), {
         id: toastId,
         description: result.message || result.account,
       });
       onOpenChange(false);
     } catch (error) {
-      toast.error("JetBrains IDE 切换失败", {
+      toast.error(t("dialogs.jetbrains.switchFailed"), {
         id: toastId,
         description: api.asError(error),
       });
@@ -93,21 +95,20 @@ export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsSt
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <JetbrainsMark size={20} />
-            切换 JetBrains 插件账号
+            {t("dialogs.jetbrains.title")}
           </DialogTitle>
           <DialogDescription>
             {account ? (
-              <>把 {displayName(account)} 设为所选 IDE 的 CodeBuddy 插件登录账号。</>
+              <>{t("dialogs.jetbrains.description", { name: displayName(account) })}</>
             ) : (
-              "选择要写入的 IDE。"
+              t("dialogs.jetbrains.descriptionNoAccount")
             )}
           </DialogDescription>
         </DialogHeader>
 
         {targets.length === 0 ? (
           <p className="rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
-            未检测到已安装 CodeBuddy 插件的 JetBrains IDE。请先在 IDEA / PyCharm 中安装「Tencent Cloud
-            CodeBuddy」插件后重试。
+            {t("dialogs.jetbrains.noTargets")}
           </p>
         ) : (
           <div className="space-y-1">
@@ -115,44 +116,46 @@ export function JetbrainsSwitchDialog({ open, onOpenChange, account, jetbrainsSt
               <Checkbox
                 checked={allChecked}
                 onCheckedChange={(on) => setSelected(on ? null : [])}
-                aria-label="全选"
+                aria-label={t("dialogs.jetbrains.selectAll")}
               />
-              全部 IDE
+              {t("dialogs.jetbrains.allIdes")}
             </label>
-            {targets.map((t) => (
+            {targets.map((target) => (
               <label
-                key={t.configDir}
+                key={target.configDir}
                 className={cn(
                   "flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-muted/60",
                   checked.length === 0 && "opacity-60",
                 )}
               >
                 <Checkbox
-                  checked={checked.includes(t.configDir)}
-                  onCheckedChange={(on) => toggle(t.configDir, Boolean(on))}
-                  aria-label={`写入 ${t.configDir}`}
+                  checked={checked.includes(target.configDir)}
+                  onCheckedChange={(on) => toggle(target.configDir, Boolean(on))}
+                  aria-label={t("dialogs.jetbrains.writeTo", { dir: target.configDir })}
                 />
-                <span className="min-w-0 flex-1 truncate">{t.configDir}</span>
-                {t.running && (
+                <span className="min-w-0 flex-1 truncate">{target.configDir}</span>
+                {target.running && (
                   <span className="flex-none rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
-                    运行中
+                    {t("dialogs.jetbrains.running")}
                   </span>
                 )}
               </label>
             ))}
             <p className="px-2 pt-1 text-xs leading-5 text-muted-foreground">
-              运行中的 IDE 会先退出（弹「确认退出」时自动确认）再写入并重新打开；未运行的 IDE 写入后下次打开生效。
+              {t("dialogs.jetbrains.runningHint")}
             </p>
           </div>
         )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button onClick={onConfirm} disabled={busy || targets.length === 0 || checked.length === 0}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-            {busy ? "切换中…" : `切换（${checked.length}/${targets.length}）`}
+            {busy
+              ? t("dialogs.common.switching")
+              : t("dialogs.jetbrains.confirm", { selected: checked.length, total: targets.length })}
           </Button>
         </DialogFooter>
       </DialogContent>

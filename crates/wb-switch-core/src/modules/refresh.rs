@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::modules::account::{build_auth_headers, upsert_account};
 use crate::modules::config::{http_request, load_checkin_config, norm_ts, now_ms, RunFlagGuard};
+use crate::modules::i18n;
 
 static KEEPALIVE_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -50,7 +51,10 @@ pub async fn refresh_account_token(mut account: Value) -> Value {
         .unwrap_or_default();
     if rt.is_empty() {
         account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!("缺少 refresh token，无法刷新，需重新登录");
+        account["needs_relogin_reason"] = json!(i18n::tr(
+            "Missing refresh token; cannot refresh, please sign in again",
+            "refresh token이 없어 갱신할 수 없습니다. 다시 로그인해 주세요",
+        ));
         let _ = upsert_account(&account);
         return account;
     }
@@ -62,12 +66,14 @@ pub async fn refresh_account_token(mut account: Value) -> Value {
     let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code != 0 && code != 200 {
         account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!(format!(
-            "刷新失败(code={code}): {}",
-            resp.get("message")
-                .or_else(|| resp.get("msg"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("未知错误")
+        let detail = resp
+            .get("message")
+            .or_else(|| resp.get("msg"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(i18n::tr("Unknown error", "알 수 없는 오류"));
+        account["needs_relogin_reason"] = json!(i18n::pick(
+            format!("Refresh failed (code={code}): {detail}"),
+            format!("갱신 실패(code={code}): {detail}"),
         ));
         let _ = upsert_account(&account);
         return account;
@@ -81,7 +87,10 @@ pub async fn refresh_account_token(mut account: Value) -> Value {
         .map(|s| s.to_string());
     let Some(new_at) = new_at else {
         account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!("刷新响应缺少 accessToken");
+        account["needs_relogin_reason"] = json!(i18n::tr(
+            "The refresh response has no accessToken",
+            "갱신 응답에 accessToken이 없습니다",
+        ));
         let _ = upsert_account(&account);
         return account;
     };
@@ -202,7 +211,10 @@ pub async fn run_keepalive_cycle() -> Value {
             .is_empty()
         {
             acc["needs_relogin"] = json!(true);
-            acc["needs_relogin_reason"] = json!("缺少 refresh token，无法保活，需重新登录");
+            acc["needs_relogin_reason"] = json!(i18n::tr(
+                "Missing refresh token; cannot keep the account alive, please sign in again",
+                "refresh token이 없어 계정을 유지할 수 없습니다. 다시 로그인해 주세요",
+            ));
             let _ = upsert_account(&acc);
             results.push(json!({
                 "email": crate::modules::account::account_display_name(&acc),

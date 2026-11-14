@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 use crate::modules::codebuddy_ide_session::{self, IdeFlavor};
+use crate::modules::i18n;
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::variant::WbVariant;
 use crate::modules::vscode_session::CODEBUDDY_IDE_STORE;
@@ -45,8 +46,13 @@ pub fn links_preview_intl(target_acc: &Value) -> Result<Value, String> {
 }
 
 fn links_preview_for(flavor: IdeFlavor, target_acc: &Value) -> Result<Value, String> {
-    let root = codebuddy_ide_session::ide_data_root()
-        .ok_or_else(|| "未找到 CodeBuddy IDE 数据目录，无法同步会话".to_string())?;
+    let root = codebuddy_ide_session::ide_data_root().ok_or_else(|| {
+        i18n::tr(
+            "CodeBuddy IDE data directory not found, so sessions cannot be synced",
+            "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다",
+        )
+        .to_string()
+    })?;
     let source_uid = active_source_uid(flavor)?;
     // 共用 `codebuddy_ide_session_links.json`：按组的 variant 过滤，国内版组不进国际版预览。
     vscode_session_sync::links_preview_in_for_variant(
@@ -73,12 +79,17 @@ pub(crate) fn sync_selected_for(
     }
     if flavor.is_running() {
         return Err(
-            "检测到 CodeBuddy IDE 正在运行，请先完全退出后再同步会话，否则写入会被 CodeBuddy IDE 覆盖。"
+            i18n::tr("CodeBuddy IDE is running. Quit it completely before syncing sessions, otherwise CodeBuddy IDE will overwrite the written data.", "CodeBuddy IDE가 실행 중입니다. 세션을 동기화하기 전에 완전히 종료해 주세요. 그렇지 않으면 기록한 내용을 CodeBuddy IDE가 덮어씁니다.")
                 .to_string(),
         );
     }
-    let root = codebuddy_ide_session::ide_data_root()
-        .ok_or_else(|| "未找到 CodeBuddy IDE 数据目录，无法同步会话".to_string())?;
+    let root = codebuddy_ide_session::ide_data_root().ok_or_else(|| {
+        i18n::tr(
+            "CodeBuddy IDE data directory not found, so sessions cannot be synced",
+            "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다",
+        )
+        .to_string()
+    })?;
     let source_uid = active_source_uid(flavor)?;
     vscode_session_sync::sync_selected_in_for_variant(
         CODEBUDDY_IDE_STORE,
@@ -102,7 +113,7 @@ fn link_variant(flavor: IdeFlavor) -> WbVariant {
 /// 来源账号 uid：当前 IDE 登录 secret（回退本地状态文件）；非法 uid（`default` / `Public` / 路径穿越）视为未登录。
 fn active_source_uid(flavor: IdeFlavor) -> Result<String, String> {
     flavor.active_uid().ok_or_else(|| {
-        "未检测到 CodeBuddy IDE 当前登录账号，无法同步会话。请先在 CodeBuddy IDE 中登录后重试。"
+        i18n::tr("No signed-in account detected in CodeBuddy IDE, so sessions cannot be synced. Sign in to CodeBuddy IDE and try again.", "CodeBuddy IDE에 로그인된 계정을 찾지 못해 세션을 동기화할 수 없습니다. CodeBuddy IDE에 로그인한 뒤 다시 시도해 주세요.")
             .to_string()
     })
 }

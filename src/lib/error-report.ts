@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 
 import * as api from "./api";
+import { translate } from "./i18n/translate";
 import type { ErrorLogKind } from "./types";
 
 declare global {
@@ -46,9 +47,10 @@ function shouldReport(key: string, now: number): boolean {
 
 /** 尽力把任意抛出值转成一行可读摘要（Promise 拒绝的 reason 可能是任意值）。 */
 function describe(value: unknown): string {
-  if (value instanceof Error) return value.message || value.name || "未知错误";
-  if (typeof value === "string") return value.trim() || "未知错误";
-  if (value === null || value === undefined) return "未知错误";
+  const unknownError = translate("lib.errors.unknownError");
+  if (value instanceof Error) return value.message || value.name || unknownError;
+  if (typeof value === "string") return value.trim() || unknownError;
+  if (value === null || value === undefined) return unknownError;
   const text = safeJson(value);
   return text && text !== "{}" ? text : String(value);
 }
@@ -80,7 +82,7 @@ export function reportError(
   message: string,
   options: { detail?: string; source?: string } = {},
 ): void {
-  const text = message.trim() || "未知错误";
+  const text = message.trim() || translate("lib.errors.unknownError");
   const source = options.source?.trim() || "unknown";
   const detail = options.detail ?? "";
   const now = Date.now();
@@ -89,9 +91,12 @@ export function reportError(
   console.error(`[wb-switch] ${kind} (${source}): ${text}`, detail);
   void api.logError(kind, text, detail).catch(() => {});
   // 桌面端文案与设计一致；没有落盘通道时不说「已记录」。
-  toast.error(canPersistErrorLog() ? "出现一个错误，已记录" : "出现一个错误", {
-    description: text.length > TOAST_SUMMARY_MAX ? `${text.slice(0, TOAST_SUMMARY_MAX)}…` : text,
-  });
+  toast.error(
+    canPersistErrorLog() ? translate("lib.errorReport.toastRecorded") : translate("lib.errorReport.toast"),
+    {
+      description: text.length > TOAST_SUMMARY_MAX ? `${text.slice(0, TOAST_SUMMARY_MAX)}…` : text,
+    },
+  );
 }
 
 /**
@@ -108,7 +113,7 @@ export function installGlobalErrorHandlers(): void {
     if (!event.message) return;
     const where = event.filename ? `${event.filename}:${event.lineno}:${event.colno}` : "";
     reportError("frontend_unhandled", event.message, {
-      detail: [stackOf(event.error), where ? `来源: ${where}` : ""].filter(Boolean).join("\n"),
+      detail: [stackOf(event.error), where ? translate("lib.errorReport.sourceLabel", { where }) : ""].filter(Boolean).join("\n"),
       source: where || "window.error",
     });
   });

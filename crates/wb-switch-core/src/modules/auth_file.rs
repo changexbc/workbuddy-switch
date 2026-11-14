@@ -9,7 +9,13 @@ use std::path::{Path, PathBuf};
 
 use crate::modules::account::{get_str, secret_value};
 use crate::modules::config::{atomic_write, backup_dir, now_ms, utc_iso};
+use crate::modules::i18n;
 use crate::modules::variant::WbVariant;
+
+/// 权限不足错误的稳定前缀。错误文案已随语言本地化，webview 不能再按中文字面量
+/// 判断「是否需要引导用户授权」，因此改用这个与语言无关的标记；展示前会剥掉。
+/// 前端对应 `PERMISSION_DENIED_PREFIX`（`src/components/switch-account-dialog.tsx`）。
+pub const PERMISSION_DENIED_PREFIX: &str = "permission-denied: ";
 
 /// WorkBuddy 官方认证文件路径（按档位，与 cockpit 一致）。
 pub fn auth_file_path(variant: WbVariant) -> PathBuf {
@@ -229,10 +235,13 @@ fn write_account_to_auth_file_at(acc: &Value, path: &Path) -> Result<(), String>
     if let Err(e) = atomic_write(path, &content) {
         eprintln!("[auth] atomic_write FAILED: {e}");
         if e.kind() == std::io::ErrorKind::PermissionDenied {
-            return Err(
-                "无权限写入认证文件：请打开 系统设置→隐私与安全性→App 管理，允许本 App 控制 WorkBuddy 的数据（或为其开启『完全磁盘访问』后重试）"
-                    .to_string(),
-            );
+            return Err(format!(
+                "{PERMISSION_DENIED_PREFIX}{}",
+                i18n::tr(
+                    "No permission to write the authentication file: open System Settings → Privacy & Security → App Management and allow this app to control WorkBuddy's data (or enable Full Disk Access for it and try again)",
+                    "인증 파일을 쓸 권한이 없습니다. 시스템 설정 → 개인정보 보호 및 보안 → 앱 관리에서 이 앱이 WorkBuddy 데이터를 제어하도록 허용하거나, 전체 디스크 접근 권한을 켠 뒤 다시 시도해 주세요",
+                )
+            ));
         }
         return Err(e.to_string());
     }
@@ -248,7 +257,11 @@ fn write_account_to_auth_file_at(acc: &Value, path: &Path) -> Result<(), String>
         .unwrap_or(Value::Null);
     let expect_token = auth_obj.get("accessToken").cloned().unwrap_or(Value::Null);
     if written_token != expect_token {
-        return Err("认证文件写后校验失败，未写入目标账号".to_string());
+        return Err(i18n::tr(
+            "Verification after writing the authentication file failed; the target account was not written",
+            "인증 파일을 쓴 뒤 검증에 실패해 대상 계정을 기록하지 않았습니다",
+        )
+        .to_string());
     }
 
     // WorkBuddy 优先读取退出标记：即使认证文件已有凭据，标记仍存在时也视为未登录。
@@ -258,9 +271,15 @@ fn write_account_to_auth_file_at(acc: &Value, path: &Path) -> Result<(), String>
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(format!(
-                "清理 WorkBuddy 退出标记失败（{}）：{error}",
-                marker.display()
+            return Err(i18n::pick(
+                format!(
+                    "Could not clear the WorkBuddy logout marker ({}): {error}",
+                    marker.display()
+                ),
+                format!(
+                    "WorkBuddy 로그아웃 표시를 지우지 못했습니다({}): {error}",
+                    marker.display()
+                ),
             ));
         }
     }
@@ -490,7 +509,7 @@ mod tests {
         let error = write_account_to_auth_file_at(&account, &path).unwrap_err();
 
         assert!(
-            error.contains("退出标记"),
+            error.contains("logout marker"),
             "错误应说明未清理退出标记：{error}"
         );
         assert!(marker.exists());

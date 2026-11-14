@@ -20,6 +20,7 @@ import { SessionSyncSection, type SessionLinksMeta } from "@/components/session-
 import { SessionTreeList } from "@/components/session-tree";
 import * as api from "@/lib/api";
 import { displayName } from "@/lib/account-display";
+import { useT, type Translate } from "@/lib/i18n";
 import { accountVariant, variantAppName } from "@/lib/variant";
 import type {
   AccountMeta,
@@ -28,6 +29,12 @@ import type {
   SessionSyncSelection,
   TemporaryFileInfo,
 } from "@/lib/types";
+
+/**
+ * Rust 侧 `auth_file::PERMISSION_DENIED_PREFIX` 的镜像：权限不足的错误文案已经
+ * 本地化，不能再按中文字面量判断，改用这个与语言无关的前缀；展示前剥掉。
+ */
+const PERMISSION_DENIED_PREFIX = "permission-denied: ";
 
 interface Props {
   open: boolean;
@@ -59,9 +66,9 @@ function tabCount(count: number) {
 const LIST_MIN_H = "min-h-[min(7.5rem,26vh)]";
 
 /** 临时备份残留的可读描述：优先标题，其次会话 id，最后操作 id。 */
-function describeTemporaryFile(item: TemporaryFileInfo): string {
+function describeTemporaryFile(item: TemporaryFileInfo, t: Translate): string {
   const label = item.title || item.sessionId || item.operationId;
-  return `${label}：${item.reason}`;
+  return t("dialogs.common.itemError", { label, error: item.reason });
 }
 
 /** 同一操作只保留一条：复制 / 同步 / 恢复三个报告可能重复上报同一残留。 */
@@ -79,6 +86,7 @@ function dedupeTemporaryFiles(items: TemporaryFileInfo[]): TemporaryFileInfo[] {
 
 /** 切换账号弹窗：可勾选当前账号的会话复制到目标账号（路径 B）。 */
 export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Props) {
+  const t = useT();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -182,7 +190,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   async function doSwitch() {
     if (!account) return;
     setBusy(true);
-    setProgress("正在切换账号…");
+    setProgress(t("dialogs.common.switchingAccount"));
     setError("");
     const requestedCopy = selected.size > 0;
     const requestedSync = syncSelections.length > 0;
@@ -199,36 +207,48 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       const copiedCount = copyReport?.copied?.length ?? 0;
       const linkedCount = copyReport?.alreadyLinked?.length ?? 0;
       const copyErrors = copyReport?.errors ?? [];
-      if (copiedCount > 0) parts.push(`已复制 ${copiedCount} 个会话`);
-      if (linkedCount > 0) parts.push(`已关联 ${linkedCount} 个之前复制过的会话`);
-      if (copyErrors.length > 0) parts.push(`会话复制失败 ${copyErrors.length} 个`);
+      if (copiedCount > 0) parts.push(t("dialogs.common.copiedCount", { count: copiedCount }));
+      if (linkedCount > 0) parts.push(t("dialogs.switch.linkedCount", { count: linkedCount }));
+      if (copyErrors.length > 0) {
+        parts.push(t("dialogs.switch.copyFailedCount", { count: copyErrors.length }));
+      }
       const syncReport = res.sessionSync;
       const syncedItems = syncReport?.synced ?? [];
       const skippedItems = syncReport?.skipped ?? [];
       const syncErrors = syncReport?.errors ?? [];
-      if (syncedItems.length > 0) parts.push(`已同步 ${syncedItems.length} 个会话`);
-      if (skippedItems.length > 0) parts.push(`跳过 ${skippedItems.length} 个会话`);
-      if (syncErrors.length > 0) parts.push(`会话同步失败 ${syncErrors.length} 个`);
-      if (res.backup) parts.push(`备份: ${res.backup}`);
+      if (syncedItems.length > 0) {
+        parts.push(t("dialogs.common.syncedCount", { count: syncedItems.length }));
+      }
+      if (skippedItems.length > 0) {
+        parts.push(t("dialogs.switch.skippedCount", { count: skippedItems.length }));
+      }
+      if (syncErrors.length > 0) {
+        parts.push(t("dialogs.switch.syncFailedCount", { count: syncErrors.length }));
+      }
+      if (res.backup) parts.push(t("dialogs.switch.backup", { path: res.backup }));
       // 成功清理：临时备份已回收，不再展示可还原路径；待清理项单独提示，不写进成功文案。
-      toast.success(`已切换至「${nickname}」`, {
-        description: parts.length ? parts.join("；") : `${variantAppName(accountVariant(account))} 已重启为目标账号。`,
+      toast.success(t("dialogs.common.switchedTo", { name: nickname }), {
+        description: parts.length
+          ? parts.join(t("dialogs.common.separator"))
+          : t("dialogs.switch.description", { app: variantAppName(accountVariant(account)) }),
       });
       // 复制失败或被后端跳过时必须显式提示，不能静默当成成功。
       if (copyReport?.error) {
-        toast.error("会话复制未执行", { description: copyReport.error });
+        toast.error(t("dialogs.switch.copyNotRun"), { description: copyReport.error });
       } else if (copyErrors.length > 0) {
         // 失败提示必须带会话标识（能取标题时优先标题），不是只有原因。
         const sessionLabel = (id: string) =>
           sessions.find((item) => item.id === id)?.title || id;
-        toast.error("部分会话未复制", {
+        toast.error(t("dialogs.switch.copyPartialFailed"), {
           description: copyErrors
-            .map((item) => `${sessionLabel(item.id)}：${item.error}`)
-            .join("；"),
+            .map((item) =>
+              t("dialogs.common.itemError", { label: sessionLabel(item.id), error: item.error }),
+            )
+            .join(t("dialogs.common.separator")),
         });
       } else if (requestedCopy && !copyReport) {
-        toast.warning("会话未复制", {
-          description: "没有收到复制结果：当前版本可能不支持复制会话；账号已切换，但会话没有复制。",
+        toast.warning(t("dialogs.switch.copyMissing"), {
+          description: t("dialogs.switch.copyMissingDescription"),
         });
       }
       // 同步结果：成功、跳过、失败与恢复信息都要能看到，不能只显示成功数。
@@ -236,33 +256,42 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         syncGroups.find((group) => group.groupId === groupId)?.title || groupId;
       // 失败与跳过合并成一条提示：两者可能同时出现，不能只报其中一类。
       const syncIssues = [
-        ...syncErrors.map(
-          (item) => `${item.groupId ? groupLabel(item.groupId) : "全部会话"}：${item.error}`,
+        ...syncErrors.map((item) =>
+          t("dialogs.common.itemError", {
+            label: item.groupId ? groupLabel(item.groupId) : t("dialogs.common.allSessions"),
+            error: item.error,
+          }),
         ),
         // 预览过期/前置条件变化一律跳过并给出原因，绝不显示成已同步。
-        ...skippedItems.map((item) => `${groupLabel(item.groupId)}：${item.message}`),
+        ...skippedItems.map((item) =>
+          t("dialogs.common.itemError", { label: groupLabel(item.groupId), error: item.message }),
+        ),
       ];
       if (syncIssues.length > 0) {
         if (syncErrors.length > 0) {
-          toast.error("部分会话没有同步（失败或已跳过）", { description: syncIssues.join("；") });
+          toast.error(t("dialogs.switch.syncPartialFailed"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         } else {
-          toast.warning("有会话没有同步（已跳过）", { description: syncIssues.join("；") });
+          toast.warning(t("dialogs.switch.syncSkipped"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         }
       } else if (requestedSync && !syncReport) {
-        toast.warning("会话同步未执行", {
-          description: "没有收到同步结果：当前版本可能不支持同步会话，或本次切换没有重启应用。",
+        toast.warning(t("dialogs.switch.syncNotRun"), {
+          description: t("dialogs.switch.syncNotRunDescription"),
         });
       }
       if (syncReport?.needsRecovery) {
-        toast.error("有会话同步没有完成", {
-          description: "已保留操作记录与备份，下次切换会先恢复；恢复完成前不会再改动目标账号的内容。",
+        toast.error(t("dialogs.switch.syncIncomplete"), {
+          description: t("dialogs.switch.syncIncompleteDescription"),
         });
       }
       // 未完成的会话写入：可重试项只提示，阻断项由后端直接返回错误。
       const recoveryIssues = res.sessionRecovery?.needsRecovery ?? [];
       if (recoveryIssues.length > 0) {
-        toast.error("有会话操作没有完成", {
-          description: recoveryIssues.map((issue) => issue.reason).join("；"),
+        toast.error(t("dialogs.switch.recoveryIncomplete"), {
+          description: recoveryIssues.map((issue) => issue.reason).join(t("dialogs.common.separator")),
         });
       }
       // 临时备份残留：待清理说明重试入口；待恢复说明必须保留材料并给出下一步。
@@ -278,24 +307,33 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       if (temporaryFiles.length === 0) {
         for (const item of copyReport?.copied ?? []) {
           if (item.cleanupState === "pending") {
-            pendingCleanupReasons.push(item.cleanupError ?? "临时文件待清理");
+            pendingCleanupReasons.push(item.cleanupError ?? t("dialogs.switch.temporaryFilePending"));
           }
         }
         for (const item of syncedItems) {
           if (item.cleanupState === "pending") {
-            pendingCleanupReasons.push(item.cleanupError ?? "临时文件待清理");
+            pendingCleanupReasons.push(item.cleanupError ?? t("dialogs.switch.temporaryFilePending"));
           }
         }
       }
       if (pendingCleanupReasons.length > 0 || pendingFiles.length > 0) {
-        const details = [...pendingCleanupReasons, ...pendingFiles.map(describeTemporaryFile)];
-        toast.warning("会话已完成，部分临时文件待清理", {
-          description: `${details.join("；")}。下次切号时会自动重试清理。`,
+        const details = [
+          ...pendingCleanupReasons,
+          ...pendingFiles.map((item) => describeTemporaryFile(item, t)),
+        ];
+        toast.warning(t("dialogs.switch.cleanupPending"), {
+          description: t("dialogs.switch.cleanupPendingDescription", {
+            details: details.join(t("dialogs.common.separator")),
+          }),
         });
       }
       if (recoveryFiles.length > 0) {
-        toast.error("有临时备份需要确认", {
-          description: `${recoveryFiles.map(describeTemporaryFile).join("；")}。已保留现场，请按提示处理后重试。`,
+        toast.error(t("dialogs.switch.recoveryNeeded"), {
+          description: t("dialogs.switch.recoveryNeededDescription", {
+            details: recoveryFiles
+              .map((item) => describeTemporaryFile(item, t))
+              .join(t("dialogs.common.separator")),
+          }),
         });
       }
       onOpenChange(false);
@@ -321,18 +359,22 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   /** 权限自检：确认完全磁盘访问是否生效（探针按目标账号档位）。 */
   const [permCheck, setPermCheck] = useState<string | null>(null);
   async function runPermissionCheck() {
-    setPermCheck("检测中…");
+    setPermCheck(t("dialogs.switch.permChecking"));
     try {
       const res = await api.checkAuthPermission(accountVariant(account));
-      setPermCheck(res.ok ? `✓ ${res.message}` : `✗ ${res.error}（${res.dir}）`);
+      setPermCheck(
+        res.ok
+          ? `✓ ${res.message}`
+          : t("dialogs.switch.permFailed", { error: res.error ?? "", dir: res.dir ?? "" }),
+      );
     } catch (e) {
       setPermCheck(`✗ ${api.asError(e)}`);
     }
   }
 
-  // 出现「无权限」错误时，自动每 2s 轮询一次授权状态；用户拖入 app 授权成功后自动恢复
+  // 出现权限不足错误时，自动每 2s 轮询一次授权状态；用户拖入 app 授权成功后自动恢复
   useEffect(() => {
-    if (!open || !error.includes("无权限")) return;
+    if (!open || !error.startsWith(PERMISSION_DENIED_PREFIX)) return;
     let cancelled = false;
     let timer: number | undefined;
     const check = async () => {
@@ -340,7 +382,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         const res = await api.checkAuthPermission(accountVariant(account));
         if (res.ok) {
           if (!cancelled) {
-            setPermCheck("✓ 授权成功，可以重新切换了");
+            setPermCheck(t("dialogs.switch.permGranted"));
             setError("");
           }
           return;
@@ -355,7 +397,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [error, open, variant]);
+  }, [error, open, variant, t]);
 
   const copyCount = selected.size;
   const syncCount = syncSelections.length;
@@ -364,33 +406,36 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const linksAvailable = linksMeta?.available ?? true;
   const summaryMain =
     copyCount > 0 && syncCount > 0
-      ? `将复制 ${copyCount} 个、同步 ${syncCount} 个关联会话`
+      ? t("dialogs.common.summaryCopyAndSync", { copy: copyCount, sync: syncCount })
       : copyCount > 0
-        ? `将复制 ${copyCount} 个会话`
+        ? t("dialogs.common.summaryCopy", { count: copyCount })
         : syncCount > 0
-          ? `将同步 ${syncCount} 个关联会话`
-          : "本次仅切换账号";
+          ? t("dialogs.common.summarySync", { count: syncCount })
+          : t("dialogs.common.summarySwitchOnly");
   const summarySub =
     overwriteCount > 0
-      ? `其中 ${overwriteCount} 个会替换目标账号的完整内容`
+      ? t("dialogs.common.summaryOverwrite", { count: overwriteCount })
       : copyCount === 0 && syncCount === 0
-        ? "未选择复制或同步会话"
+        ? t("dialogs.common.summaryNoneSelected")
         : copyCount === 0
-          ? "未选择复制会话"
+          ? t("dialogs.common.summaryNoCopy")
           : syncCount === 0
-            ? "未选择同步会话"
+            ? t("dialogs.common.summaryNoSync")
             : null;
-  const needsPermission = error.includes("无权限");
+  const needsPermission = error.startsWith(PERMISSION_DENIED_PREFIX);
+  const errorText = needsPermission
+    ? error.slice(PERMISSION_DENIED_PREFIX.length)
+    : error;
   const sessionsEmpty = !loadingSessions && sessions.length === 0;
   const copyHint = loadingSessions
-    ? "正在加载会话…"
+    ? t("dialogs.common.loadingSessions")
     : error && sessionsEmpty
-      ? "无法加载会话列表，暂不能复制"
+      ? t("dialogs.switch.copyUnavailable")
       : sessionsEmpty
         ? currentUid
-          ? "当前账号暂无会话，无法复制"
-          : "未检测到当前登录账号，无法列出会话"
-        : "把当前账号勾选的会话复制给目标账号（复制后归属目标账号）；已经复制过的不会重复复制";
+          ? t("dialogs.switch.noSessionsToCopy")
+          : t("dialogs.switch.noSignedInAccount")
+        : t("dialogs.switch.copyHint");
 
   // 关联 tab 不可用（国际版能力判定不通过）时回落到复制会话，避免停在空 tab。
   useEffect(() => {
@@ -421,13 +466,13 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         <div
           className={`flex items-center justify-center gap-2 text-sm text-muted-foreground ${LIST_MIN_H}`}
         >
-          <Loader2 className="animate-spin" /> 加载会话…
+          <Loader2 className="animate-spin" /> {t("dialogs.common.loadingSessions")}
         </div>
       ) : sessions.length === 0 ? (
         <p
           className={`flex items-center justify-center px-3 text-center text-sm text-muted-foreground ${LIST_MIN_H}`}
         >
-          {currentUid ? "当前账号暂无会话" : "未检测到当前登录账号，无法列出会话"}
+          {currentUid ? t("dialogs.switch.noSessions") : t("dialogs.switch.noSignedInAccount")}
         </p>
       ) : (
         <SessionTreeList
@@ -452,16 +497,22 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         <DialogAutoHeight>
         <div className="flex max-h-[calc(min(90vh,100vh-2rem)-2px)] min-w-0 flex-col gap-4 p-6">
         <DialogHeader className="shrink-0">
-          <DialogTitle>切换到「{account ? displayName(account) : "该账号"}」</DialogTitle>
-          <DialogDescription>切换时将重启 {variantAppName(accountVariant(account))}。</DialogDescription>
+          <DialogTitle>
+            {t("dialogs.common.switchTitle", {
+              name: account ? displayName(account) : t("dialogs.common.targetAccount"),
+            })}
+          </DialogTitle>
+          <DialogDescription>
+            {t("dialogs.switch.description", { app: variantAppName(accountVariant(account)) })}
+          </DialogDescription>
         </DialogHeader>
 
         {busy && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 rounded-lg bg-background/85 backdrop-blur-sm">
             <Loader2 className="size-8 animate-spin text-primary" />
-            <p className="text-sm font-medium">{progress || "正在切换账号…"}</p>
+            <p className="text-sm font-medium">{progress || t("dialogs.common.switchingAccount")}</p>
             <p className="max-w-xs text-center text-xs text-muted-foreground">
-              正在处理中，请勿关闭窗口
+              {t("dialogs.common.busyHint")}
             </p>
           </div>
         )}
@@ -472,34 +523,36 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           {error && (
             <Alert variant={needsPermission ? "warning" : "destructive"} className="min-w-0 shrink-0 break-all">
               <AlertDescription className="min-w-0 break-all">
-                <div className="min-w-0 break-all">{error}</div>
+                <div className="min-w-0 break-all">{errorText}</div>
                 {needsPermission && (
                   <div className="mt-2 space-y-2">
                     <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">
-                      <p className="mb-1 font-medium text-foreground">如何授权（只需 3 步）：</p>
+                      <p className="mb-1 font-medium text-foreground">
+                        {t("dialogs.switch.permissionTitle")}
+                      </p>
                       <ol className="list-decimal space-y-1 pl-4">
-                        <li>点击下方「打开完全磁盘访问」</li>
+                        <li>{t("dialogs.switch.permissionStep1")}</li>
                         <li>
-                          把 <b>workbuddy-switch.app</b> 从 Finder 拖进面板列表（即使没提示框也直接拖），
-                          打开它的开关
+                          <b>workbuddy-switch.app</b>
+                          {t("dialogs.switch.permissionStep2")}
                         </li>
-                        <li>授权后这里会自动检测到，无需其他操作</li>
+                        <li>{t("dialogs.switch.permissionStep3")}</li>
                       </ol>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button variant="outline" size="sm" onClick={openPermissionSettings}>
                         <ExternalLink />
-                        打开完全磁盘访问
+                        {t("dialogs.switch.openFullDiskAccess")}
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => void api.revealAppInFinder()}
                       >
-                        在 Finder 中显示
+                        {t("dialogs.common.revealInFinder")}
                       </Button>
                       <Button variant="secondary" size="sm" onClick={runPermissionCheck}>
-                        立即检测
+                        {t("dialogs.switch.checkNow")}
                       </Button>
                     </div>
                   </div>
@@ -511,16 +564,18 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           {linksMeta?.error && (
             <Alert variant="destructive" className="min-w-0 shrink-0">
               <CircleAlert />
-              <AlertTitle>无法检查会话</AlertTitle>
+              <AlertTitle>{t("dialogs.switch.linksCheckFailed")}</AlertTitle>
               <AlertDescription className="min-w-0 break-all">{linksMeta.error}</AlertDescription>
             </Alert>
           )}
           {linksMeta?.storeStatus === "unavailable" && (
             <Alert variant="warning" className="min-w-0 shrink-0">
               <CircleAlert />
-              <AlertTitle>同步记录不可用</AlertTitle>
+              <AlertTitle>{t("dialogs.switch.storeUnavailable")}</AlertTitle>
               <AlertDescription className="min-w-0 break-all">
-                {`${linksMeta.storeError || "原因未知"}；本次不会同步任何会话，请处理后重试。`}
+                {t("dialogs.switch.storeUnavailableDescription", {
+                  reason: linksMeta.storeError || t("dialogs.switch.unknownReason"),
+                })}
               </AlertDescription>
             </Alert>
           )}
@@ -533,11 +588,11 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
             >
               <TabsList className="h-auto w-full shrink-0 justify-start gap-5 rounded-none border-b border-border bg-transparent p-0">
                 <TabsTrigger value="links" className={TAB_TRIGGER_CLASS}>
-                  关联会话
+                  {t("dialogs.common.linkedSessions")}
                   {tabCount(linksMeta?.groupCount ?? 0)}
                 </TabsTrigger>
                 <TabsTrigger value="copy" className={TAB_TRIGGER_CLASS}>
-                  复制会话
+                  {t("dialogs.common.copySessions")}
                   {tabCount(copyCount)}
                 </TabsTrigger>
               </TabsList>
@@ -578,10 +633,10 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           </div>
           <div className="flex shrink-0 gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button onClick={doSwitch} disabled={busy}>
-              {busy ? "切换中…" : "确认切换"}
+              {busy ? t("dialogs.common.switching") : t("dialogs.common.confirmSwitch")}
             </Button>
           </div>
         </DialogFooter>

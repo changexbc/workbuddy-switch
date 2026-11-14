@@ -1,49 +1,61 @@
-# 开发指南
+# Development guide
 
-## 环境要求
+**English** | [한국어](./DEVELOPMENT.ko.md)
 
-Node.js ≥ 20、Rust stable、macOS（或 Windows/Linux）。
+## Requirements
 
-## 开发命令
+Node.js 20 or later, a stable Rust toolchain, and macOS (or Windows / Linux).
+
+## Commands
 
 ```bash
 npm install
-npm run tauri dev        # 开发模式
-npm run build:app        # 构建 debug .app（含前端资源补丁）
-npm run build:app:release  # 构建 release .app + 签名更新包
+npm run tauri dev          # development mode
+npm run build:app          # build a debug .app with the frontend asset patches applied
+npm run build:app:release  # build a release .app and a signed update package
 ```
 
-## 发布新版本
+## Release a new version
 
-签名密钥（自动更新用）存放于 `~/.wb-switch/wb-switch-updater.key`，构建脚本通过
-`TAURI_SIGNING_PRIVATE_KEY` 注入。发布新版本时：
+The signing key for auto-update lives at `~/.wb-switch/wb-switch-updater.key`. The build scripts read it through `TAURI_SIGNING_PRIVATE_KEY`.
 
-1. `npm run build:app:release` 生成 `.app.tar.gz` + `.sig`（Windows NSIS 构建会额外生成当前版本的 `*_x64-setup.exe` + `.exe.sig`）。CI 会先清掉 `target/**/release/bundle`，避免 cargo cache 把旧安装包带进 Release。
-2. macOS：`UPDATE_OS=macos UPDATE_ARCH=aarch64 sh scripts/gen-update-json.sh` 生成 `latest-macos-aarch64.json`；Intel 用 `UPDATE_ARCH=x86_64`
-3. Windows：`UPDATE_OS=windows UPDATE_ARCH=x86_64 sh scripts/gen-update-json.sh` 生成 `latest-windows-x86_64.json`
-4. `python3 scripts/merge-update-manifests.py <产物目录>` 合并为 `latest.json`，并把 Windows 平台项写入 `latest-macos-x86_64.json`（兼容已安装的 Windows 客户端）
-5. 将安装包、签名更新包、`latest*.json` 一并上传到 GitHub Release
+1. Run `npm run build:app:release`. It writes `.app.tar.gz` and `.sig`. A Windows NSIS build also writes `*_x64-setup.exe` and `.exe.sig` for the current version. CI deletes `target/**/release/bundle` first, so a stale installer in the cargo cache cannot reach the release.
+2. macOS: run `UPDATE_OS=macos UPDATE_ARCH=aarch64 sh scripts/gen-update-json.sh` to write `latest-macos-aarch64.json`. For Intel, set `UPDATE_ARCH=x86_64`.
+3. Windows: run `UPDATE_OS=windows UPDATE_ARCH=x86_64 sh scripts/gen-update-json.sh` to write `latest-windows-x86_64.json`.
+4. Run `python3 scripts/merge-update-manifests.py <output-dir>` to merge them into `latest.json`. The script also copies the Windows entry into `latest-macos-x86_64.json`, so Windows clients that are already installed keep updating.
+5. Upload the installers, the signed update packages, and `latest*.json` to the GitHub Release.
 
-### npm 版（webui）发布
+### Release the npm version (webui)
 
-1. 编译 server 二进制并上传 GitHub Release（`.github/workflows/build.yml` 自动执行）
-2. `cd npm && npm publish`（包名 `workbuddy-switch`，postinstall 按平台从 Release 下载二进制）
+1. Compile the server binary and upload it to the GitHub Release. `.github/workflows/build.yml` does this for you.
+2. Run `cd npm && npm publish`. The package is `workbuddy-switch`, and its postinstall step downloads the binary for the current platform from the release.
 
-## 目录结构
+## Directory layout
 
 ```
 src-tauri/
   src/
-    commands.rs      # Tauri command 薄包装（对应 Python 版 HTTP API）
-    modules/         # 已抽离到 crates/wb-switch-core（三宿主复用）
+    commands.rs      # thin Tauri command wrappers, mirroring the old Python HTTP API
 crates/
-  wb-switch-core/    # 核心逻辑：account/auth_file/oauth/process/switch/session/checkin/refresh/update/config
-  wb-switch-server/  # HTTP server + CLI：axum API + rust-embed 前端
-src/                 # 前端：components/pages/lib（api.ts 双通道：Tauri invoke / HTTP fetch）
-npm/                 # npm 包：package.json + bin + scripts/install.js
+  wb-switch-core/    # core logic, one module per concern (account, auth_file, oauth,
+                     # process, switch, session, checkin, refresh, update, config, ...)
+  wb-switch-server/  # HTTP server and CLI: axum API plus a rust-embed frontend
+src/                 # frontend: components, pages, lib, stores
+                     # lib/api.ts has two channels, Tauri invoke and HTTP fetch
+npm/                 # npm package: package.json, bin, scripts/install.js
 ```
 
-## 隐私注意事项
+## Translations
 
-- 仓库不提交本地数据（accounts.json、认证文件、密钥、token 由 `.gitignore` 排除）
-- 发布前用 `git grep` 扫描 token 模式（`ghp_`/`npm_`/`gho_` 等）
+English is the default language and Korean is the second. The app has two catalogs, one per process boundary.
+
+The webview catalog lives in `src/lib/i18n/messages/`. Each surface owns one pair of files, `en.ts` and `ko.ts`. The English file defines the key set, so a misspelled key fails the type check. The Korean file is partial and falls back to English, and `messages.test.ts` fails when a key or a placeholder is missing. Components read strings through `useT()` from `src/lib/i18n`; plain modules call `translate()` from `src/lib/i18n/translate`.
+
+The Rust catalog is `crates/wb-switch-core/src/modules/i18n.rs`, which covers what the host draws outside the webview: tray menu labels, notifications, and the messages the backend returns to the interface. Call sites pass both languages, as in `i18n::tr("Open main window", "주 창 열기")`, so a missing translation is a compile error rather than a runtime fallback. The frontend reports the selected language through the `set_locale` command, which also stores it in `~/.wb-switch/locale` so the tray renders in the right language on the next start.
+
+`index.html` keeps its own copy of the first-paint and startup-failure strings, because that inline script runs before the bundle.
+
+## Privacy notes
+
+- Do not commit local data. `.gitignore` excludes `accounts.json`, authentication files, keys, and tokens.
+- Before a release, scan for token patterns with `git grep`. Look for `ghp_`, `npm_`, `gho_`, and similar prefixes.

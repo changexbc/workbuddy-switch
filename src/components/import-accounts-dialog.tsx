@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import * as api from "@/lib/api";
+import { useT, type Translate } from "@/lib/i18n";
 import { DEFAULT_VARIANT, variantLabel } from "@/lib/variant";
 import type { ImportPreviewAccount, WbVariant } from "@/lib/types";
 
@@ -34,9 +35,14 @@ interface Props {
  * 导入预览账号展示名（脱敏展示：昵称/邮箱/uid）。
  * 只接受字符串：旧后端可能把信封对象透传进来，渲染对象会触发 React error #31（白屏）。
  */
-function previewLabel(a: ImportPreviewAccount): string {
+function previewLabel(a: ImportPreviewAccount, t: Translate): string {
   const asLabel = (v: unknown) => (typeof v === "string" ? v : "");
-  return asLabel(a.nickname) || asLabel(a.email) || asLabel(a.uid) || `第 ${a.index + 1} 项`;
+  return (
+    asLabel(a.nickname) ||
+    asLabel(a.email) ||
+    asLabel(a.uid) ||
+    t("dialogs.import.itemLabel", { index: a.index + 1 })
+  );
 }
 
 /** 导入账号弹框：选 JSON 文件 → 后端解析预览 → 勾选账号 → 导入合并。 */
@@ -46,6 +52,7 @@ export function ImportAccountsDialog({
   onImported,
   variant = DEFAULT_VARIANT,
 }: Props) {
+  const t = useT();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [fileText, setFileText] = useState("");
@@ -135,11 +142,11 @@ export function ImportAccountsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="min-w-0 overflow-x-hidden">
         <DialogHeader>
-          <DialogTitle>导入账号</DialogTitle>
+          <DialogTitle>{t("dialogs.import.title")}</DialogTitle>
           <DialogDescription>
-            选择 JSON 文件，勾选要导入的账号。
+            {t("dialogs.import.description")}
             {variant === "ai" &&
-              `备份中的国内版与国际版账号按各自档位归类，不随当前${variantLabel(variant)}改变。`}
+              ` ${t("dialogs.import.variantNote", { variant: variantLabel(variant) })}`}
           </DialogDescription>
         </DialogHeader>
 
@@ -154,14 +161,14 @@ export function ImportAccountsDialog({
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={chooseFile} disabled={busy}>
             <FileUp />
-            选择文件
+            {t("dialogs.import.chooseFile")}
           </Button>
           {fileName && <span className="truncate text-xs text-muted-foreground">{fileName}</span>}
         </div>
 
         {parsing && (
           <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-            <Loader2 className="animate-spin" /> 正在解析…
+            <Loader2 className="animate-spin" /> {t("dialogs.import.parsing")}
           </div>
         )}
 
@@ -169,10 +176,13 @@ export function ImportAccountsDialog({
           <>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
-                共 {preview.length} 个账号，已选 {selected.size} 个
+                {t("dialogs.common.selectedAccounts", {
+                  total: preview.length,
+                  selected: selected.size,
+                })}
               </span>
               <button type="button" className="cursor-pointer text-primary hover:underline" onClick={toggleAll}>
-                {allSelected ? "取消全选" : "全选"}
+                {allSelected ? t("dialogs.common.clearSelection") : t("dialogs.common.selectAll")}
               </button>
             </div>
             <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
@@ -187,11 +197,13 @@ export function ImportAccountsDialog({
                     checked={selected.has(a.index)}
                     onChange={() => toggle(a.index)}
                   />
-                  <span className="min-w-0 flex-1 truncate text-sm">{previewLabel(a)}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm">{previewLabel(a, t)}</span>
                   {a.encrypted ? (
-                    <Badge variant="secondary">加密凭据</Badge>
+                    <Badge variant="secondary">{t("dialogs.import.encryptedBadge")}</Badge>
                   ) : (
-                    !a.hasToken && <Badge variant="outline">缺少 token</Badge>
+                    !a.hasToken && (
+                      <Badge variant="outline">{t("dialogs.import.missingToken")}</Badge>
+                    )
                   )}
                 </label>
               ))}
@@ -207,10 +219,10 @@ export function ImportAccountsDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button onClick={doImport} disabled={busy || parsing || selected.size === 0}>
-            {busy ? "导入中…" : "导入勾选账号"}
+            {busy ? t("dialogs.import.importing") : t("dialogs.import.confirm")}
           </Button>
         </DialogFooter>
       </DialogContent>

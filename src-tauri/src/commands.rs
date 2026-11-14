@@ -10,7 +10,7 @@ use tauri::Emitter;
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
     codebuddy_ide_session, codebuddy_ide_session_sync, credit_usage, credits, error_log,
-    export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
+    export_import, i18n, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
     variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
@@ -36,7 +36,12 @@ pub async fn get_status(variant: Option<String>) -> Result<AppStatus, String> {
     // 原生窗口消息循环。放入 blocking 线程，保持窗口移动与 IPC 查询解耦。
     tauri::async_runtime::spawn_blocking(move || build_app_status(variant))
         .await
-        .map_err(|error| format!("查询应用状态失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the app status: {error}"),
+                format!("앱 상태 조회 실패: {error}"),
+            )
+        })
 }
 
 fn build_app_status(variant: WbVariant) -> AppStatus {
@@ -83,7 +88,12 @@ pub fn get_accounts() -> Value {
 pub async fn get_codebuddy_cli_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codebuddy_cli::status)
         .await
-        .map_err(|error| format!("查询 CodeBuddy CLI 状态失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the CodeBuddy CLI status: {error}"),
+                format!("CodeBuddy CLI 상태 조회 실패: {error}"),
+            )
+        })
 }
 
 /// POST /api/codebuddy-cli/install-helper —— 显式安装/升级 CLI helper。
@@ -114,7 +124,7 @@ pub async fn switch_codebuddy_cli_account(
     close_running_cli: Option<bool>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("缺少 accountId".to_string());
+        return Err(i18n::tr("Missing accountId", "accountId 없음").to_string());
     }
     let _ = close_running_cli;
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -134,7 +144,12 @@ pub async fn switch_codebuddy_cli_account(
 pub async fn get_codebuddy_cn_ide_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codebuddy_cn_ide::status)
         .await
-        .map_err(|error| format!("查询 CodeBuddy IDE 状态失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the CodeBuddy IDE status: {error}"),
+                format!("CodeBuddy IDE 상태 조회 실패: {error}"),
+            )
+        })
 }
 
 /// POST /api/codebuddy-cn-ide/switch —— 注入凭证并可选重启 CodeBuddy CN IDE。
@@ -153,7 +168,7 @@ pub async fn switch_codebuddy_cn_ide_account(
     sync_selections: Option<Value>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("缺少 accountId".to_string());
+        return Err(i18n::tr("Missing accountId", "accountId 없음").to_string());
     }
     let restart = restart.unwrap_or(true);
     let items = copy_sessions.unwrap_or_default();
@@ -183,7 +198,12 @@ pub async fn switch_codebuddy_cn_ide_account(
 pub async fn list_codebuddy_ide_sessions() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codebuddy_ide_session::list_current_codebuddy_ide_sessions)
         .await
-        .map_err(|error| format!("列出 CodeBuddy IDE 会话失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to list CodeBuddy IDE sessions: {error}"),
+                format!("CodeBuddy IDE 세션 조회 실패: {error}"),
+            )
+        })
 }
 
 /// POST /api/codebuddy-cn-ide/session-links —— 预览「当前 IDE 账号 → 目标账号」可同步的关联会话。
@@ -195,10 +215,13 @@ pub async fn codebuddy_ide_session_links_preview(
     target_account_id: String,
 ) -> Result<Value, String> {
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview(&target)
     })
     .await
@@ -223,7 +246,12 @@ pub async fn detect_codebuddy_cn_ide_account() -> Result<Value, String> {
 pub async fn get_vscode_ext_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(vscode_ext::status)
         .await
-        .map_err(|error| format!("查询 VS Code CodeBuddy 插件状态失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the VS Code CodeBuddy extension status: {error}"),
+                format!("VS Code CodeBuddy 확장 상태 조회 실패: {error}"),
+            )
+        })
 }
 
 /// GET /api/vscode-ext/sessions —— 列出当前 VS Code 扩展账号可复制的会话。
@@ -237,7 +265,12 @@ pub async fn list_vscode_sessions() -> Result<Value, String> {
         None => json!({ "sourceUid": Value::Null, "sessions": [], "skipped": 0 }),
     })
     .await
-    .map_err(|error| format!("列出 VS Code CodeBuddy 插件会话失败: {error}"))
+    .map_err(|error| {
+        i18n::pick(
+            format!("Failed to list VS Code CodeBuddy extension sessions: {error}"),
+            format!("VS Code CodeBuddy 확장 세션 조회 실패: {error}"),
+        )
+    })
 }
 
 /// POST /api/vscode-ext/switch —— 注入凭证到 VS Code CodeBuddy 扩展。
@@ -257,7 +290,7 @@ pub async fn switch_vscode_ext_account(
     sync_selections: Option<Value>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("缺少 accountId".to_string());
+        return Err(i18n::tr("Missing accountId", "accountId 없음").to_string());
     }
     let restart = restart.unwrap_or(true);
     let items = copy_sessions.unwrap_or_default();
@@ -288,10 +321,13 @@ pub async fn switch_vscode_ext_account(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn vscode_session_links_preview(target_account_id: String) -> Result<Value, String> {
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         vscode_session_sync::links_preview(&target)
     })
     .await
@@ -302,7 +338,12 @@ pub async fn vscode_session_links_preview(target_account_id: String) -> Result<V
 pub async fn get_codebuddy_ide_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codebuddy_ide::status)
         .await
-        .map_err(|error| format!("查询 CodeBuddy IDE 状态失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the CodeBuddy IDE status: {error}"),
+                format!("CodeBuddy IDE 상태 조회 실패: {error}"),
+            )
+        })
 }
 
 /// GET /api/jetbrains/status —— JetBrains IDE（IDEA / PyCharm）CodeBuddy 插件状态。
@@ -313,7 +354,12 @@ pub async fn get_codebuddy_ide_status() -> Result<Value, String> {
 pub async fn get_jetbrains_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(jetbrains::status)
         .await
-        .map_err(|error| format!("查询 JetBrains IDE 状态失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the JetBrains IDE status: {error}"),
+                format!("JetBrains IDE 상태 조회 실패: {error}"),
+            )
+        })
 }
 
 /// POST /api/jetbrains/switch —— 注入凭证到 JetBrains IDE 的 CodeBuddy 插件。
@@ -331,7 +377,7 @@ pub async fn switch_jetbrains_account(
     config_dirs: Option<Vec<String>>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("缺少 accountId".to_string());
+        return Err(i18n::tr("Missing accountId", "accountId 없음").to_string());
     }
     let dirs = config_dirs.filter(|list| !list.is_empty());
     tauri::async_runtime::spawn_blocking(move || {
@@ -367,7 +413,7 @@ pub async fn switch_codebuddy_ide_account(
     sync_selections: Option<Value>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("缺少 accountId".to_string());
+        return Err(i18n::tr("Missing accountId", "accountId 없음").to_string());
     }
     let restart = restart.unwrap_or(true);
     let items = copy_sessions.unwrap_or_default();
@@ -397,7 +443,12 @@ pub async fn switch_codebuddy_ide_account(
 pub async fn list_codebuddy_intl_ide_sessions() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(codebuddy_ide_session::list_current_intl_ide_sessions)
         .await
-        .map_err(|error| format!("列出 CodeBuddy IDE 会话失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to list CodeBuddy IDE sessions: {error}"),
+                format!("CodeBuddy IDE 세션 조회 실패: {error}"),
+            )
+        })
 }
 
 /// POST /api/codebuddy-ide/session-links —— 预览「当前国际版 IDE 账号 → 目标账号」可同步的关联会话。
@@ -409,10 +460,13 @@ pub async fn codebuddy_intl_ide_session_links_preview(
     target_account_id: String,
 ) -> Result<Value, String> {
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview_intl(&target)
     })
     .await
@@ -443,7 +497,7 @@ pub fn delete_account(account_id: String) -> Result<Value, String> {
     let before = accounts.len();
     accounts.retain(|a| a.get("id").and_then(|v| v.as_str()) != Some(account_id.as_str()));
     if accounts.len() == before {
-        return Err("账号不存在".to_string());
+        return Err(i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string());
     }
     account::save_accounts(&accounts).map_err(|e| e.to_string())?;
     Ok(json!({ "ok": true }))
@@ -541,14 +595,24 @@ pub fn check_auth_permission(variant: Option<String>) -> Value {
     match std::fs::write(&probe, "probe") {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
-            json!({ "ok": true, "variant": variant.as_str(), "message": "认证目录可写，权限正常" })
+            json!({
+                "ok": true,
+                "variant": variant.as_str(),
+                "message": i18n::tr(
+                    "The auth directory is writable and permissions look correct.",
+                    "인증 디렉터리에 쓸 수 있으며 권한이 정상입니다.",
+                ),
+            })
         }
         Err(e) => json!({
             "ok": false,
             "variant": variant.as_str(),
             "error": e.to_string(),
             "dir": path.parent().map(|p| p.to_string_lossy().to_string()),
-            "hint": "请在 系统设置→隐私与安全性 中授权：优先「App 管理」开启 wb-switch，若没有则去「完全磁盘访问」把 wb-switch 拖进去；授权后需重启 App 生效",
+            "hint": i18n::tr(
+                "Grant access in System Settings → Privacy & Security: enable wb-switch under App Management, or add wb-switch to Full Disk Access if it is not listed there. Restart the app after granting access.",
+                "시스템 설정 → 개인정보 보호 및 보안에서 권한을 허용하세요. \"앱 관리\"에서 wb-switch를 켜고, 항목이 없으면 \"전체 디스크 접근 권한\"에 wb-switch를 추가한 뒤 앱을 다시 시작하세요.",
+            ),
         }),
     }
 }
@@ -580,7 +644,7 @@ pub async fn switch_account(
     sync_selections: Option<Value>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("缺少 accountId".to_string());
+        return Err(i18n::tr("Missing accountId", "accountId 없음").to_string());
     }
     let restart = restart.unwrap_or(true);
     let share_sessions = share_sessions.unwrap_or(false);
@@ -624,23 +688,29 @@ pub fn list_sessions(variant: Option<String>) -> Value {
 #[tauri::command(rename_all = "camelCase")]
 pub fn list_account_sessions(account_id: String, client: Option<String>) -> Result<Value, String> {
     if account_id.trim().is_empty() {
-        return Err("缺少 accountId".to_string());
+        return Err(i18n::tr("Missing accountId", "accountId 없음").to_string());
     }
-    let account = account::find_account(&account_id).ok_or("账号不存在")?;
+    let account = account::find_account(&account_id)
+        .ok_or(i18n::tr("Account not found", "계정을 찾을 수 없습니다"))?;
     match session_groups::SessionClient::parse(client.as_deref().unwrap_or("workbuddy"))? {
         session_groups::SessionClient::VscodeExt => {
             let uid = account::get_str(&account, "uid")
                 .map(|uid| uid.trim().to_string())
                 .filter(|uid| !uid.is_empty())
-                .ok_or("账号缺少 uid")?;
+                .ok_or(i18n::tr(
+                    "Account is missing a uid",
+                    "계정에 uid가 없습니다",
+                ))?;
             Ok(vscode_session::list_vscode_sessions(&uid))
         }
         session_groups::SessionClient::Workbuddy => {
             Ok(session::list_sessions_for_account(&account))
         }
-        session_groups::SessionClient::CodebuddyIde => {
-            Err("当前客户端暂不支持列出账号会话".to_string())
-        }
+        session_groups::SessionClient::CodebuddyIde => Err(i18n::tr(
+            "Listing account sessions is not supported for this client yet",
+            "이 클라이언트에서는 아직 계정 세션 목록을 지원하지 않습니다",
+        )
+        .to_string()),
     }
 }
 
@@ -651,13 +721,16 @@ pub async fn copy_sessions(
     session_ids: Vec<String>,
 ) -> Result<Value, String> {
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     if session_ids.is_empty() {
-        return Err("缺少 sessionIds".to_string());
+        return Err(i18n::tr("Missing sessionIds", "sessionIds 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         // 档位取目标账号自身（copy_sessions_for_switch 内部判定）。
         session::copy_sessions_for_switch(&target, &session_ids)
     })
@@ -676,17 +749,23 @@ pub async fn copy_sessions_cross(
     session_ids: Vec<String>,
 ) -> Result<Value, String> {
     if source_account_id.trim().is_empty() {
-        return Err("缺少 sourceAccountId".to_string());
+        return Err(i18n::tr("Missing sourceAccountId", "sourceAccountId 없음").to_string());
     }
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     if session_ids.is_empty() {
-        return Err("缺少 sessionIds".to_string());
+        return Err(i18n::tr("Missing sessionIds", "sessionIds 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let source = account::find_account(&source_account_id).ok_or("源账号不存在")?;
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let source = account::find_account(&source_account_id).ok_or(i18n::tr(
+            "Source account not found",
+            "원본 계정을 찾을 수 없습니다",
+        ))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         session::copy_sessions_cross(&source, &target, &session_ids)
     })
     .await
@@ -705,10 +784,13 @@ pub async fn session_links_preview(
     variant: Option<String>,
 ) -> Result<Value, String> {
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         let variant = variant
             .as_deref()
             .map(|raw| WbVariant::parse(Some(raw)))
@@ -728,14 +810,20 @@ pub async fn session_links_preview_cross(
     target_account_id: String,
 ) -> Result<Value, String> {
     if source_account_id.trim().is_empty() {
-        return Err("缺少 sourceAccountId".to_string());
+        return Err(i18n::tr("Missing sourceAccountId", "sourceAccountId 없음").to_string());
     }
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let source = account::find_account(&source_account_id).ok_or("源账号不存在")?;
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let source = account::find_account(&source_account_id).ok_or(i18n::tr(
+            "Source account not found",
+            "원본 계정을 찾을 수 없습니다",
+        ))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         session::session_links_preview_cross(&source, &target)
     })
     .await
@@ -753,16 +841,22 @@ pub async fn session_sync_cross(
     sync_selections: Value,
 ) -> Result<Value, String> {
     if source_account_id.trim().is_empty() {
-        return Err("缺少 sourceAccountId".to_string());
+        return Err(i18n::tr("Missing sourceAccountId", "sourceAccountId 없음").to_string());
     }
     if target_account_id.trim().is_empty() {
-        return Err("缺少 targetAccountId".to_string());
+        return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     // 入参形状由 core 校验：缺字段/未知模式一律拒绝，这里只做透传。
     let selections = session::parse_sync_selections(Some(&sync_selections))?;
     tauri::async_runtime::spawn_blocking(move || {
-        let source = account::find_account(&source_account_id).ok_or("源账号不存在")?;
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let source = account::find_account(&source_account_id).ok_or(i18n::tr(
+            "Source account not found",
+            "원본 계정을 찾을 수 없습니다",
+        ))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         session::sync_sessions_cross(&source, &target, &selections)
     })
     .await
@@ -991,7 +1085,8 @@ pub async fn delete_session_group(
 /// GET /api/checkin/status —— 查询单账号签到状态（档位取账号自身）。
 #[tauri::command]
 pub async fn get_checkin_status(account_id: String) -> Result<Value, String> {
-    let acc = account::find_account(&account_id).ok_or("账号不存在")?;
+    let acc = account::find_account(&account_id)
+        .ok_or(i18n::tr("Account not found", "계정을 찾을 수 없습니다"))?;
     let mut status = checkin::get_checkin_status_for_display(&acc).await;
     // 结果行带档位，前端按当前档位过滤时无需再查账号。
     status["variant"] = json!(account::variant_of(&acc).as_str());
@@ -1001,7 +1096,8 @@ pub async fn get_checkin_status(account_id: String) -> Result<Value, String> {
 /// POST /api/credits —— 查询单账号积分资源及到期时间。
 #[tauri::command]
 pub async fn get_credit_expiry(account_id: String) -> Result<Value, String> {
-    let acc = account::find_account(&account_id).ok_or("账号不存在")?;
+    let acc = account::find_account(&account_id)
+        .ok_or(i18n::tr("Account not found", "계정을 찾을 수 없습니다"))?;
     Ok(credits::get_credit_expiry(&acc).await)
 }
 
@@ -1016,7 +1112,12 @@ pub async fn get_credit_statistics(refresh: Option<bool>) -> Value {
 pub async fn get_token_statistics(days: Option<i64>) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || token_stats::get_statistics(days))
         .await
-        .map_err(|error| format!("扫描 Token 统计失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to scan token statistics: {error}"),
+                format!("토큰 통계 스캔 실패: {error}"),
+            )
+        })
 }
 
 /// GET /api/rate-limits —— 模型限额台账（全部账号当前受限的模型与官方恢复时刻）。
@@ -1027,7 +1128,12 @@ pub async fn get_token_statistics(days: Option<i64>) -> Result<Value, String> {
 pub async fn get_rate_limits() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(limits::get_rate_limits)
         .await
-        .map_err(|error| format!("扫描模型限额失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to scan model quotas: {error}"),
+                format!("모델 할당량 스캔 실패: {error}"),
+            )
+        })
 }
 
 /// GET /api/rate-limits/hook-status —— hook 安装状态（脚本 + 三处客户端配置逐项结果）。
@@ -1037,7 +1143,12 @@ pub async fn get_rate_limits() -> Result<Value, String> {
 pub async fn get_rate_limit_hook_status() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(with_hook_runtime_fields)
         .await
-        .map_err(|error| format!("查询限额 hook 状态失败: {error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the quota hook status: {error}"),
+                format!("할당량 hook 상태 조회 실패: {error}"),
+            )
+        })
 }
 
 /// POST /api/rate-limits/install-hook —— 安装 hook（幂等，写前备份；同时清除「卸载过」标记）。
@@ -1094,7 +1205,8 @@ pub fn save_rate_limit_config(config: Value) -> Result<Value, String> {
 /// POST /api/checkin —— 单账号立即签到。
 #[tauri::command]
 pub async fn checkin(account_id: String) -> Result<Value, String> {
-    let acc = account::find_account(&account_id).ok_or("账号不存在")?;
+    let acc = account::find_account(&account_id)
+        .ok_or(i18n::tr("Account not found", "계정을 찾을 수 없습니다"))?;
     Ok(checkin::checkin_account(&acc).await)
 }
 
@@ -1140,7 +1252,8 @@ pub fn get_checkin_logs() -> Value {
 /// 不把它吞成「未旅行」。
 #[tauri::command]
 pub async fn get_travel_status(account_id: String) -> Result<Value, String> {
-    account::find_account(&account_id).ok_or("账号不存在")?;
+    account::find_account(&account_id)
+        .ok_or(i18n::tr("Account not found", "계정을 찾을 수 없습니다"))?;
     travel::reconcile_due_travel(Some(account_id.as_str())).await;
     Ok(travel::travel_display(&account_id))
 }
@@ -1208,7 +1321,8 @@ pub fn get_rotate_logs() -> Value {
 /// POST /api/refresh-token —— 单账号刷新 token。
 #[tauri::command]
 pub async fn refresh_account_token(account_id: String) -> Result<Value, String> {
-    let acc = account::find_account(&account_id).ok_or("账号不存在")?;
+    let acc = account::find_account(&account_id)
+        .ok_or(i18n::tr("Account not found", "계정을 찾을 수 없습니다"))?;
     let fresh = refresh::refresh_account_token(acc).await;
     Ok(account::account_meta(&fresh))
 }
@@ -1277,7 +1391,12 @@ pub fn relaunch_app(_app: tauri::AppHandle) -> Result<(), String> {
 pub(crate) fn relaunch_app_inner<R: tauri::Runtime>(
     _app: &tauri::AppHandle<R>,
 ) -> Result<(), String> {
-    let executable = std::env::current_exe().map_err(|e| format!("无法定位应用程序: {e}"))?;
+    let executable = std::env::current_exe().map_err(|e| {
+        i18n::pick(
+            format!("Could not locate the application: {e}"),
+            format!("앱 실행 파일을 찾을 수 없습니다: {e}"),
+        )
+    })?;
     // 更新重启是普通启动路径；不要把系统自启专用参数带给新进程。
     let args = std::env::args_os().skip(1).filter(|arg| {
         #[cfg(desktop)]
@@ -1305,7 +1424,10 @@ pub(crate) fn relaunch_app_inner<R: tauri::Runtime>(
             if !crate::instance_lock::reacquire(_app) {
                 std::process::exit(0);
             }
-            Err(format!("启动应用失败: {e}"))
+            Err(i18n::pick(
+                format!("Could not start the app: {e}"),
+                format!("앱을 시작하지 못했습니다: {e}"),
+            ))
         }
     }
 }
@@ -1322,13 +1444,20 @@ pub fn get_launch_at_login_enabled(_app: tauri::AppHandle) -> Result<bool, Strin
     #[cfg(desktop)]
     {
         use tauri_plugin_autostart::ManagerExt;
-        _app.autolaunch()
-            .is_enabled()
-            .map_err(|e| format!("查询开机自启状态失败：{e}"))
+        _app.autolaunch().is_enabled().map_err(|e| {
+            i18n::pick(
+                format!("Could not read the launch-at-login setting: {e}"),
+                format!("로그인 시 자동 실행 설정을 읽지 못했습니다: {e}"),
+            )
+        })
     }
     #[cfg(not(desktop))]
     {
-        Err("当前平台不支持开机自启".to_string())
+        Err(i18n::tr(
+            "Launch at login is not supported on this platform",
+            "이 플랫폼에서는 로그인 시 자동 실행을 지원하지 않습니다",
+        )
+        .to_string())
     }
 }
 
@@ -1360,34 +1489,58 @@ pub fn set_launch_at_login_enabled(_app: tauri::AppHandle, enabled: bool) -> Res
     {
         use tauri_plugin_autostart::ManagerExt;
         let autostart = _app.autolaunch();
-        let action = if enabled { "开启" } else { "关闭" };
         let result = if enabled {
             autostart.enable()
         } else {
             autostart.disable()
         };
         if let Err(e) = result {
-            return Err(format!("{action}开机自启失败：{e}"));
+            return Err(if enabled {
+                i18n::pick(
+                    format!("Could not enable launch at login: {e}"),
+                    format!("로그인 시 자동 실행을 켜지 못했습니다: {e}"),
+                )
+            } else {
+                i18n::pick(
+                    format!("Could not disable launch at login: {e}"),
+                    format!("로그인 시 자동 실행을 끄지 못했습니다: {e}"),
+                )
+            });
         }
-        let authoritative = autostart
-            .is_enabled()
-            .map_err(|e| format!("开机自启设置后回读状态失败：{e}"))?;
+        let authoritative = autostart.is_enabled().map_err(|e| {
+            i18n::pick(
+                format!("Could not read back the launch-at-login setting: {e}"),
+                format!("로그인 시 자동 실행 설정을 다시 읽지 못했습니다: {e}"),
+            )
+        })?;
         if authoritative != enabled {
-            return Err(format!(
-                "{action}开机自启未生效（系统当前状态：{}），请稍后重试",
-                if authoritative {
-                    "已开启"
-                } else {
-                    "未开启"
-                }
-            ));
+            let state = if authoritative {
+                i18n::tr("on", "켜짐")
+            } else {
+                i18n::tr("off", "꺼짐")
+            };
+            return Err(if enabled {
+                i18n::pick(
+                    format!("Launch at login did not turn on (the system reports {state}). Try again in a moment."),
+                    format!("로그인 시 자동 실행이 켜지지 않았습니다(시스템 상태: {state}). 잠시 후 다시 시도해 주세요."),
+                )
+            } else {
+                i18n::pick(
+                    format!("Launch at login did not turn off (the system reports {state}). Try again in a moment."),
+                    format!("로그인 시 자동 실행이 꺼지지 않았습니다(시스템 상태: {state}). 잠시 후 다시 시도해 주세요."),
+                )
+            });
         }
         Ok(authoritative)
     }
     #[cfg(not(desktop))]
     {
         let _ = enabled;
-        Err("当前平台不支持开机自启".to_string())
+        Err(i18n::tr(
+            "Launch at login is not supported on this platform",
+            "이 플랫폼에서는 로그인 시 자동 실행을 지원하지 않습니다",
+        )
+        .to_string())
     }
 }
 
@@ -1436,9 +1589,12 @@ pub fn reveal_error_log(app: tauri::AppHandle) -> Result<(), String> {
             None => path,
         }
     };
-    app.opener()
-        .reveal_item_in_dir(target)
-        .map_err(|error| format!("打开日志位置失败: {error}"))
+    app.opener().reveal_item_in_dir(target).map_err(|error| {
+        i18n::pick(
+            format!("Could not open the log location: {error}"),
+            format!("로그 위치를 열지 못했습니다: {error}"),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,4 +1621,15 @@ pub async fn list_notifications() -> Result<Value, String> {
 #[tauri::command]
 pub async fn clear_notifications() -> Result<(), String> {
     notifications::clear()
+}
+
+/// Records the interface language so the tray and the next start use it.
+#[tauri::command]
+pub fn set_locale(app: tauri::AppHandle, locale: String) {
+    let Some(parsed) = i18n::Locale::parse(&locale) else {
+        return;
+    };
+    i18n::set_locale(parsed);
+    let _ = i18n::save_locale(parsed);
+    crate::tray::refresh_tray_menu(&app);
 }

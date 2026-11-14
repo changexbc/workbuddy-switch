@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::modules::config::{atomic_write, now_ms, store_dir};
+use crate::modules::i18n;
 
 /// 保留的最近通知条数。
 pub const NOTIFICATION_LIMIT: usize = 100;
@@ -64,14 +65,29 @@ fn load_at(root: &Path) -> Result<NotificationStore, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(NotificationStore::default())
         }
-        Err(error) => return Err(format!("通知存档不可读：{error}")),
+        Err(error) => {
+            return Err(i18n::pick(
+                format!("Could not read the notification archive: {error}"),
+                format!("알림 저장소를 읽을 수 없습니다: {error}"),
+            ))
+        }
     };
-    let store: NotificationStore =
-        serde_json::from_str(&text).map_err(|error| format!("通知存档内容损坏：{error}"))?;
+    let store: NotificationStore = serde_json::from_str(&text).map_err(|error| {
+        i18n::pick(
+            format!("The notification archive is damaged: {error}"),
+            format!("알림 저장소 내용이 손상되었습니다: {error}"),
+        )
+    })?;
     if store.version != NOTIFICATION_VERSION {
-        return Err(format!(
-            "通知存档版本 {} 不受支持（当前支持 {}），已保留原文件",
-            store.version, NOTIFICATION_VERSION
+        return Err(i18n::pick(
+            format!(
+                "Notification archive version {} is not supported (supported: {}); the original file was kept",
+                store.version, NOTIFICATION_VERSION
+            ),
+            format!(
+                "지원하지 않는 알림 저장소 버전입니다: {} (지원 버전: {}). 원본 파일은 보관했습니다",
+                store.version, NOTIFICATION_VERSION
+            ),
         ));
     }
     Ok(store)
@@ -126,8 +142,12 @@ pub fn record_at(
         store.items.drain(0..drop_count);
     }
     let content = serde_json::to_string_pretty(&store).map_err(|error| error.to_string())?;
-    atomic_write(&store_file_at(root), &content)
-        .map_err(|error| format!("通知存档写入失败：{error}"))
+    atomic_write(&store_file_at(root), &content).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the notification archive: {error}"),
+            format!("알림 저장소를 쓰지 못했습니다: {error}"),
+        )
+    })
 }
 
 /// 读取最近的通知（新的在前）。
@@ -141,8 +161,12 @@ pub fn list_at(root: &Path) -> Result<Vec<NotificationEntry>, String> {
 pub fn clear_at(root: &Path) -> Result<(), String> {
     let content =
         serde_json::to_string_pretty(&NotificationStore::default()).map_err(|e| e.to_string())?;
-    atomic_write(&store_file_at(root), &content)
-        .map_err(|error| format!("通知存档写入失败：{error}"))
+    atomic_write(&store_file_at(root), &content).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the notification archive: {error}"),
+            format!("알림 저장소를 쓰지 못했습니다: {error}"),
+        )
+    })
 }
 
 /// 生产入口：记录到工具存储根。
@@ -255,7 +279,7 @@ mod tests {
         let file = store_file_at(&dir.0);
         std::fs::write(&file, b"{not json").unwrap();
         let error = record_at(&dir.0, "info", "提示", None).unwrap_err();
-        assert!(error.contains("损坏"), "{error}");
+        assert!(error.contains("damaged"), "{error}");
         assert_eq!(
             std::fs::read(&file).unwrap(),
             b"{not json",

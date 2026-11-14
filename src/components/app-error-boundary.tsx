@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Toaster } from "@/components/ui/sonner";
 import { canPersistErrorLog, reportError } from "@/lib/error-report";
+import { translate } from "@/lib/i18n/translate";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
@@ -35,33 +36,49 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // 组件栈只能在 componentDidCatch 里取到，写入 state 供错误页展示与复制。
     this.setState({ componentStack: info.componentStack ?? "" });
-    reportError("frontend_crash", error.message || error.name || "未知错误", {
-      detail: [error.stack ?? "", info.componentStack ? `组件栈:${info.componentStack}` : ""]
-        .filter(Boolean)
-        .join("\n\n"),
-      source: "react-error-boundary",
-    });
+    reportError(
+      "frontend_crash",
+      error.message || error.name || translate("lib.errors.unknownError"),
+      {
+        detail: [
+          error.stack ?? "",
+          info.componentStack
+            ? translate("dialogs.errorBoundary.componentStack", { stack: info.componentStack })
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        source: "react-error-boundary",
+      },
+    );
   }
 
   /** 「复制详情」的内容：出错时间、页面位置、错误摘要与完整栈。 */
   private detailsText(): string {
     const { error, componentStack } = this.state;
     return [
-      `时间: ${new Date().toISOString()}`,
-      `页面: ${window.location.href}`,
-      `错误: ${error?.name ?? "Error"}: ${error?.message ?? "未知错误"}`,
+      translate("dialogs.errorBoundary.detailTime", { time: new Date().toISOString() }),
+      translate("dialogs.errorBoundary.detailPage", { url: window.location.href }),
+      translate("dialogs.errorBoundary.detailError", {
+        name: error?.name ?? "Error",
+        message: error?.message ?? translate("dialogs.errorBoundary.unknownError"),
+      }),
       "",
-      error?.stack ?? "(无堆栈)",
-      componentStack ? `\n组件栈:${componentStack}` : "",
+      error?.stack ?? translate("dialogs.errorBoundary.noStack"),
+      componentStack
+        ? `\n${translate("dialogs.errorBoundary.componentStack", { stack: componentStack })}`
+        : "",
     ].join("\n");
   }
 
   private copyDetails = async (): Promise<void> => {
     try {
       await navigator.clipboard.writeText(this.detailsText());
-      toast.success("错误详情已复制");
+      toast.success(translate("dialogs.errorBoundary.copied"));
     } catch {
-      toast.error("复制失败", { description: "剪贴板不可用，请展开详情后手动选中复制。" });
+      toast.error(translate("dialogs.errorBoundary.copyFailed"), {
+        description: translate("dialogs.errorBoundary.copyFailedDescription"),
+      });
     }
   };
 
@@ -74,9 +91,11 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
         <Card className="w-full max-w-2xl min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
           <CardContent className="space-y-3 p-5">
             <div className="space-y-1">
-              <h1 className="text-[13px] font-medium leading-5">应用出现错误</h1>
+              <h1 className="text-[13px] font-medium leading-5">
+                {translate("dialogs.errorBoundary.title")}
+              </h1>
               <p className="break-all text-xs leading-5 text-muted-foreground">
-                {error.message || "未知错误"}
+                {error.message || translate("dialogs.errorBoundary.unknownError")}
               </p>
             </div>
 
@@ -84,7 +103,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
               <CollapsibleTrigger asChild>
                 <Button variant="ghost" size="sm" className="-ml-2.5">
                   <ChevronDown />
-                  查看错误详情
+                  {translate("dialogs.errorBoundary.viewDetails")}
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent>
@@ -97,18 +116,18 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
             <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" onClick={() => window.location.reload()}>
                 <RotateCw />
-                重新加载
+                {translate("dialogs.errorBoundary.reload")}
               </Button>
               <Button size="sm" variant="outline" onClick={() => void this.copyDetails()}>
                 <Copy />
-                复制详情
+                {translate("dialogs.errorBoundary.copyDetails")}
               </Button>
             </div>
 
             <p className="text-xs leading-5 text-muted-foreground">
               {canPersistErrorLog()
-                ? "错误已记录到本机错误日志，可在设置页「错误日志」查看。若界面一直无法恢复，可从托盘菜单「检查更新」升级到最新版本。"
-                : "可以先点「重新加载」再试一次。若一直失败，请前往 GitHub 下载最新版本。"}
+                ? translate("dialogs.errorBoundary.hintLogged")
+                : translate("dialogs.errorBoundary.hintRetry")}
             </p>
           </CardContent>
         </Card>

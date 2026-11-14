@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::modules::account;
+use crate::modules::i18n;
 
 /// 导入结果计数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -26,16 +27,33 @@ pub struct ImportResult {
 /// 失败时返回带位置的明确错误文案（非法 JSON / 非数组 / 元素不是对象）。
 pub fn parse_accounts_json(text: &str) -> Result<Vec<Value>, String> {
     if text.trim().is_empty() {
-        return Err("文件内容为空".to_string());
+        return Err(i18n::tr("The file is empty", "파일 내용이 비어 있습니다").to_string());
     }
-    let parsed: Value =
-        serde_json::from_str(text).map_err(|e| format!("文件不是合法的 JSON：{e}"))?;
-    let array = parsed
-        .as_array()
-        .ok_or_else(|| "文件内容应为 JSON 数组（账号列表）".to_string())?;
+    let parsed: Value = serde_json::from_str(text).map_err(|e| {
+        i18n::pick(
+            format!("The file is not valid JSON: {e}"),
+            format!("파일이 올바른 JSON이 아닙니다: {e}"),
+        )
+    })?;
+    let array = parsed.as_array().ok_or_else(|| {
+        i18n::tr(
+            "The file content must be a JSON array (a list of accounts)",
+            "파일 내용은 JSON 배열(계정 목록)이어야 합니다",
+        )
+        .to_string()
+    })?;
     for (index, item) in array.iter().enumerate() {
         if !item.is_object() {
-            return Err(format!("文件第 {} 项不是合法的账号对象", index + 1));
+            return Err(i18n::pick(
+                format!(
+                    "Item {} in the file is not a valid account object",
+                    index + 1
+                ),
+                format!(
+                    "파일의 {}번째 항목이 올바른 계정 객체가 아닙니다",
+                    index + 1
+                ),
+            ));
         }
     }
     Ok(array.clone())
@@ -154,7 +172,12 @@ pub fn merge_import_records(
 pub fn import_accounts(text: &str, indexes: &[usize]) -> Result<ImportResult, String> {
     let mut accounts = account::load_accounts();
     let result = merge_import_records(&mut accounts, text, indexes)?;
-    account::save_accounts(&accounts).map_err(|e| format!("保存账号库失败：{e}"))?;
+    account::save_accounts(&accounts).map_err(|e| {
+        i18n::pick(
+            format!("Could not save the account store: {e}"),
+            format!("계정 저장소를 저장하지 못했습니다: {e}"),
+        )
+    })?;
     Ok(result)
 }
 
@@ -166,7 +189,11 @@ pub fn select_export_records(accounts: &[Value], ids: &[String]) -> Result<Vec<V
         .filter(|s| !s.is_empty())
         .collect();
     if ids.is_empty() {
-        return Err("请先选择要导出的账号".to_string());
+        return Err(i18n::tr(
+            "Select the accounts to export first",
+            "내보낼 계정을 먼저 선택해 주세요",
+        )
+        .to_string());
     }
     let mut exported: Vec<Value> = Vec::new();
     for id in ids {
@@ -178,7 +205,11 @@ pub fn select_export_records(accounts: &[Value], ids: &[String]) -> Result<Vec<V
         }
     }
     if exported.is_empty() {
-        return Err("未找到要导出的账号".to_string());
+        return Err(i18n::tr(
+            "No accounts found to export",
+            "내보낼 계정을 찾지 못했습니다",
+        )
+        .to_string());
     }
     Ok(exported)
 }
@@ -197,7 +228,11 @@ fn validate_export_file_name(file_name: &str) -> Result<(), String> {
         || name.contains("..")
         || !name.ends_with(".json")
     {
-        return Err("导出文件名不合法".to_string());
+        return Err(i18n::tr(
+            "The export file name is invalid",
+            "내보낼 파일 이름이 올바르지 않습니다",
+        )
+        .to_string());
     }
     Ok(())
 }
@@ -206,7 +241,11 @@ fn validate_export_file_name(file_name: &str) -> Result<(), String> {
 fn validate_export_path(path: &str) -> Result<(), String> {
     let p = Path::new(path.trim());
     if !p.is_absolute() {
-        return Err("导出路径必须是绝对路径".to_string());
+        return Err(i18n::tr(
+            "The export path must be absolute",
+            "내보낼 경로는 절대 경로여야 합니다",
+        )
+        .to_string());
     }
     if !p
         .extension()
@@ -214,7 +253,11 @@ fn validate_export_path(path: &str) -> Result<(), String> {
         .map(|e| e.eq_ignore_ascii_case("json"))
         .unwrap_or(false)
     {
-        return Err("导出文件名必须以 .json 结尾".to_string());
+        return Err(i18n::tr(
+            "The export file name must end with .json",
+            "내보낼 파일 이름은 .json으로 끝나야 합니다",
+        )
+        .to_string());
     }
     Ok(())
 }
@@ -228,8 +271,12 @@ pub fn write_records_to_file(
     validate_export_file_name(file_name)?;
     let content = serde_json::to_string_pretty(records).map_err(|e| e.to_string())?;
     let path = dir.join(file_name);
-    crate::modules::config::atomic_write(&path, &content)
-        .map_err(|e| format!("写入导出文件失败：{e}"))?;
+    crate::modules::config::atomic_write(&path, &content).map_err(|e| {
+        i18n::pick(
+            format!("Could not write the export file: {e}"),
+            format!("내보낼 파일을 쓰지 못했습니다: {e}"),
+        )
+    })?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -239,8 +286,12 @@ pub fn export_accounts_to_path(ids: &[String], path: &str) -> Result<String, Str
     let records = select_export_records(&account::load_accounts(), ids)?;
     let path_buf = PathBuf::from(path.trim());
     let content = serde_json::to_string_pretty(&records).map_err(|e| e.to_string())?;
-    crate::modules::config::atomic_write(&path_buf, &content)
-        .map_err(|e| format!("写入导出文件失败：{e}"))?;
+    crate::modules::config::atomic_write(&path_buf, &content).map_err(|e| {
+        i18n::pick(
+            format!("Could not write the export file: {e}"),
+            format!("내보낼 파일을 쓰지 못했습니다: {e}"),
+        )
+    })?;
     Ok(path_buf.to_string_lossy().into_owned())
 }
 
@@ -275,7 +326,7 @@ mod tests {
     #[test]
     fn parse_rejects_non_object_element() {
         let err = parse_accounts_json(r#"[{ "uid": "u1" }, 42]"#).unwrap_err();
-        assert!(err.contains("第 2 项"), "错误应带位置：{err}");
+        assert!(err.contains("Item 2"), "错误应带位置：{err}");
     }
 
     #[test]

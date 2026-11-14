@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { setActiveLocale } from "@/lib/i18n/translate";
 import {
   DEFAULT_VARIANT,
   accountVariant,
@@ -40,19 +41,24 @@ describe("normalizeVariant", () => {
 });
 
 describe("档位文案映射", () => {
-  it("档位名：国内版 / 国际版", () => {
-    expect(variantLabel("cn")).toBe("国内版");
-    expect(variantLabel("ai")).toBe("国际版");
+  afterEach(() => setActiveLocale("en"));
+
+  it("档位名跟随当前语言", () => {
+    expect(variantLabel("cn")).toBe("Domestic");
+    expect(variantLabel("ai")).toBe("International");
+    setActiveLocale("ko");
+    expect(variantLabel("cn")).toBe("국내판");
+    expect(variantLabel("ai")).toBe("국제판");
   });
 
   it("客户端名：国际版带后缀", () => {
     expect(variantAppName("cn")).toBe("WorkBuddy");
-    expect(variantAppName("ai")).toBe("WorkBuddy 国际版");
+    expect(variantAppName("ai")).toBe("WorkBuddy International");
   });
 
   it("CodeBuddy IDE 名：国际版带后缀", () => {
     expect(variantCodebuddyIdeName("cn")).toBe("CodeBuddy IDE");
-    expect(variantCodebuddyIdeName("ai")).toBe("CodeBuddy IDE 国际版");
+    expect(variantCodebuddyIdeName("ai")).toBe("CodeBuddy IDE International");
   });
 
   it("下载域名：国内版 codebuddy.cn / 国际版 workbuddy.ai", () => {

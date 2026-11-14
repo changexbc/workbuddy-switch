@@ -22,7 +22,7 @@ describe("企业版 demo 数据", () => {
     expect(credit.unlimited).toBe(false);
     expect(credit.totalRemaining).toBe(1500);
     expect(credit.resources).toHaveLength(1);
-    expect(credit.resources?.[0].packageName).toBe("企业配额");
+    expect(credit.resources?.[0].packageName).toBe("Enterprise quota");
   });
 
   it("demo-account-d：企业版不限量（数字字段为 null、无资源）", () => {

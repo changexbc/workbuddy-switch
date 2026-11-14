@@ -18,18 +18,13 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import * as api from "@/lib/api";
 import { accountIdentity } from "@/lib/account-display";
 import { avatarTone } from "@/lib/avatar-tone";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { accountVariant, variantLabel } from "@/lib/variant";
 import type { AccountMeta, DisplayField } from "@/lib/types";
 
 /** 备注长度上限：与后端 NOTE_MAX_CHARS 保持一致。 */
 const NOTE_MAX_LENGTH = 24;
-
-const FIELD_OPTIONS: Array<{ value: DisplayField; label: string }> = [
-  { value: "nickname", label: "账号名" },
-  { value: "phone", label: "手机号" },
-  { value: "note", label: "备注" },
-];
 
 interface Props {
   open: boolean;
@@ -45,6 +40,12 @@ interface Props {
  * 备注与显示字段只保存在本机账号库，不影响官方登录数据。
  */
 export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Props) {
+  const t = useT();
+  const fieldOptions: Array<{ value: DisplayField; label: string }> = [
+    { value: "nickname", label: t("accounts.info.fieldNickname") },
+    { value: "phone", label: t("accounts.info.fieldPhone") },
+    { value: "note", label: t("accounts.info.fieldNote") },
+  ];
   const [note, setNote] = useState("");
   const [field, setField] = useState<DisplayField>("nickname");
   const [busy, setBusy] = useState(false);
@@ -76,15 +77,15 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
   const effectiveField: DisplayField = field === "phone" && !hasPhone ? "nickname" : field;
 
   // 头部身份区展示官方字段（昵称 / 手机号 / 邮箱），不随本地显示偏好变化。
-  const name = current.nickname ?? current.uid ?? current.id ?? "未命名账号";
+  const name = current.nickname ?? current.uid ?? current.id ?? t("accounts.info.unnamedAccount");
   const subtitle = current.phoneNumber ?? accountIdentity(current);
   const uid = current.uid;
 
   /** 「卡片显示」每格的实时预览值：备注格跟随输入框草稿，改完即可见。 */
   function previewValue(value: DisplayField): string {
     if (value === "nickname") return current?.nickname ?? "—";
-    if (value === "phone") return current?.phoneNumber ?? "无手机号";
-    return note.trim() || "未填写备注";
+    if (value === "phone") return current?.phoneNumber ?? t("accounts.info.noPhone");
+    return note.trim() || t("accounts.info.noNote");
   }
 
   async function copyUid(value: string) {
@@ -93,7 +94,7 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
       setUidCopied(true);
       window.setTimeout(() => setUidCopied(false), 1500);
     } catch (e) {
-      toast.error("复制失败", { description: api.asError(e) });
+      toast.error(t("accounts.info.copyFailed"), { description: api.asError(e) });
     }
   }
 
@@ -105,10 +106,10 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
         displayField: effectiveField,
       });
       onSaved?.(res.account);
-      toast.success("账号信息已保存");
+      toast.success(t("accounts.info.saved"));
       onOpenChange(false);
     } catch (e) {
-      toast.error("保存失败", { description: api.asError(e) });
+      toast.error(t("accounts.info.saveFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -118,8 +119,8 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>账号信息</DialogTitle>
-          <DialogDescription>备注与显示字段仅保存在本机。</DialogDescription>
+          <DialogTitle>{t("accounts.card.accountInfo")}</DialogTitle>
+          <DialogDescription>{t("accounts.info.description")}</DialogDescription>
         </DialogHeader>
 
         {/* 身份区：与账号卡片同一视觉语言（色调头像 + 名称 + 档位徽标）。 */}
@@ -151,7 +152,7 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
         {/* 次级字段：企业名与 UID（等宽 + 一键复制）。 */}
         <dl className="divide-y divide-border/70 rounded-lg border text-xs">
           <div className="flex items-center gap-3 px-3 py-2.5">
-            <dt className="w-12 shrink-0 text-muted-foreground">企业名</dt>
+            <dt className="w-12 shrink-0 text-muted-foreground">{t("accounts.info.enterpriseName")}</dt>
             <dd className="min-w-0 flex-1 truncate font-medium" title={current.enterpriseName ?? ""}>
               {current.enterpriseName || "—"}
             </dd>
@@ -169,8 +170,8 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
                 type="button"
                 className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => void copyUid(uid)}
-                aria-label="复制 UID"
-                title="复制 UID"
+                aria-label={t("accounts.info.copyUid")}
+                title={t("accounts.info.copyUid")}
               >
                 {uidCopied ? <Check className="size-3.5 text-primary" /> : <Copy className="size-3.5" />}
               </button>
@@ -181,7 +182,7 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between">
             <Label htmlFor="account-note" className="text-xs font-medium text-muted-foreground">
-              备注
+              {t("accounts.info.fieldNote")}
             </Label>
             <span className="text-[11px] tabular-nums text-muted-foreground">
               {note.length}/{NOTE_MAX_LENGTH}
@@ -191,19 +192,21 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
             id="account-note"
             value={note}
             maxLength={NOTE_MAX_LENGTH}
-            placeholder={`最多 ${NOTE_MAX_LENGTH} 个字符`}
+            placeholder={t("accounts.info.notePlaceholder", { count: NOTE_MAX_LENGTH })}
             onChange={(e) => setNote(e.target.value)}
           />
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-xs font-medium text-muted-foreground">卡片显示</Label>
+          <Label className="text-xs font-medium text-muted-foreground">
+            {t("accounts.info.cardDisplay")}
+          </Label>
           <RadioGroup
             value={effectiveField}
             onValueChange={(value) => setField(value as DisplayField)}
             className="grid grid-cols-3 gap-2"
           >
-            {FIELD_OPTIONS.map((opt) => {
+            {fieldOptions.map((opt) => {
               const id = `display-field-${opt.value}`;
               const disabled = opt.value === "phone" && !hasPhone;
               const selected = effectiveField === opt.value;
@@ -227,17 +230,17 @@ export function AccountInfoDialog({ open, onOpenChange, account, onSaved }: Prop
             })}
           </RadioGroup>
           {!hasPhone && (
-            <p className="text-[11px] text-muted-foreground">该账号没有手机号，无法按手机号显示。</p>
+            <p className="text-[11px] text-muted-foreground">{t("accounts.info.noPhoneHint")}</p>
           )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button disabled={busy} onClick={() => void save()}>
             {busy && <Loader2 className="animate-spin" />}
-            保存
+            {t("common.save")}
           </Button>
         </DialogFooter>
       </DialogContent>

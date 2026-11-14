@@ -8,6 +8,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::modules::account;
 use crate::modules::config::{http_request, norm_ts, now_ms, now_secs, OAUTH_TIMEOUT_SECONDS};
+use crate::modules::i18n;
 use crate::modules::variant::WbVariant;
 
 struct OAuthInfo {
@@ -72,7 +73,10 @@ pub async fn oauth_start(variant: WbVariant) -> Result<Value, String> {
             .chars()
             .take(300)
             .collect::<String>();
-        return Err(format!("auth/state 响应缺少 state: {snippet}"));
+        return Err(i18n::pick(
+            format!("The auth/state response has no state: {snippet}"),
+            format!("auth/state 응답에 state가 없습니다: {snippet}"),
+        ));
     }
     let auth_url = data
         .get("authUrl")
@@ -122,12 +126,17 @@ fn domain_mismatch_error(variant: WbVariant, domain: &str) -> Option<String> {
     if variant.matches_domain(domain) {
         return None;
     }
-    Some(format!(
-        "登录响应的 domain（{domain}）与{}档位不符，已拒绝入库",
-        match variant {
-            WbVariant::Cn => "国内版",
-            WbVariant::Ai => "国际版",
-        }
+    let variant_label = match variant {
+        WbVariant::Cn => i18n::tr("Domestic", "국내판"),
+        WbVariant::Ai => i18n::tr("International", "국제판"),
+    };
+    Some(i18n::pick(
+        format!(
+            "The login response domain ({domain}) does not match the {variant_label} edition, so the account was not saved"
+        ),
+        format!(
+            "로그인 응답의 domain({domain})이 {variant_label} 에디션과 맞지 않아 계정을 저장하지 않았습니다"
+        ),
     ))
 }
 
@@ -136,15 +145,16 @@ pub async fn oauth_poll(login_id: &str) -> Value {
     let (state, variant) = {
         let mut map = oauth_states().lock().unwrap();
         let Some(info) = map.get_mut(login_id) else {
-            return json!({"done": true, "error": "登录请求不存在"});
+            return json!({"done": true, "error": i18n::tr("Login request not found", "로그인 요청을 찾을 수 없습니다")});
         };
         if info.done {
             return json!({"done": true, "result": info.result.clone(), "error": info.error.clone()});
         }
         if now_secs() > info.expires_at {
             info.done = true;
-            info.error = Some("登录超时".to_string());
-            return json!({"done": true, "error": "登录超时"});
+            info.error =
+                Some(i18n::tr("Login timed out", "로그인 시간이 초과되었습니다").to_string());
+            return json!({"done": true, "error": i18n::tr("Login timed out", "로그인 시간이 초과되었습니다")});
         }
         // 用发起档位拼域名与 platform，不跟随当前列表档位。
         (info.state.clone(), info.variant)
@@ -251,7 +261,10 @@ pub async fn oauth_poll(login_id: &str) -> Value {
     let account = match account::save_collected_account(account) {
         Ok(saved) => saved,
         Err(error) => {
-            let error = format!("保存账号失败: {error}");
+            let error = i18n::pick(
+                format!("Could not save the account: {error}"),
+                format!("계정을 저장하지 못했습니다: {error}"),
+            );
             let mut map = oauth_states().lock().unwrap();
             if let Some(info) = map.get_mut(login_id) {
                 info.done = true;

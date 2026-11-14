@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import type { MessageKey } from "./i18n/messages";
+
 /**
  * 「支持工具」开关：控制各客户端入口是否在界面上出现。
  *
@@ -16,9 +18,9 @@ export type ToolId = "workbuddy" | "codebuddyIde" | "codebuddyCli" | "vscodeExt"
 export interface ToolDef {
   id: ToolId;
   /** 设置页开关标题。 */
-  label: string;
+  labelKey: MessageKey;
   /** 设置页说明文案。 */
-  description: string;
+  descriptionKey: MessageKey;
   /** 未显式配置时的默认状态。 */
   defaultEnabled: boolean;
 }
@@ -26,32 +28,32 @@ export interface ToolDef {
 export const SUPPORTED_TOOLS: ToolDef[] = [
   {
     id: "workbuddy",
-    label: "WorkBuddy",
-    description: "WorkBuddy 桌面客户端账号切换与会话复制",
+    labelKey: "lib.tools.workbuddy.label",
+    descriptionKey: "lib.tools.workbuddy.description",
     defaultEnabled: true,
   },
   {
     id: "codebuddyIde",
-    label: "CodeBuddy IDE",
-    description: "CodeBuddy IDE 桌面客户端（国内版 / 国际版）账号切换",
+    labelKey: "lib.tools.codebuddyIde.label",
+    descriptionKey: "lib.tools.codebuddyIde.description",
     defaultEnabled: true,
   },
   {
     id: "codebuddyCli",
-    label: "CodeBuddy CLI",
-    description: "CodeBuddy CLI 默认账号与自动轮换",
+    labelKey: "lib.tools.codebuddyCli.label",
+    descriptionKey: "lib.tools.codebuddyCli.description",
     defaultEnabled: true,
   },
   {
     id: "vscodeExt",
-    label: "VS Code CodeBuddy 插件",
-    description: "VS Code 内 CodeBuddy 插件账号切换与会话复制",
+    labelKey: "lib.tools.vscodeExt.label",
+    descriptionKey: "lib.tools.vscodeExt.description",
     defaultEnabled: true,
   },
   {
     id: "jetbrains",
-    label: "JetBrains IDE 插件（IDEA / PyCharm）",
-    description: "IntelliJ IDEA / PyCharm 内 CodeBuddy 插件账号切换",
+    labelKey: "lib.tools.jetbrains.label",
+    descriptionKey: "lib.tools.jetbrains.description",
     defaultEnabled: false,
   },
 ];

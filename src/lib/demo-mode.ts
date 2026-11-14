@@ -1,4 +1,9 @@
-export const DEMO_UNAVAILABLE_MESSAGE = "演示模式下不可操作";
+import { translate } from "./i18n/translate";
+
+/** Every write in a demo build is refused with this text (toast, tooltip, aria label). */
+export function demoUnavailableMessage(): string {
+  return translate("lib.demoMode.unavailable");
+}
 
 /** Public demo and README screenshot builds share the same read-only frontend runtime. */
 export const demoModeEnabled =

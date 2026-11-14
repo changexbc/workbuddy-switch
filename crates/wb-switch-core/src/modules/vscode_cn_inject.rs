@@ -39,6 +39,8 @@ use rusqlite::{Connection, OpenFlags};
 #[cfg(not(target_os = "windows"))]
 use sha1::Sha1;
 
+use crate::modules::i18n;
+
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{LocalFree, HLOCAL};
 #[cfg(target_os = "windows")]
@@ -228,8 +230,15 @@ pub fn resolve_state_db_path_for(
 ) -> Result<PathBuf, String> {
     let root = match user_data_dir {
         Some(p) => p.to_path_buf(),
-        None => (target.data_dir_resolver)()
-            .ok_or_else(|| format!("无法定位 {} 数据目录", target.display_name))?,
+        None => (target.data_dir_resolver)().ok_or_else(|| {
+            i18n::pick(
+                format!(
+                    "Unable to locate the {} data directory",
+                    target.display_name
+                ),
+                format!("{} 데이터 디렉터리를 찾을 수 없습니다", target.display_name),
+            )
+        })?,
     };
     let candidates = [
         root.join("User").join("globalStorage").join("state.vscdb"),
@@ -241,7 +250,12 @@ pub fn resolve_state_db_path_for(
     }
     let preferred = candidates[0].clone();
     if let Some(parent) = preferred.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建 globalStorage 失败: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            i18n::pick(
+                format!("Failed to create globalStorage: {e}"),
+                format!("globalStorage 생성 실패: {e}"),
+            )
+        })?;
     }
     Ok(preferred)
 }
@@ -266,7 +280,18 @@ fn data_root_from_db(db_path: &Path) -> Result<&Path, String> {
         .parent()
         .and_then(|p| p.parent())
         .and_then(|p| p.parent())
-        .ok_or_else(|| format!("无法从 db 路径推断数据目录: {}", db_path.display()))
+        .ok_or_else(|| {
+            i18n::pick(
+                format!(
+                    "Unable to infer the data directory from the db path: {}",
+                    db_path.display()
+                ),
+                format!(
+                    "db 경로에서 데이터 디렉터리를 추론할 수 없습니다: {}",
+                    db_path.display()
+                ),
+            )
+        })
 }
 
 fn decode_buffer_data(buffer: &serde_json::Value) -> Result<Vec<u8>, String> {
@@ -387,7 +412,12 @@ fn get_macos_safe_storage_password(service: &str) -> Result<String, String> {
         10,
     )
     .ok_or_else(|| {
-        format!("无法从 Keychain 读取「{service}」密码。请先手动打开对应应用并登录一次。")
+        i18n::pick(
+            format!("Unable to read the \"{service}\" password from Keychain. Open the app and sign in once first."),
+            format!(
+                "Keychain에서 '{service}' 암호를 읽을 수 없습니다. 먼저 해당 앱을 열어 한 번 로그인하세요."
+            ),
+        )
     })
 }
 
@@ -424,9 +454,15 @@ fn get_linux_v11_key(app_names: &[&str]) -> Option<[u8; 16]> {
 /// 追加 macOS 钥匙串（Keychain）指引，那是平台错位的建议。
 #[cfg(target_os = "linux")]
 fn linux_v11_key_error(target: &VscodeSafeStorageTarget) -> String {
-    format!(
-        "无法从系统密钥环读取「{}」的登录凭证密钥（v11）。请确认 gnome-keyring / KWallet 已启动、登录密钥环已解锁，并先用 {} 手动登录一次。",
-        target.display_name, target.display_name
+    i18n::pick(
+        format!(
+            "Unable to read the login credential key (v11) for \"{}\" from the system keyring. Make sure gnome-keyring / KWallet is running and the login keyring is unlocked, then sign in once with {} manually.",
+            target.display_name, target.display_name
+        ),
+        format!(
+            "시스템 키링에서 '{}'의 로그인 자격 증명 키(v11)를 읽을 수 없습니다. gnome-keyring / KWallet이 실행 중이고 로그인 키링이 잠금 해제되어 있는지 확인한 뒤, {}에 한 번 직접 로그인하세요.",
+            target.display_name, target.display_name
+        ),
     )
 }
 
@@ -436,7 +472,10 @@ fn get_local_state_path(data_root: &Path) -> Result<PathBuf, String> {
     if path.exists() {
         Ok(path)
     } else {
-        Err(format!("未找到 Local State: {}", path.display()))
+        Err(i18n::pick(
+            format!("Local State not found: {}", path.display()),
+            format!("Local State 파일을 찾을 수 없습니다: {}", path.display()),
+        ))
     }
 }
 
@@ -466,13 +505,25 @@ fn dpapi_decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(target_os = "windows")]
 fn get_windows_encryption_key(data_root: &Path) -> Result<Vec<u8>, String> {
     let local_state = get_local_state_path(data_root)?;
-    let text =
-        std::fs::read_to_string(&local_state).map_err(|e| format!("读取 Local State 失败: {e}"))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("解析 Local State 失败: {e}"))?;
-    let encrypted_key_b64 = json["os_crypt"]["encrypted_key"]
-        .as_str()
-        .ok_or_else(|| "Local State 缺少 os_crypt.encrypted_key".to_string())?;
+    let text = std::fs::read_to_string(&local_state).map_err(|e| {
+        i18n::pick(
+            format!("Failed to read Local State: {e}"),
+            format!("Local State 읽기 실패: {e}"),
+        )
+    })?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        i18n::pick(
+            format!("Failed to parse Local State: {e}"),
+            format!("Local State 파싱 실패: {e}"),
+        )
+    })?;
+    let encrypted_key_b64 = json["os_crypt"]["encrypted_key"].as_str().ok_or_else(|| {
+        i18n::tr(
+            "Local State is missing os_crypt.encrypted_key",
+            "Local State에 os_crypt.encrypted_key가 없습니다",
+        )
+        .to_string()
+    })?;
     let encrypted_key_bytes = general_purpose::STANDARD
         .decode(encrypted_key_b64)
         .map_err(|e| format!("Base64 decode failed for encrypted_key: {e}"))?;
@@ -653,14 +704,26 @@ pub fn read_secret_for(
 ) -> Result<Option<String>, String> {
     let root = match user_data_dir {
         Some(p) => p.to_path_buf(),
-        None => (target.data_dir_resolver)()
-            .ok_or_else(|| format!("无法定位 {} 数据目录", target.display_name))?,
+        None => (target.data_dir_resolver)().ok_or_else(|| {
+            i18n::pick(
+                format!(
+                    "Unable to locate the {} data directory",
+                    target.display_name
+                ),
+                format!("{} 데이터 디렉터리를 찾을 수 없습니다", target.display_name),
+            )
+        })?,
     };
     let Some(db_path) = find_existing_state_db_path(&root) else {
         return Ok(None);
     };
     let data_root = data_root_from_db(&db_path)?.to_path_buf();
-    let conn = Connection::open(&db_path).map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
+    let conn = Connection::open(&db_path).map_err(|e| {
+        i18n::pick(
+            format!("Failed to open state.vscdb: {e}"),
+            format!("state.vscdb 열기 실패: {e}"),
+        )
+    })?;
     let key = secret_storage_item_key_for(target);
     let raw_value: Option<String> = match conn.query_row(
         "SELECT value FROM ItemTable WHERE key = ?1",
@@ -669,7 +732,12 @@ pub fn read_secret_for(
     ) {
         Ok(value) => Some(value),
         Err(rusqlite::Error::QueryReturnedNoRows) => None,
-        Err(err) => return Err(format!("查询 {} secret 失败: {err}", target.display_name)),
+        Err(err) => {
+            return Err(i18n::pick(
+                format!("Failed to query the {} secret: {err}", target.display_name),
+                format!("{} secret 조회 실패: {err}", target.display_name),
+            ))
+        }
     };
     match raw_value {
         Some(value) => decode_secret_storage_value(&value, &data_root, target).map(Some),
@@ -700,8 +768,13 @@ pub fn has_secret_row_for(
         return Ok(false);
     };
     // 只读打开：避免在「文件不存在」等边缘情况下由 SQLite 兜底新建空库。
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
+    let conn =
+        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
+            i18n::pick(
+                format!("Failed to open state.vscdb: {e}"),
+                format!("state.vscdb 열기 실패: {e}"),
+            )
+        })?;
     let key = secret_storage_item_key_for(target);
     match conn.query_row(
         "SELECT 1 FROM ItemTable WHERE key = ?1 LIMIT 1",
@@ -712,7 +785,13 @@ pub fn has_secret_row_for(
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
         // 空库 / 尚未初始化 ItemTable：按「无该行」处理，不是失败。
         Err(err) if is_missing_table_error(&err) => Ok(false),
-        Err(err) => Err(format!("查询 {} secret 行失败: {err}", target.display_name)),
+        Err(err) => Err(i18n::pick(
+            format!(
+                "Failed to query the {} secret row: {err}",
+                target.display_name
+            ),
+            format!("{} secret 행 조회 실패: {err}", target.display_name),
+        )),
     }
 }
 
@@ -749,14 +828,29 @@ pub fn inject_secret_for(
     let db_path = resolve_state_db_path_for(target, user_data_dir)?;
     let data_root = data_root_from_db(&db_path)?.to_path_buf();
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建 state.vscdb 父目录失败: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            i18n::pick(
+                format!("Failed to create the state.vscdb parent directory: {e}"),
+                format!("state.vscdb 상위 디렉터리 생성 실패: {e}"),
+            )
+        })?;
     }
-    let conn = Connection::open(&db_path).map_err(|e| format!("打开 state.vscdb 失败: {e}"))?;
+    let conn = Connection::open(&db_path).map_err(|e| {
+        i18n::pick(
+            format!("Failed to open state.vscdb: {e}"),
+            format!("state.vscdb 열기 실패: {e}"),
+        )
+    })?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT)",
         [],
     )
-    .map_err(|e| format!("初始化 ItemTable 失败: {e}"))?;
+    .map_err(|e| {
+        i18n::pick(
+            format!("Failed to initialize ItemTable: {e}"),
+            format!("ItemTable 초기화 실패: {e}"),
+        )
+    })?;
 
     let db_key = secret_storage_item_key_for(target);
     let existing_prefix: Option<String> = match conn.query_row(
@@ -789,7 +883,12 @@ pub fn inject_secret_for(
         "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
         rusqlite::params![db_key, buffer_str],
     )
-    .map_err(|e| format!("写入 state.vscdb 失败: {e}"))?;
+    .map_err(|e| {
+        i18n::pick(
+            format!("Failed to write to state.vscdb: {e}"),
+            format!("state.vscdb 쓰기 실패: {e}"),
+        )
+    })?;
 
     // 写后校验：行存在且为 Buffer JSON
     let written: String = conn
@@ -798,11 +897,24 @@ pub fn inject_secret_for(
             [db_key.as_str()],
             |row| row.get(0),
         )
-        .map_err(|e| format!("写后校验失败: {e}"))?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&written).map_err(|e| format!("写后校验 JSON 失败: {e}"))?;
+        .map_err(|e| {
+            i18n::pick(
+                format!("Post-write verification failed: {e}"),
+                format!("쓰기 후 검증 실패: {e}"),
+            )
+        })?;
+    let parsed: serde_json::Value = serde_json::from_str(&written).map_err(|e| {
+        i18n::pick(
+            format!("Post-write JSON verification failed: {e}"),
+            format!("쓰기 후 JSON 검증 실패: {e}"),
+        )
+    })?;
     if parsed.get("type").and_then(|v| v.as_str()) != Some("Buffer") {
-        return Err("写后校验失败：value 不是 Buffer".to_string());
+        return Err(i18n::tr(
+            "Post-write verification failed: value is not a Buffer",
+            "쓰기 후 검증 실패: value가 Buffer가 아닙니다",
+        )
+        .to_string());
     }
     Ok(db_path)
 }

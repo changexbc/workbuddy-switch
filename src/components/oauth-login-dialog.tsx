@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { displayName } from "@/lib/account-display";
 import * as api from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { DEFAULT_VARIANT, variantAppName, variantLabel } from "@/lib/variant";
 import type { AccountMeta, WbVariant } from "@/lib/types";
 import { useAccountsStore } from "@/stores/accounts";
@@ -25,29 +26,28 @@ interface Props {
   variant?: WbVariant;
 }
 
-/** 登录链路文案按档位区分：国内版是扫码授权，国际版只有浏览器 Web 登录授权（无二维码）。 */
-const LOGIN_COPY = {
-  cn: {
-    title: "OAuth 扫码登录",
-    // 国内版保留产品名（档位与产品同名，无歧义）；产品名仍取自 variant.ts 单一来源
-    description: `在浏览器中打开验证链接，扫码授权后将自动采集 ${variantAppName("cn")} 账号并入库。`,
-    start: "开始扫码登录",
-    waiting: "正在等待扫码授权，请在浏览器完成操作…",
-  },
-  ai: {
-    title: "OAuth Web 登录",
-    // 国际版只说档位：与账号页同口径（原来写作「WorkBuddy 国际版 账号」，
-    // 既有中英混排的冗余空格，又让同一句话里出现产品名与档位名两种叫法）
-    description: "在浏览器中打开验证链接，完成 Web 登录授权后将自动采集国际版账号并入库。",
-    start: "开始 Web 登录",
-    waiting: "请在浏览器中完成 Web 登录授权，正在等待授权结果…",
-  },
-} as const;
-
 /** OAuth 登录采集：发起 → 打开浏览器 → 轮询采集结果 → 入库。 */
 export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT }: Props) {
+  const t = useT();
   const reconcileAccounts = useAccountsStore((s) => s.reconcileAccounts);
-  const copy = LOGIN_COPY[variant];
+  /** 登录链路文案按档位区分：国内版是扫码授权，国际版只有浏览器 Web 登录授权（无二维码）。 */
+  const copy =
+    variant === "ai"
+      ? {
+          // 国际版只说档位：与账号页同口径（原来写作「WorkBuddy 国际版 账号」，
+          // 既有中英混排的冗余空格，又让同一句话里出现产品名与档位名两种叫法）
+          title: t("dialogs.oauth.titleWeb", { variant: variantLabel(variant) }),
+          description: t("dialogs.oauth.descriptionWeb"),
+          start: t("dialogs.oauth.startWeb"),
+          waiting: t("dialogs.oauth.waitingWeb"),
+        }
+      : {
+          // 国内版保留产品名（档位与产品同名，无歧义）；产品名仍取自 variant.ts 单一来源
+          title: t("dialogs.oauth.titleScan", { variant: variantLabel(variant) }),
+          description: t("dialogs.oauth.descriptionScan", { app: variantAppName("cn") }),
+          start: t("dialogs.oauth.startScan"),
+          waiting: t("dialogs.oauth.waitingScan"),
+        };
 
   const [busy, setBusy] = useState(false);
   const [loginId, setLoginId] = useState<string | null>(null);
@@ -82,7 +82,7 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
             await reconcileAccounts();
             if (!cancelled) setResult(res.result);
           } else if (!cancelled) {
-            setError(res.error || "登录失败");
+            setError(res.error || t("dialogs.oauth.loginFailed"));
           }
           if (timer !== undefined) window.clearInterval(timer);
           return;
@@ -99,7 +99,7 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [loginId, reconcileAccounts]);
+  }, [loginId, reconcileAccounts, t]);
 
   async function start() {
     setBusy(true);
@@ -126,8 +126,8 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      toast.error("复制链接失败", {
-        description: "浏览器未授予剪贴板权限，请手动选中上方链接后复制。",
+      toast.error(t("dialogs.oauth.copyFailed"), {
+        description: t("dialogs.oauth.copyFailedDescription"),
       });
     }
   }
@@ -136,14 +136,14 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{copy.title}（{variantLabel(variant)}）</DialogTitle>
+          <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
 
         {!loginId && !result && (
           <div className="space-y-3 pt-2">
             <Button onClick={start} disabled={busy} className="w-full">
-              {busy ? "正在发起登录…" : copy.start}
+              {busy ? t("dialogs.oauth.starting") : copy.start}
             </Button>
           </div>
         )}
@@ -153,11 +153,8 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
             {variant === "ai" && (
               <Alert variant="warning">
                 <CircleAlert className="size-4" />
-                <AlertTitle>请把链接复制到无痕窗口打开</AlertTitle>
-                <AlertDescription>
-                  若浏览器已登录 workbuddy.ai，授权页会直接跳到「登录成功」而不会绑定账号。
-                  请用下方按钮复制链接，粘贴到浏览器的无痕（隐私）窗口中打开并完成登录。
-                </AlertDescription>
+                <AlertTitle>{t("dialogs.oauth.incognitoTitle")}</AlertTitle>
+                <AlertDescription>{t("dialogs.oauth.incognitoDescription")}</AlertDescription>
               </Alert>
             )}
             <Alert>
@@ -183,7 +180,7 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
             {variant === "ai" && (
               <Button variant="outline" size="sm" onClick={copyLink} className="w-full">
                 {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-                {copied ? "已复制" : "复制链接"}
+                {copied ? t("common.copied") : t("dialogs.oauth.copyLink")}
               </Button>
             )}
             <p className="text-sm text-muted-foreground">
@@ -195,7 +192,7 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
         {result && (
           <Alert>
             <AlertDescription>
-              已采集账号：{displayName(result)}
+              {t("dialogs.oauth.collected", { name: displayName(result) })}
             </AlertDescription>
           </Alert>
         )}
@@ -208,7 +205,7 @@ export function OAuthLoginDialog({ open, onOpenChange, variant = DEFAULT_VARIANT
 
         {result && (
           <DialogFooter>
-            <Button onClick={() => onOpenChange(false)}>完成</Button>
+            <Button onClick={() => onOpenChange(false)}>{t("common.done")}</Button>
           </DialogFooter>
         )}
       </DialogContent>

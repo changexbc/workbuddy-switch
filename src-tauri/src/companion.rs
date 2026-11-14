@@ -3,6 +3,8 @@
 
 use tauri::AppHandle;
 
+use wb_switch_core::modules::i18n;
+
 fn runtime_path() -> std::path::PathBuf {
     let suffix = if cfg!(windows) { ".exe" } else { "" };
     let bundled = std::env::current_exe().ok().and_then(|exe| {
@@ -52,12 +54,20 @@ pub async fn set_companion_enabled(app: AppHandle, enabled: bool) -> Result<bool
     #[cfg(not(desktop))]
     {
         let _ = (app, enabled);
-        return Err("此平台不支持悬浮窗".into());
+        return Err(i18n::tr(
+            "The floating window is not supported on this platform",
+            "이 플랫폼에서는 플로팅 창을 지원하지 않습니다",
+        )
+        .into());
     }
     #[cfg(desktop)]
     {
         if crate::is_screenshot_demo() {
-            return Err("演示模式不启用悬浮窗".into());
+            return Err(i18n::tr(
+                "The floating window is disabled in demo mode",
+                "데모 모드에서는 플로팅 창을 사용하지 않습니다",
+            )
+            .into());
         }
         let host = app.clone();
         let confirmed = tauri::async_runtime::spawn_blocking(move || {
@@ -75,12 +85,20 @@ pub async fn open_companion_settings(app: AppHandle) -> Result<(), String> {
     #[cfg(not(desktop))]
     {
         let _ = app;
-        return Err("此平台不支持悬浮窗".into());
+        return Err(i18n::tr(
+            "The floating window is not supported on this platform",
+            "이 플랫폼에서는 플로팅 창을 지원하지 않습니다",
+        )
+        .into());
     }
     #[cfg(desktop)]
     {
         if !enabled(&app) {
-            return Err("请先启用悬浮窗".into());
+            return Err(i18n::tr(
+                "Enable the floating window first",
+                "먼저 플로팅 창을 켜 주세요",
+            )
+            .into());
         }
         tauri::async_runtime::spawn_blocking(move || agent_studio_desktop::open(&app, "settings"))
             .await

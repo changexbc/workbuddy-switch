@@ -1,4 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
@@ -34,9 +35,10 @@ function TimePicker({
   onChange,
   disabled,
   className,
-  hourLabel = "小时",
-  minuteLabel = "分钟",
+  hourLabel,
+  minuteLabel,
 }: TimePickerProps) {
+  const t = useT();
   const parsed = parseClock(value);
   const hour = parsed?.hour ?? "";
   const minute = parsed?.minute ?? "";
@@ -48,7 +50,7 @@ function TimePicker({
         disabled={disabled}
         onValueChange={(next) => onChange(`${next}:${minute || "00"}`)}
       >
-        <SelectTrigger size="sm" aria-label={hourLabel} className="w-[4.5rem] min-w-0">
+        <SelectTrigger size="sm" aria-label={hourLabel ?? t("common.hourLabel")} className="w-[4.5rem] min-w-0">
           <SelectValue placeholder="--" />
         </SelectTrigger>
         <SelectContent className="max-h-64">
@@ -65,7 +67,7 @@ function TimePicker({
         disabled={disabled || !hour}
         onValueChange={(next) => onChange(`${hour}:${next}`)}
       >
-        <SelectTrigger size="sm" aria-label={minuteLabel} className="w-[4.5rem] min-w-0">
+        <SelectTrigger size="sm" aria-label={minuteLabel ?? t("common.minuteLabel")} className="w-[4.5rem] min-w-0">
           <SelectValue placeholder="--" />
         </SelectTrigger>
         <SelectContent className="max-h-64">

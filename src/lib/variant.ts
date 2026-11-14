@@ -2,6 +2,7 @@
 // 展示名、缺省判定、以及「哪些入口属于哪个档位」的判定都收敛在这里，
 // 避免各页面各写一份字符串。
 
+import { translate } from "./i18n/translate";
 import type { WbVariant } from "./types";
 
 /** 缺省档位：后端不传 / 账号无字段时一律按国内版处理（零回归）。 */
@@ -12,19 +13,19 @@ export function normalizeVariant(value: unknown): WbVariant {
   return value === "ai" ? "ai" : DEFAULT_VARIANT;
 }
 
-/** 档位对应的中文档位名（切换控件、空状态、能力提示用）。 */
+/** 档位对应的档位名（切换控件、空状态、能力提示用）。 */
 export function variantLabel(variant: WbVariant): string {
-  return variant === "ai" ? "国际版" : "国内版";
+  return variant === "ai" ? translate("lib.variant.international") : translate("lib.variant.domestic");
 }
 
 /** 档位对应的客户端名称（对话框、状态卡、账号页 tooltip 用）。 */
 export function variantAppName(variant: WbVariant): string {
-  return variant === "ai" ? "WorkBuddy 国际版" : "WorkBuddy";
+  return variant === "ai" ? translate("lib.variant.appInternational") : "WorkBuddy";
 }
 
 /** CodeBuddy IDE 的档位展示名（账号页档位标记 tooltip 用），与 WorkBuddy 命名保持一致。 */
 export function variantCodebuddyIdeName(variant: WbVariant): string {
-  return variant === "ai" ? "CodeBuddy IDE 国际版" : "CodeBuddy IDE";
+  return variant === "ai" ? translate("lib.variant.codebuddyIdeInternational") : "CodeBuddy IDE";
 }
 
 /**

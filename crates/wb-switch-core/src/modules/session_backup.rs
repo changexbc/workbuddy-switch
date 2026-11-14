@@ -16,9 +16,10 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use crate::modules::config::now_ms;
+use crate::modules::i18n;
 use crate::modules::session::SessionPaths;
 use crate::modules::session_link::{
-    self, OpPhase, Operation, TemporaryFileIssue, OP_SCAN_PROBLEM_PREFIX,
+    self, op_scan_problem_prefix, OpPhase, Operation, TemporaryFileIssue,
 };
 use crate::modules::variant::WbVariant;
 
@@ -207,17 +208,32 @@ pub fn sync_tree(dir: &Path) -> std::io::Result<()> {
 pub fn ensure_full_synchronous(conn: &rusqlite::Connection) -> Result<(), String> {
     let level: i64 = conn
         .query_row("PRAGMA synchronous", [], |row| row.get(0))
-        .map_err(|error| format!("数据库同步级别读取失败：{error}"))?;
+        .map_err(|error| {
+            i18n::pick(
+                format!("Could not read the database sync level: {error}"),
+                format!("데이터베이스 동기화 수준을 읽지 못했습니다: {error}"),
+            )
+        })?;
     if level < 2 {
         conn.execute_batch("PRAGMA synchronous=FULL")
-            .map_err(|error| format!("数据库同步级别设置失败：{error}"))?;
+            .map_err(|error| {
+                i18n::pick(
+                    format!("Could not set the database sync level: {error}"),
+                    format!("데이터베이스 동기화 수준을 설정하지 못했습니다: {error}"),
+                )
+            })?;
         let after: i64 = conn
             .query_row("PRAGMA synchronous", [], |row| row.get(0))
-            .map_err(|error| format!("数据库同步级别复核失败：{error}"))?;
+            .map_err(|error| {
+                i18n::pick(
+                    format!("Could not verify the database sync level: {error}"),
+                    format!("데이터베이스 동기화 수준을 확인하지 못했습니다: {error}"),
+                )
+            })?;
         if after < 2 {
-            return Err(format!(
-                "数据库无法建立持久化保证（synchronous={after}，需要 FULL），已停止写入"
-            ));
+            return Err(i18n::pick(format!("The database cannot guarantee durability (synchronous={after}, FULL required); writing stopped"
+            ), format!("데이터베이스가 내구성을 보장할 수 없습니다(synchronous={after}, FULL 필요). 쓰기를 중단했습니다"
+            )));
         }
     }
     Ok(())
@@ -266,15 +282,28 @@ fn lifecycle_file(
 fn validated_operation_id(operation_id: &str) -> Result<String, String> {
     uuid::Uuid::parse_str(operation_id)
         .map(|id| id.to_string())
-        .map_err(|_| format!("操作标识不是合法 UUID（{operation_id}），已停止删除"))
+        .map_err(|_| {
+            i18n::pick(
+                format!("The operation id is not a valid UUID ({operation_id}); deletion stopped"),
+                format!(
+                    "작업 식별자가 올바른 UUID가 아닙니다({operation_id}). 삭제를 중단했습니다"
+                ),
+            )
+        })
 }
 
 /// 拒绝根目录之下的符号链接跳转（含祖先路径）；不跟随、不删除链接目标。
 fn ensure_no_symlink_components(root: &Path, target: &Path) -> Result<(), String> {
     let Ok(relative) = target.strip_prefix(root) else {
-        return Err(format!(
-            "目标路径不在可信根内（{}），已停止删除",
-            target.display()
+        return Err(i18n::pick(
+            format!(
+                "The target path is outside the trusted root ({}); deletion stopped",
+                target.display()
+            ),
+            format!(
+                "대상 경로가 신뢰할 수 있는 루트 밖에 있습니다({}). 삭제를 중단했습니다",
+                target.display()
+            ),
         ));
     };
     let mut current = root.to_path_buf();
@@ -282,17 +311,29 @@ fn ensure_no_symlink_components(root: &Path, target: &Path) -> Result<(), String
         current.push(component);
         match std::fs::symlink_metadata(&current) {
             Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(format!(
-                    "路径包含符号链接（{}），已停止删除",
-                    current.display()
+                return Err(i18n::pick(
+                    format!(
+                        "The path contains a symbolic link ({}); deletion stopped",
+                        current.display()
+                    ),
+                    format!(
+                        "경로에 심볼릭 링크가 있습니다({}). 삭제를 중단했습니다",
+                        current.display()
+                    ),
                 ));
             }
             Ok(_) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
             Err(error) => {
-                return Err(format!(
-                    "路径状态无法确认（{}：{error}），已停止删除",
-                    current.display()
+                return Err(i18n::pick(
+                    format!(
+                        "The path state cannot be confirmed ({}: {error}); deletion stopped",
+                        current.display()
+                    ),
+                    format!(
+                        "경로 상태를 확인할 수 없습니다({}: {error}). 삭제를 중단했습니다",
+                        current.display()
+                    ),
                 ));
             }
         }
@@ -308,11 +349,20 @@ fn ensure_no_symlink_components(root: &Path, target: &Path) -> Result<(), String
 pub fn save_lifecycle(paths: &SessionPaths, record: &BackupLifecycle) -> Result<(), String> {
     let file = lifecycle_file(paths, record.variant, &record.operation_id)?;
     if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("维护记录目录创建失败：{error}"))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            i18n::pick(
+                format!("Could not create the maintenance record directory: {error}"),
+                format!("유지보수 기록 디렉터리를 만들지 못했습니다: {error}"),
+            )
+        })?;
     }
     let content = serde_json::to_string_pretty(record).map_err(|error| error.to_string())?;
-    durable_write_str(&file, &content).map_err(|error| format!("维护记录写入失败：{error}"))?;
+    durable_write_str(&file, &content).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the maintenance record: {error}"),
+            format!("유지보수 기록을 쓰지 못했습니다: {error}"),
+        )
+    })?;
     Ok(())
 }
 
@@ -326,14 +376,29 @@ pub fn load_lifecycle(
     let text = match std::fs::read_to_string(&file) {
         Ok(text) => text,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("维护记录不可读：{error}")),
+        Err(error) => {
+            return Err(i18n::pick(
+                format!("The maintenance record cannot be read: {error}"),
+                format!("유지보수 기록을 읽을 수 없습니다: {error}"),
+            ))
+        }
     };
-    let record: BackupLifecycle =
-        serde_json::from_str(&text).map_err(|error| format!("维护记录内容损坏：{error}"))?;
+    let record: BackupLifecycle = serde_json::from_str(&text).map_err(|error| {
+        i18n::pick(
+            format!("The maintenance record is damaged: {error}"),
+            format!("유지보수 기록이 손상되었습니다: {error}"),
+        )
+    })?;
     if record.version != LIFECYCLE_VERSION {
-        return Err(format!(
-            "维护记录版本 {} 不受支持（当前支持 {}）",
-            record.version, LIFECYCLE_VERSION
+        return Err(i18n::pick(
+            format!(
+                "Maintenance record version {} is not supported (supported: {})",
+                record.version, LIFECYCLE_VERSION
+            ),
+            format!(
+                "지원하지 않는 유지보수 기록 버전입니다: {} (지원 버전: {})",
+                record.version, LIFECYCLE_VERSION
+            ),
         ));
     }
     Ok(Some(record))
@@ -348,8 +413,16 @@ pub fn scan_lifecycle(paths: &SessionPaths) -> LifecycleScan {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => {
-                scan.problems
-                    .push(format!("维护记录目录不可读（{}）：{error}", dir.display()));
+                scan.problems.push(i18n::pick(
+                    format!(
+                        "The maintenance record directory cannot be read ({}): {error}",
+                        dir.display()
+                    ),
+                    format!(
+                        "유지보수 기록 디렉터리를 읽을 수 없습니다({}): {error}",
+                        dir.display()
+                    ),
+                ));
                 continue;
             }
         };
@@ -357,9 +430,15 @@ pub fn scan_lifecycle(paths: &SessionPaths) -> LifecycleScan {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    scan.problems.push(format!(
-                        "维护记录目录枚举失败（{}）：{error}",
-                        dir.display()
+                    scan.problems.push(i18n::pick(
+                        format!(
+                            "Failed to enumerate the maintenance record directory ({}): {error}",
+                            dir.display()
+                        ),
+                        format!(
+                            "유지보수 기록 디렉터리 조회에 실패했습니다({}): {error}",
+                            dir.display()
+                        ),
                     ));
                     continue;
                 }
@@ -375,8 +454,10 @@ pub fn scan_lifecycle(paths: &SessionPaths) -> LifecycleScan {
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => text,
                 Err(error) => {
-                    scan.problems
-                        .push(format!("维护记录不可读（{name}）：{error}"));
+                    scan.problems.push(i18n::pick(
+                        format!("The maintenance record cannot be read ({name}): {error}"),
+                        format!("유지보수 기록을 읽을 수 없습니다({name}): {error}"),
+                    ));
                     continue;
                 }
             };
@@ -388,13 +469,20 @@ pub fn scan_lifecycle(paths: &SessionPaths) -> LifecycleScan {
                         scan.records.push(record);
                     }
                 }
-                Ok(record) => scan.problems.push(format!(
-                    "维护记录版本不受支持（{name}：{}）",
-                    record.version
+                Ok(record) => scan.problems.push(i18n::pick(
+                    format!(
+                        "Maintenance record version is not supported ({name}: {})",
+                        record.version
+                    ),
+                    format!(
+                        "지원하지 않는 유지보수 기록 버전입니다({name}: {})",
+                        record.version
+                    ),
                 )),
-                Err(error) => scan
-                    .problems
-                    .push(format!("维护记录解析失败（{name}）：{error}")),
+                Err(error) => scan.problems.push(i18n::pick(
+                    format!("Failed to parse the maintenance record ({name}): {error}"),
+                    format!("유지보수 기록 해석에 실패했습니다({name}): {error}"),
+                )),
             }
         }
     }
@@ -431,15 +519,33 @@ fn validate_lifecycle_identity(
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
     if record.variant != dir_variant {
-        return Err(format!("维护记录档位与目录不一致（{name}）"));
+        return Err(i18n::pick(
+            format!("The maintenance record edition does not match the directory ({name})"),
+            format!("유지보수 기록의 에디션이 디렉터리와 일치하지 않습니다({name})"),
+        ));
     }
     if record.kind != "copy" && record.kind != "sync" {
-        return Err(format!("维护记录 kind 不受支持（{name}：{}）", record.kind));
+        return Err(i18n::pick(
+            format!(
+                "Unsupported maintenance record kind ({name}: {})",
+                record.kind
+            ),
+            format!(
+                "지원하지 않는 유지보수 기록 kind입니다({name}: {})",
+                record.kind
+            ),
+        ));
     }
     let id = validated_operation_id(&record.operation_id).map_err(|_| {
-        format!(
-            "维护记录操作标识不是合法 UUID（{name}：{}）",
-            record.operation_id
+        i18n::pick(
+            format!(
+                "The maintenance record operation id is not a valid UUID ({name}: {})",
+                record.operation_id
+            ),
+            format!(
+                "유지보수 기록의 작업 식별자가 올바른 UUID가 아닙니다({name}: {})",
+                record.operation_id
+            ),
         )
     })?;
     let stem = path
@@ -447,7 +553,10 @@ fn validate_lifecycle_identity(
         .and_then(|stem| stem.to_str())
         .unwrap_or_default();
     if stem != id {
-        return Err(format!("维护记录文件名与操作标识不一致（{name}）"));
+        return Err(i18n::pick(
+            format!("The maintenance record file name does not match the operation id ({name})"),
+            format!("유지보수 기록 파일 이름이 작업 식별자와 일치하지 않습니다({name})"),
+        ));
     }
     Ok(())
 }
@@ -483,18 +592,33 @@ pub fn begin_operation(
     save_lifecycle(paths, &record)?;
     let dir = transaction_dir(paths, variant, &operation_id)?;
     if let Some(parent) = dir.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| format!("临时目录创建失败：{error}"))?;
-        sync_dir(parent).map_err(|error| format!("临时目录持久化失败：{error}"))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            i18n::pick(
+                format!("Could not create the temporary directory: {error}"),
+                format!("임시 디렉터리를 만들지 못했습니다: {error}"),
+            )
+        })?;
+        sync_dir(parent).map_err(|error| {
+            i18n::pick(
+                format!("Could not persist the temporary directory: {error}"),
+                format!("임시 디렉터리를 영구 저장하지 못했습니다: {error}"),
+            )
+        })?;
     }
     match std::fs::create_dir(&dir) {
         Ok(()) => {}
         Err(error) => {
-            return Err(format!(
-                "操作专属目录创建失败（{error}），未写入任何业务内容"
-            ));
+            return Err(i18n::pick(format!("Could not create the operation directory ({error}); no business content was written"
+            ), format!("작업 전용 디렉터리를 만들지 못했습니다({error}). 비즈니스 내용은 기록하지 않았습니다"
+            )));
         }
     }
-    sync_dir(&dir).map_err(|error| format!("操作专属目录持久化失败：{error}"))?;
+    sync_dir(&dir).map_err(|error| {
+        i18n::pick(
+            format!("Could not persist the operation directory: {error}"),
+            format!("작업 전용 디렉터리를 영구 저장하지 못했습니다: {error}"),
+        )
+    })?;
     Ok(record)
 }
 
@@ -517,7 +641,12 @@ pub fn advance_record(
 /// 备份完备、即将或已经写业务：转 protected。
 pub fn mark_protected(paths: &SessionPaths, record: &mut BackupLifecycle) -> Result<(), String> {
     let dir = transaction_dir(paths, record.variant, &record.operation_id)?;
-    sync_tree(&dir).map_err(|error| format!("备份目录持久化失败：{error}"))?;
+    sync_tree(&dir).map_err(|error| {
+        i18n::pick(
+            format!("Could not persist the backup directory: {error}"),
+            format!("백업 디렉터리를 영구 저장하지 못했습니다: {error}"),
+        )
+    })?;
     advance_record(paths, record, BackupState::Protected, None)
 }
 
@@ -556,29 +685,38 @@ pub fn cleanup_operation(
         Ok(meta) if meta.is_dir() => {
             if let Err(error) = std::fs::remove_dir_all(&dir) {
                 return CleanupOutcome::Pending {
-                    reason: format!("临时目录删除失败：{error}"),
+                    reason: i18n::pick(
+                        format!("Could not delete the temporary directory: {error}"),
+                        format!("임시 디렉터리를 삭제하지 못했습니다: {error}"),
+                    ),
                 };
             }
             if let Err(error) = sync_dir(&root) {
                 return CleanupOutcome::Pending {
-                    reason: format!("目录项持久化失败：{error}"),
+                    reason: i18n::pick(
+                        format!("Could not persist the directory entry: {error}"),
+                        format!("디렉터리 항목을 영구 저장하지 못했습니다: {error}"),
+                    ),
                 };
             }
         }
         Ok(meta) if meta.file_type().is_symlink() => {
             return CleanupOutcome::Protected {
-                reason: "临时目录被替换为符号链接，已保留现场".to_string(),
+                reason: i18n::tr("The temporary directory was replaced by a symbolic link; the current state was preserved", "임시 디렉터리가 심볼릭 링크로 바뀌어 현재 상태를 보존했습니다").to_string(),
             };
         }
         Ok(_) => {
             return CleanupOutcome::Protected {
-                reason: "临时目录位置存在同名非目录文件，已保留现场".to_string(),
+                reason: i18n::tr("A non-directory file with the same name exists at the temporary directory location; the current state was preserved", "임시 디렉터리 위치에 같은 이름의 디렉터리가 아닌 파일이 있어 현재 상태를 보존했습니다").to_string(),
             };
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => {
             return CleanupOutcome::Pending {
-                reason: format!("临时目录状态无法确认：{error}"),
+                reason: i18n::pick(
+                    format!("The temporary directory state cannot be confirmed: {error}"),
+                    format!("임시 디렉터리 상태를 확인할 수 없습니다: {error}"),
+                ),
             };
         }
     }
@@ -595,13 +733,19 @@ pub fn cleanup_operation(
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => {
             return CleanupOutcome::Pending {
-                reason: format!("维护记录删除失败：{error}"),
+                reason: i18n::pick(
+                    format!("Could not delete the maintenance record: {error}"),
+                    format!("유지보수 기록을 삭제하지 못했습니다: {error}"),
+                ),
             };
         }
     }
     if let Err(error) = sync_parent_of(&file) {
         return CleanupOutcome::Pending {
-            reason: format!("维护记录目录项持久化失败：{error}"),
+            reason: i18n::pick(
+                format!("Could not persist the maintenance record directory entry: {error}"),
+                format!("유지보수 기록 디렉터리 항목을 영구 저장하지 못했습니다: {error}"),
+            ),
         };
     }
     CleanupOutcome::Cleaned
@@ -618,7 +762,11 @@ fn mark_operation_cleaned(
 ) -> Result<(), String> {
     let scan = session_link::scan_operations(paths);
     if !scan.complete {
-        return Err("操作记录扫描不完整，本轮不更新业务日志".to_string());
+        return Err(i18n::tr(
+            "The operation log scan is incomplete; the business log is not updated this round",
+            "작업 기록 검사가 불완전하여 이번에는 비즈니스 로그를 갱신하지 않습니다",
+        )
+        .to_string());
     }
     let Some(mut operation) = scan.operations.into_iter().find(|operation| {
         operation.operation_id == record.operation_id && operation.variant == variant
@@ -626,7 +774,11 @@ fn mark_operation_cleaned(
         return Ok(());
     };
     if operation.phase.is_unfinished() {
-        return Err("业务尚未完成，拒绝把操作日志标记为已清理".to_string());
+        return Err(i18n::tr(
+            "The business work is not finished; refusing to mark the operation log as cleaned",
+            "작업이 아직 완료되지 않아 작업 로그를 정리 완료로 표시하지 않습니다",
+        )
+        .to_string());
     }
     operation.backup = None;
     operation.cleanup_state = Some(CLEANUP_STATE_CLEANED.to_string());
@@ -647,11 +799,17 @@ enum Decision {
 /// 按操作日志阶段判断能否回收（只有可靠终态才授权删除）。
 fn decide_by_operation(operation: Option<&Operation>) -> Decision {
     let Some(operation) = operation else {
-        return Decision::Protect("缺少操作日志，无法证明业务已完成，已保留材料".to_string());
+        return Decision::Protect(
+            i18n::tr(
+                "No operation log, so completion cannot be proven; the material was preserved",
+                "작업 로그가 없어 완료를 증명할 수 없습니다. 자료를 보존했습니다",
+            )
+            .to_string(),
+        );
     };
     if operation.lifecycle_version != Some(OPERATION_LIFECYCLE_VERSION) {
         return Decision::Protect(
-            "操作日志缺少本版生命周期标记，无法作为删除授权，已保留材料".to_string(),
+            i18n::tr("The operation log lacks this version's lifecycle marker, so it cannot authorize deletion; the material was preserved", "작업 로그에 이 버전의 수명 주기 표시가 없어 삭제 근거로 쓸 수 없습니다. 자료를 보존했습니다").to_string(),
         );
     }
     if operation.phase == OpPhase::Completed {
@@ -662,15 +820,16 @@ fn decide_by_operation(operation: Option<&Operation>) -> Decision {
             return Decision::Clean;
         }
         return Decision::Protect(
-            "操作已放弃但缺少「已验证安全终止」标记，已保留材料待人工确认".to_string(),
+            i18n::tr("The operation was abandoned but the \"verified safe termination\" marker is missing; the material was preserved for manual review", "작업이 중단되었지만 \"안전 종료 확인\" 표시가 없어 자료를 보존하고 수동 확인이 필요합니다").to_string(),
         );
     }
-    Decision::Protect(
-        operation
-            .last_error
-            .clone()
-            .unwrap_or_else(|| "业务尚未完成，待恢复后清理".to_string()),
-    )
+    Decision::Protect(operation.last_error.clone().unwrap_or_else(|| {
+        i18n::tr(
+            "The business work is not finished yet; clean up after recovery",
+            "작업이 아직 완료되지 않았습니다. 복구 후 정리하세요",
+        )
+        .to_string()
+    }))
 }
 
 /// 维护一个档位的临时备份：回收可安全回收的残留，保护其余并返回上报项。
@@ -687,7 +846,7 @@ pub fn maintain(paths: &SessionPaths, variant: WbVariant) -> Vec<TemporaryFileIs
             String::new(),
             None,
             None,
-            format!("{OP_SCAN_PROBLEM_PREFIX}{problem}"),
+            format!("{}{problem}", op_scan_problem_prefix()),
         ));
     }
     for problem in &lifecycle_scan.problems {
@@ -717,7 +876,7 @@ pub fn maintain(paths: &SessionPaths, variant: WbVariant) -> Vec<TemporaryFileIs
                 // 本版契约：protected 之前禁止业务写入；扫描完整且无操作日志 ⇒ 尚未写业务。
                 None if deletions_allowed => Decision::Clean,
                 None => Decision::Protect(
-                    "无法确认是否已写业务（扫描不完整），已保留准备残留".to_string(),
+                    i18n::tr("Cannot confirm whether business data was written (incomplete scan); the preparation leftovers were preserved", "비즈니스 데이터 기록 여부를 확인할 수 없습니다(검사 불완전). 준비 잔여물을 보존했습니다").to_string(),
                 ),
                 Some(operation) => decide_by_operation(Some(operation)),
             },
@@ -730,7 +889,11 @@ pub fn maintain(paths: &SessionPaths, variant: WbVariant) -> Vec<TemporaryFileIs
                         record.operation_id.clone(),
                         record.session_id.clone(),
                         record.title.clone(),
-                        "本轮扫描不完整，已跳过清理".to_string(),
+                        i18n::tr(
+                            "This scan was incomplete; cleanup was skipped",
+                            "이번 검사가 불완전하여 정리를 건너뛰었습니다",
+                        )
+                        .to_string(),
                     ));
                     continue;
                 }
@@ -816,7 +979,7 @@ pub fn reclaim_unwritten(
             cleanup_operation(paths, variant, record)
         }
         Err(error) => CleanupOutcome::Pending {
-            reason: format!("安全终止标记写入失败（{error}），已保留准备残留待下次维护"),
+            reason: i18n::pick(format!("Could not write the safe-termination marker ({error}); the preparation leftovers were preserved for the next maintenance run"), format!("안전 종료 표시를 쓰지 못했습니다({error}). 준비 잔여물을 보존하고 다음 유지보수에서 처리합니다")),
         },
     }
 }
@@ -1062,7 +1225,7 @@ mod tests {
         .unwrap();
         let issues = maintain(&paths, WbVariant::Cn);
         assert_eq!(issues.len(), 1);
-        assert!(issues[0].reason.contains("生命周期标记"), "{issues:?}");
+        assert!(issues[0].reason.contains("lifecycle marker"), "{issues:?}");
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
             .unwrap()
             .is_dir());
@@ -1083,7 +1246,7 @@ mod tests {
 
         let outcome = cleanup_operation(&paths, WbVariant::Cn, &record);
         match outcome {
-            CleanupOutcome::Protected { reason } => assert!(reason.contains("符号链接")),
+            CleanupOutcome::Protected { reason } => assert!(reason.contains("symbolic link")),
             other => panic!("必须拒绝符号链接：{other:?}"),
         }
         assert!(outside.join("keep.txt").exists(), "链接目标不得被删除");
@@ -1100,7 +1263,10 @@ mod tests {
 
         let outcome = cleanup_operation(&paths, WbVariant::Cn, &record);
         match outcome {
-            CleanupOutcome::Pending { reason } => assert!(reason.contains("删除失败"), "{reason}"),
+            CleanupOutcome::Pending { reason } => assert!(
+                reason.contains("Could not delete the temporary directory"),
+                "{reason}"
+            ),
             other => panic!("只读目录必须报告待重试：{other:?}"),
         }
         assert!(referenced_operation_ids(&paths)
@@ -1139,7 +1305,9 @@ mod tests {
         std::fs::write(&file, b"{not json").unwrap();
 
         let issues = maintain(&paths, WbVariant::Cn);
-        assert!(issues.iter().any(|issue| issue.reason.contains("解析失败")));
+        assert!(issues.iter().any(|issue| issue
+            .reason
+            .contains("Failed to parse the maintenance record")));
         assert!(
             transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
                 .unwrap()
@@ -1216,9 +1384,9 @@ mod tests {
 
         let issues = maintain(&paths, WbVariant::Cn);
         assert!(
-            issues
-                .iter()
-                .any(|issue| issue.reason.contains("文件名与操作标识不一致")),
+            issues.iter().any(|issue| issue
+                .reason
+                .contains("The maintenance record file name does not match the operation id")),
             "{issues:?}"
         );
         assert!(
@@ -1240,9 +1408,9 @@ mod tests {
 
         let issues = maintain(&paths, WbVariant::Cn);
         assert!(
-            issues
-                .iter()
-                .any(|issue| issue.reason.contains("档位与目录不一致")),
+            issues.iter().any(|issue| issue
+                .reason
+                .contains("The maintenance record edition does not match the directory")),
             "{issues:?}"
         );
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
@@ -1262,7 +1430,7 @@ mod tests {
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.reason.contains("kind 不受支持")),
+                .any(|issue| issue.reason.contains("Unsupported maintenance record kind")),
             "{issues:?}"
         );
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
@@ -1283,7 +1451,10 @@ mod tests {
         .unwrap();
         let issues = maintain(&paths, WbVariant::Cn);
         assert_eq!(issues.len(), 1);
-        assert!(issues[0].reason.contains("已验证安全终止"), "{issues:?}");
+        assert!(
+            issues[0].reason.contains("verified safe termination"),
+            "{issues:?}"
+        );
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
             .unwrap()
             .is_dir());
@@ -1348,7 +1519,7 @@ mod tests {
         let outcome = cleanup_operation(&paths, WbVariant::Cn, &record);
         match outcome {
             CleanupOutcome::Protected { reason } => {
-                assert!(reason.contains("符号链接"), "{reason}")
+                assert!(reason.contains("symbolic link"), "{reason}")
             }
             other => panic!("祖先符号链接必须拒绝：{other:?}"),
         }

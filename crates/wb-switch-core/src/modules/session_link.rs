@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::modules::config::{atomic_write, now_ms};
+use crate::modules::i18n;
 use crate::modules::session::SessionPaths;
 use crate::modules::session_backup;
 use crate::modules::variant::WbVariant;
@@ -50,7 +51,12 @@ pub const SESSION_ID_MARKER: &str = "__wb_switch_session_id__";
 /// 每档位保留的已完成操作日志条数（未完成的一律保留）。
 pub const KEEP_COMPLETED_OPERATIONS: usize = 20;
 /// 操作日志扫描不完整时的上报前缀（扫描失败不等于「没有」）。
-pub const OP_SCAN_PROBLEM_PREFIX: &str = "操作记录扫描不完整：";
+pub fn op_scan_problem_prefix() -> &'static str {
+    i18n::tr(
+        "Operation log scan incomplete: ",
+        "작업 기록 검사가 불완전합니다: ",
+    )
+}
 /// 存储锁的最长等待（存储锁只用于短时读改写）。
 const STORE_LOCK_RETRY: usize = 25;
 const STORE_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -137,10 +143,14 @@ pub(crate) fn line_digest_of(line: &str) -> String {
 pub fn normalize_jsonl(text: &str, own_session_id: &str) -> Result<NormalizedContent, String> {
     let own_session_id = own_session_id.trim();
     if own_session_id.is_empty() {
-        return Err("缺少会话 id，无法读取内容".to_string());
+        return Err(i18n::tr(
+            "Missing session id; cannot read the content",
+            "세션 id가 없어 내용을 읽을 수 없습니다",
+        )
+        .to_string());
     }
     if text.trim().is_empty() {
-        return Err("内容为空".to_string());
+        return Err(i18n::tr("The content is empty", "내용이 비어 있습니다").to_string());
     }
 
     let mut lines: Vec<&str> = text.split('\n').collect();
@@ -153,10 +163,26 @@ pub fn normalize_jsonl(text: &str, own_session_id: &str) -> Result<NormalizedCon
     for (index, raw) in lines.iter().enumerate() {
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         if line.trim().is_empty() {
-            return Err(format!("第 {} 行为空，内容可能不完整", index + 1));
+            return Err(i18n::pick(
+                format!("Line {} is empty; the content may be incomplete", index + 1),
+                format!(
+                    "{}번째 줄이 비어 있습니다. 내용이 불완전할 수 있습니다",
+                    index + 1
+                ),
+            ));
         }
-        serde_json::from_str::<serde_json::Value>(line)
-            .map_err(|_| format!("第 {} 行的格式无法识别，内容可能不完整", index + 1))?;
+        serde_json::from_str::<serde_json::Value>(line).map_err(|_| {
+            i18n::pick(
+                format!(
+                    "The format of line {} is not recognized; the content may be incomplete",
+                    index + 1
+                ),
+                format!(
+                    "{}번째 줄의 형식을 인식할 수 없습니다. 내용이 불완전할 수 있습니다",
+                    index + 1
+                ),
+            )
+        })?;
         line_digests.push(line_digest_of(
             &line.replace(own_session_id, SESSION_ID_MARKER),
         ));
@@ -174,12 +200,22 @@ pub fn read_content_snapshot(path: &Path, own_session_id: &str) -> ContentState 
     let before = match std::fs::metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == ErrorKind::NotFound => return ContentState::Missing,
-        Err(error) => return ContentState::Unavailable(format!("内容无法读取：{error}")),
+        Err(error) => {
+            return ContentState::Unavailable(i18n::pick(
+                format!("Could not read the content: {error}"),
+                format!("내용을 읽을 수 없습니다: {error}"),
+            ))
+        }
     };
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => return ContentState::Missing,
-        Err(error) => return ContentState::Unavailable(format!("内容读取失败：{error}")),
+        Err(error) => {
+            return ContentState::Unavailable(i18n::pick(
+                format!("Failed to read the content: {error}"),
+                format!("내용 읽기에 실패했습니다: {error}"),
+            ))
+        }
     };
     let after = std::fs::metadata(path);
     let changed = match after {
@@ -187,11 +223,25 @@ pub fn read_content_snapshot(path: &Path, own_session_id: &str) -> ContentState 
         Err(_) => true,
     };
     if changed {
-        return ContentState::Unavailable("内容在读取过程中发生变化，无法确认完整".to_string());
+        return ContentState::Unavailable(
+            i18n::tr(
+                "The content changed while it was being read, so completeness cannot be confirmed",
+                "읽는 동안 내용이 변경되어 완전성을 확인할 수 없습니다",
+            )
+            .to_string(),
+        );
     }
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
-        Err(_) => return ContentState::Unavailable("内容格式异常，无法读取".to_string()),
+        Err(_) => {
+            return ContentState::Unavailable(
+                i18n::tr(
+                    "The content format is invalid and cannot be read",
+                    "내용 형식이 올바르지 않아 읽을 수 없습니다",
+                )
+                .to_string(),
+            )
+        }
     };
     let full_digest = full_digest_of(text.as_bytes());
     match normalize_jsonl(&text, own_session_id) {
@@ -374,9 +424,9 @@ impl BaselineState {
     pub fn unusable_reason(&self) -> Option<String> {
         match self {
             BaselineState::Ready(_) => None,
-            BaselineState::Missing => Some("找不到双方上次一致的内容，暂时无法同步".to_string()),
+            BaselineState::Missing => Some(i18n::tr("Cannot find the content both sides last agreed on, so syncing is not possible right now", "양쪽이 마지막으로 일치했던 내용을 찾을 수 없어 지금은 동기화할 수 없습니다").to_string()),
             BaselineState::Unverifiable(reason) => {
-                Some(format!("上次一致的内容不可用（{reason}），暂时无法同步"))
+                Some(i18n::pick(format!("The last agreed content is unavailable ({reason}), so syncing is not possible right now"), format!("마지막으로 일치했던 내용을 사용할 수 없습니다({reason}). 지금은 동기화할 수 없습니다")))
             }
         }
     }
@@ -474,7 +524,10 @@ impl SyncMode {
             "overwrite" => Ok(SyncMode::Overwrite),
             "unifyOverwrite" => Ok(SyncMode::UnifyOverwrite),
             "statusOnly" => Ok(SyncMode::StatusOnly),
-            other => Err(format!("未知的同步模式：{other}")),
+            other => Err(i18n::pick(
+                format!("Unknown sync mode: {other}"),
+                format!("알 수 없는 동기화 모드: {other}"),
+            )),
         }
     }
 }
@@ -542,10 +595,11 @@ fn multiset_counts(source: &[String], target: &[String]) -> (usize, usize, usize
 
 /// 镜像前缀（目标已完整包含来源）的 ahead 文案：本次没有可写内容，并给出目标多出的条数。
 fn mirror_ahead_reason(counts: (usize, usize, usize)) -> String {
-    format!(
-        "目标账号已包含当前账号的全部内容，另多出 {} 条，本次不会同步过去",
+    i18n::pick(format!("The target account already contains all of the current account's content and has {} extra records; they will not be synced over",
         counts.1
-    )
+    ), format!("대상 계정이 현재 계정의 모든 내용을 이미 포함하고 있으며 {}건이 더 있습니다. 이번에는 동기화하지 않습니다",
+        counts.1
+    ))
 }
 
 /// 判定来源 A 与目标 B 能否同步（design §3.2，顺序不可调换）。
@@ -570,16 +624,28 @@ pub fn decide_sync(
     let (source, target) = match (source, target) {
         (ContentState::Ready(source), ContentState::Ready(target)) => (source, target),
         (ContentState::Missing, _) => {
-            return SyncDecision::unknown("当前账号的内容不存在，无法确认")
+            return SyncDecision::unknown(i18n::tr(
+                "The current account's content does not exist, so it cannot be confirmed",
+                "현재 계정의 내용이 없어 확인할 수 없습니다",
+            ))
         }
         (ContentState::Unavailable(reason), _) => {
-            return SyncDecision::unknown(format!("当前账号的内容无法确认：{reason}"))
+            return SyncDecision::unknown(i18n::pick(
+                format!("The current account's content cannot be confirmed: {reason}"),
+                format!("현재 계정의 내용을 확인할 수 없습니다: {reason}"),
+            ))
         }
         (_, ContentState::Missing) => {
-            return SyncDecision::unknown("目标账号的内容不存在，无法确认")
+            return SyncDecision::unknown(i18n::tr(
+                "The target account's content does not exist, so it cannot be confirmed",
+                "대상 계정의 내용이 없어 확인할 수 없습니다",
+            ))
         }
         (_, ContentState::Unavailable(reason)) => {
-            return SyncDecision::unknown(format!("目标账号的内容无法确认：{reason}"))
+            return SyncDecision::unknown(i18n::pick(
+                format!("The target account's content cannot be confirmed: {reason}"),
+                format!("대상 계정의 내용을 확인할 수 없습니다: {reason}"),
+            ))
         }
     };
     let counts = multiset_counts(
@@ -591,9 +657,15 @@ pub fn decide_sync(
         return SyncDecision::decide(
             SyncVerdict::Identical,
             counts,
-            format!(
-                "两边的内容一致（各 {} 条），不需要同步",
-                source.normalized.record_count
+            i18n::pick(
+                format!(
+                    "Both sides have identical content ({} records each); no sync needed",
+                    source.normalized.record_count
+                ),
+                format!(
+                    "양쪽 내용이 동일합니다(각 {}건). 동기화할 필요가 없습니다",
+                    source.normalized.record_count
+                ),
             ),
         );
     }
@@ -607,7 +679,7 @@ pub fn decide_sync(
         return SyncDecision::decide(
             SyncVerdict::FastForward,
             counts,
-            format!("目标账号没有独有改动，来源账号新增 {added} 条，可以直接同步"),
+            i18n::pick(format!("The target account has no unique changes and the source account has {added} new records; you can sync directly"), format!("대상 계정에 고유한 변경이 없고 원본 계정에 {added}건이 추가되었습니다. 바로 동기화할 수 있습니다")),
         );
     }
     let Some(record) = baseline.ready() else {
@@ -622,14 +694,14 @@ pub fn decide_sync(
         return SyncDecision::unknown(
             baseline
                 .unusable_reason()
-                .unwrap_or_else(|| "找不到上次同步的记录，无法确认两边内容".to_string()),
+                .unwrap_or_else(|| i18n::tr("Cannot find the last sync record, so the content on both sides cannot be confirmed", "마지막 동기화 기록을 찾을 수 없어 양쪽 내용을 확인할 수 없습니다").to_string()),
         );
     };
     if source.normalized.line_digests == record.line_digests {
         return SyncDecision::decide(
             SyncVerdict::Ahead,
             counts,
-            format!("只有目标账号新增 {} 条，这次不会同步过去", counts.1),
+            i18n::pick(format!("Only the target account has {} new records; they will not be synced over this time", counts.1), format!("대상 계정에만 {}건이 추가되었습니다. 이번에는 동기화하지 않습니다", counts.1)),
         );
     }
     // A 是 B 的严格有序前缀（目标已完整包含来源）：本次没有可写内容 → ahead。
@@ -644,10 +716,11 @@ pub fn decide_sync(
     SyncDecision::decide(
         SyncVerdict::Diverge,
         counts,
-        format!(
-            "两边都有改动（目标账号独有的 {} 条会被替换）；覆盖会替换目标账号的完整内容",
+        i18n::pick(format!("Both sides have changes (the target account's {} unique records will be replaced); overwriting replaces the target account's entire content",
             counts.1
-        ),
+        ), format!("양쪽 모두 변경되었습니다(대상 계정에만 있는 {}건은 교체됩니다). 덮어쓰면 대상 계정의 전체 내용이 교체됩니다",
+            counts.1
+        )),
     )
 }
 
@@ -849,15 +922,27 @@ pub enum LockError {
 }
 
 /// 档位操作锁的名字（[`LockError::message`] 的 `what`）：失败文案以它开头。
-pub const VARIANT_OPS_LOCK_NAME: &str = "会话操作";
+pub fn variant_ops_lock_name() -> &'static str {
+    i18n::tr("Session operations", "세션 작업")
+}
 /// 档位操作锁被其它进程占用时的失败文案前缀。
 ///
 /// 宿主（switch.rs）用它与 [`LOCK_UNAVAILABLE_MESSAGE_PREFIX`] 判断「拿不到档位锁」，
 /// 不再嗅探整句错误文案；单测 `lock_failure_prefixes_match_error_messages` 保证常量
 /// 与 [`LockError::message`] 的输出不漂移。
-pub const LOCK_BUSY_MESSAGE_PREFIX: &str = "会话操作正被其它进程占用";
+pub fn lock_busy_message_prefix() -> &'static str {
+    i18n::tr(
+        "Session operations are in use by another process",
+        "세션 작업: 다른 프로세스에서 진행 중입니다",
+    )
+}
 /// 档位操作锁无法建立互斥（不可用）时的失败文案前缀。
-pub const LOCK_UNAVAILABLE_MESSAGE_PREFIX: &str = "会话操作不可用";
+pub fn lock_unavailable_message_prefix() -> &'static str {
+    i18n::tr(
+        "Session operations unavailable",
+        "세션 작업: 사용할 수 없습니다",
+    )
+}
 
 impl LockError {
     /// 锁失败文案。`what` 是被锁对象名；档位操作锁传 [`VARIANT_OPS_LOCK_NAME`]，
@@ -865,8 +950,14 @@ impl LockError {
     /// 开头。
     pub fn message(&self, what: &str) -> String {
         match self {
-            LockError::Busy => format!("{what}正被其它进程占用，请稍后重试"),
-            LockError::Unavailable(reason) => format!("{what}不可用：{reason}"),
+            LockError::Busy => i18n::pick(
+                format!("{what} are in use by another process; please try again later"),
+                format!("{what}: 다른 프로세스에서 진행 중입니다. 잠시 후 다시 시도해 주세요"),
+            ),
+            LockError::Unavailable(reason) => i18n::pick(
+                format!("{what} unavailable: {reason}"),
+                format!("{what}: 사용할 수 없습니다. {reason}"),
+            ),
         }
     }
 }
@@ -903,15 +994,22 @@ pub fn try_acquire_variant_ops_lock(
     variant: WbVariant,
 ) -> Result<FileLock, String> {
     try_lock_file(&paths.variant_ops_lock_file(variant))
-        .map_err(|error| error.message(VARIANT_OPS_LOCK_NAME))
+        .map_err(|error| error.message(variant_ops_lock_name()))
 }
 
 /// Namespace-wide operation lock for IDE/extension stores shared across WorkBuddy variants.
 /// The caller holds it across duplicate checks, copy/sync, and link registration.
 pub fn try_acquire_client_ops_lock(paths: &SessionPaths) -> Result<FileLock, String> {
     try_lock_file(&paths.client_ops_lock_file()).map_err(|error| match error {
-        LockError::Busy => "该客户端正在执行其它会话操作，请稍后重试".to_string(),
-        LockError::Unavailable(reason) => format!("无法建立客户端会话操作锁：{reason}"),
+        LockError::Busy => i18n::tr(
+            "This client is running another session operation; please try again later",
+            "이 클라이언트에서 다른 세션 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요",
+        )
+        .to_string(),
+        LockError::Unavailable(reason) => i18n::pick(
+            format!("Could not create the client session operation lock: {reason}"),
+            format!("클라이언트 세션 작업 잠금을 만들지 못했습니다: {reason}"),
+        ),
     })
 }
 
@@ -922,11 +1020,18 @@ fn acquire_link_store_lock(paths: &SessionPaths) -> Result<FileLock, String> {
             Ok(lock) => return Ok(lock),
             Err(LockError::Busy) => std::thread::sleep(STORE_LOCK_RETRY_INTERVAL),
             Err(LockError::Unavailable(reason)) => {
-                return Err(format!("同步记录暂时不可用：{reason}"));
+                return Err(i18n::pick(
+                    format!("The sync record is temporarily unavailable: {reason}"),
+                    format!("동기화 기록을 일시적으로 사용할 수 없습니다: {reason}"),
+                ));
             }
         }
     }
-    Err("同步记录正被其它操作占用，请稍后重试".to_string())
+    Err(i18n::tr(
+        "The sync record is in use by another operation; please try again later",
+        "동기화 기록이 다른 작업에서 사용 중입니다. 잠시 후 다시 시도해 주세요",
+    )
+    .to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -984,30 +1089,45 @@ pub fn load_store(paths: &SessionPaths) -> StoreState {
         Err(error) if error.kind() == ErrorKind::NotFound => {
             if has_unfinished_traces(paths) {
                 return StoreState::Unavailable(
-                    "同步记录主文件缺失但存在未完成的痕迹（操作记录或上次同步的文件），已保留现场"
+                    i18n::tr("The main sync record file is missing but traces of unfinished work exist (an operation log or files from the last sync); the current state was preserved", "동기화 기록 본 파일은 없지만 미완료 흔적(작업 기록 또는 마지막 동기화 파일)이 있어 현재 상태를 보존했습니다")
                         .to_string(),
                 );
             }
             return StoreState::Missing;
         }
-        Err(error) => return StoreState::Unavailable(format!("同步记录无法读取：{error}")),
+        Err(error) => {
+            return StoreState::Unavailable(i18n::pick(
+                format!("Could not read the sync record: {error}"),
+                format!("동기화 기록을 읽을 수 없습니다: {error}"),
+            ))
+        }
     };
     let mut store = match serde_json::from_str::<LinkStore>(&text) {
         Ok(store) => store,
         Err(_) => {
-            return StoreState::Unavailable("同步记录已损坏，原文件已保留".to_string());
+            return StoreState::Unavailable(
+                i18n::tr(
+                    "The sync record is damaged; the original file was preserved",
+                    "동기화 기록이 손상되었습니다. 원본 파일은 보존했습니다",
+                )
+                .to_string(),
+            );
         }
     };
     if store.version != LINK_STORE_VERSION {
-        return StoreState::Unavailable(format!(
-            "同步记录版本 {} 不受支持（当前支持 {}），原文件已保留",
+        return StoreState::Unavailable(i18n::pick(format!("Sync record version {} is not supported (supported: {}); the original file was preserved",
             store.version, LINK_STORE_VERSION
-        ));
+        ), format!("지원하지 않는 동기화 기록 버전입니다: {} (지원 버전: {}). 원본 파일은 보존했습니다",
+            store.version, LINK_STORE_VERSION
+        )));
     }
     // 旧存储兼容：成员缺 `variant` 时用组级 `variant` 回填（跨档组成员显式保存）。
     backfill_member_variants(&mut store);
     if let Err(reason) = validate_store(&store) {
-        return StoreState::Unavailable(format!("同步记录内容不一致：{reason}"));
+        return StoreState::Unavailable(i18n::pick(
+            format!("The sync record content is inconsistent: {reason}"),
+            format!("동기화 기록 내용이 일치하지 않습니다: {reason}"),
+        ));
     }
     StoreState::Ready(store)
 }
@@ -1022,13 +1142,19 @@ pub fn validate_store(store: &LinkStore) -> Result<(), String> {
     let mut identities = std::collections::HashSet::new();
     for group in &store.groups {
         if !group_ids.insert(group.id.as_str()) {
-            return Err(format!("组记录重复：{}", group.id));
+            return Err(i18n::pick(
+                format!("Duplicate group record: {}", group.id),
+                format!("그룹 기록이 중복되었습니다: {}", group.id),
+            ));
         }
         let mut member_ids = std::collections::HashSet::new();
         let mut active_by_uid = std::collections::HashSet::new();
         for member in &group.members {
             if !member_ids.insert(member.member_id.as_str()) {
-                return Err(format!("成员记录重复：{}", member.member_id));
+                return Err(i18n::pick(
+                    format!("Duplicate member record: {}", member.member_id),
+                    format!("멤버 기록이 중복되었습니다: {}", member.member_id),
+                ));
             }
             let identity = (
                 member_variant(group, member).as_str(),
@@ -1036,26 +1162,52 @@ pub fn validate_store(store: &LinkStore) -> Result<(), String> {
                 member.session_id.as_str(),
             );
             if !identities.insert(identity) {
-                return Err(format!("会话 {} 同时属于多个同步组", member.session_id));
+                return Err(i18n::pick(
+                    format!(
+                        "Session {} belongs to more than one sync group",
+                        member.session_id
+                    ),
+                    format!(
+                        "여러 동기화 그룹에 속한 세션이 있습니다: {}",
+                        member.session_id
+                    ),
+                ));
             }
             if member.state == MemberState::Active && !active_by_uid.insert(member.uid.as_str()) {
-                return Err(format!(
-                    "账号 {} 在同一组内出现多条有效成员记录",
-                    member.uid
+                return Err(i18n::pick(
+                    format!(
+                        "Account {} has multiple active member records in the same group",
+                        member.uid
+                    ),
+                    format!(
+                        "같은 그룹에 유효한 멤버 기록이 여러 개인 계정이 있습니다: {}",
+                        member.uid
+                    ),
                 ));
             }
         }
         let mut pairs = std::collections::HashSet::new();
         for pair in &group.pair_bases {
             if !pairs.insert(pair_key(&pair.member_ids[0], &pair.member_ids[1])) {
-                return Err(format!(
-                    "同一对成员重复保存了同步记录：{}",
-                    pair.baseline_ref
+                return Err(i18n::pick(
+                    format!(
+                        "The same member pair has duplicate sync records: {}",
+                        pair.baseline_ref
+                    ),
+                    format!(
+                        "같은 멤버 쌍의 동기화 기록이 중복 저장되었습니다: {}",
+                        pair.baseline_ref
+                    ),
                 ));
             }
             for member_id in pair.member_ids.iter() {
                 if !member_ids.contains(member_id.as_str()) {
-                    return Err(format!("同步记录引用了不存在的成员：{member_id}"));
+                    return Err(i18n::pick(
+                        format!(
+                            "The sync record references a member that does not exist: {member_id}"
+                        ),
+                        format!("동기화 기록이 존재하지 않는 멤버를 참조합니다: {member_id}"),
+                    ));
                 }
             }
         }
@@ -1090,7 +1242,12 @@ pub fn with_link_store_write<T>(
         StoreState::Unavailable(reason) => return Err(reason),
     };
     let outcome = mutate(&mut store)?;
-    validate_store(&store).map_err(|reason| format!("拒绝保存不一致的同步记录：{reason}"))?;
+    validate_store(&store).map_err(|reason| {
+        i18n::pick(
+            format!("Refused to save an inconsistent sync record: {reason}"),
+            format!("일치하지 않는 동기화 기록의 저장을 거부했습니다: {reason}"),
+        )
+    })?;
     store.version = LINK_STORE_VERSION;
     store.revision = store.revision.saturating_add(1);
     let content = serde_json::to_string_pretty(&store).map_err(|error| error.to_string())?;
@@ -1100,9 +1257,15 @@ pub fn with_link_store_write<T>(
     // 共享关联表属于业务完成门禁：走会话专用持久化写（design §4）。
     session_backup::durable_write_str(&paths.session_links_file(), &content).map_err(|error| {
         if !existed {
-            format!("同步记录首次保存失败：{error}")
+            i18n::pick(
+                format!("The first save of the sync record failed: {error}"),
+                format!("동기화 기록 최초 저장에 실패했습니다: {error}"),
+            )
         } else {
-            format!("同步记录保存失败：{error}")
+            i18n::pick(
+                format!("Failed to save the sync record: {error}"),
+                format!("동기화 기록 저장에 실패했습니다: {error}"),
+            )
         }
     })?;
     Ok(outcome)
@@ -1232,7 +1395,11 @@ pub fn save_baseline(
         line_digests: normalized.line_digests.clone(),
     };
     if !record.is_self_consistent() {
-        return Err("上次同步的记录内容不一致，无法保存".to_string());
+        return Err(i18n::tr(
+            "The last sync record content is inconsistent and cannot be saved",
+            "마지막 동기화 기록 내용이 일치하지 않아 저장할 수 없습니다",
+        )
+        .to_string());
     }
     std::fs::create_dir_all(paths.baselines_dir()).map_err(|error| error.to_string())?;
     let content = serde_json::to_string_pretty(&record).map_err(|error| error.to_string())?;
@@ -1285,14 +1452,26 @@ pub fn load_pair_baseline(
         return BaselineState::Missing;
     };
     if pair.normalization_version != NORMALIZATION_VERSION {
-        return BaselineState::Unverifiable(format!(
-            "记录格式版本 {} 不受支持（当前 {}）",
-            pair.normalization_version, NORMALIZATION_VERSION
+        return BaselineState::Unverifiable(i18n::pick(
+            format!(
+                "Record format version {} is not supported (current: {})",
+                pair.normalization_version, NORMALIZATION_VERSION
+            ),
+            format!(
+                "지원하지 않는 기록 형식 버전입니다: {} (현재 {})",
+                pair.normalization_version, NORMALIZATION_VERSION
+            ),
         ));
     }
     match load_baseline(paths, &pair.baseline_ref) {
         Some(record) => BaselineState::Ready(record),
-        None => BaselineState::Unverifiable("上次同步的记录缺失或已损坏".to_string()),
+        None => BaselineState::Unverifiable(
+            i18n::tr(
+                "The last sync record is missing or damaged",
+                "마지막 동기화 기록이 없거나 손상되었습니다",
+            )
+            .to_string(),
+        ),
     }
 }
 
@@ -1442,8 +1621,12 @@ pub fn save_preview_token(paths: &SessionPaths, binding: PreviewBinding) -> Resu
     // （不受文件系统时间戳精度影响）。
     prune_preview_tokens(paths, KEEP_PREVIEW_TOKENS.saturating_sub(1));
     let content = serde_json::to_string_pretty(&token).map_err(|error| error.to_string())?;
-    atomic_write(&preview_file(paths, &preview_id), &content)
-        .map_err(|error| format!("预览凭据写入失败：{error}"))?;
+    atomic_write(&preview_file(paths, &preview_id), &content).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the preview token: {error}"),
+            format!("미리보기 자격 증명을 쓰지 못했습니다: {error}"),
+        )
+    })?;
     Ok(preview_id)
 }
 
@@ -1491,40 +1674,96 @@ pub fn prune_preview_tokens(paths: &SessionPaths, keep: usize) -> usize {
 pub fn verify_preview(preview: &PreviewToken, live: &PreviewBinding) -> Vec<String> {
     let mut stale: Vec<String> = Vec::new();
     if preview.version != PREVIEW_TOKEN_VERSION {
-        stale.push("检查结果已过期，请重新检查".to_string());
+        stale.push(
+            i18n::tr(
+                "The check result has expired; please check again",
+                "검사 결과가 만료되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     let expected = &preview.binding;
     if expected.variant != live.variant {
-        stale.push("当前应用已变化".to_string());
+        stale.push(i18n::tr("The current app has changed", "현재 앱이 변경되었습니다").to_string());
     }
     if expected.group_id != live.group_id {
-        stale.push("会话的关联关系已变化".to_string());
+        stale.push(
+            i18n::tr("The session link has changed", "세션 연결이 변경되었습니다").to_string(),
+        );
     }
     if expected.group_fingerprint != live.group_fingerprint {
-        stale.push("会话的关联关系或同步记录已变化".to_string());
+        stale.push(
+            i18n::tr(
+                "The session link or sync record has changed",
+                "세션 연결 또는 동기화 기록이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.source != live.source {
-        stale.push("来源账号的内容已变化".to_string());
+        stale.push(
+            i18n::tr(
+                "The source account's content has changed",
+                "원본 계정의 내용이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.target != live.target {
-        stale.push("目标账号的内容已变化".to_string());
+        stale.push(
+            i18n::tr(
+                "The target account's content has changed",
+                "대상 계정의 내용이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.baseline_ref != live.baseline_ref {
-        stale.push("上次同步的记录已变化".to_string());
+        stale.push(
+            i18n::tr(
+                "The last sync record has changed",
+                "마지막 동기화 기록이 변경되었습니다",
+            )
+            .to_string(),
+        );
     } else if expected.baseline_total_digest != live.baseline_total_digest
         || expected.baseline_record_count != live.baseline_record_count
     {
-        stale.push("上次同步的内容已变化".to_string());
+        stale.push(
+            i18n::tr(
+                "The last synced content has changed",
+                "마지막으로 동기화한 내용이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.verdict != live.verdict {
-        stale.push("检查结果已变化，请重新检查".to_string());
+        stale.push(
+            i18n::tr(
+                "The check result has changed; please check again",
+                "검사 결과가 변경되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     if expected.source_status != live.source_status || expected.target_status != live.target_status
     {
-        stale.push("会话的归档状态已变化，请重新检查".to_string());
+        stale.push(
+            i18n::tr(
+                "The session's archive state has changed; please check again",
+                "세션 보관 상태가 변경되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     if expected.archive_action != live.archive_action {
-        stale.push("可执行的归档同步已变化，请重新检查".to_string());
+        stale.push(
+            i18n::tr(
+                "The available archive sync has changed; please check again",
+                "가능한 보관 동기화가 변경되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     stale
 }
@@ -1542,7 +1781,12 @@ pub fn save_operation(paths: &SessionPaths, operation: &Operation) -> Result<(),
     std::fs::create_dir_all(paths.operations_dir()).map_err(|error| error.to_string())?;
     let content = serde_json::to_string_pretty(operation).map_err(|error| error.to_string())?;
     session_backup::durable_write_str(&operation_file(paths, &operation.operation_id), &content)
-        .map_err(|error| format!("操作记录写入失败：{error}"))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to write the operation log: {error}"),
+                format!("작업 기록 저장에 실패했습니다: {error}"),
+            )
+        })
 }
 
 /// 扫描全部操作日志（不区分档位）；解析失败的文件作为问题上报。
@@ -1558,7 +1802,10 @@ pub fn scan_operations(paths: &SessionPaths) -> OperationScan {
         Err(error) if error.kind() == ErrorKind::NotFound => return scan,
         Err(error) => {
             scan.complete = false;
-            scan.problems.push(format!("操作日志目录不可读：{error}"));
+            scan.problems.push(i18n::pick(
+                format!("The operation log directory cannot be read: {error}"),
+                format!("작업 로그 디렉터리를 읽을 수 없습니다: {error}"),
+            ));
             return scan;
         }
     };
@@ -1567,7 +1814,10 @@ pub fn scan_operations(paths: &SessionPaths) -> OperationScan {
             Ok(entry) => entry,
             Err(error) => {
                 scan.complete = false;
-                scan.problems.push(format!("操作日志目录枚举失败：{error}"));
+                scan.problems.push(i18n::pick(
+                    format!("Failed to enumerate the operation log directory: {error}"),
+                    format!("작업 로그 디렉터리 조회에 실패했습니다: {error}"),
+                ));
                 continue;
             }
         };
@@ -2443,18 +2693,18 @@ mod tests {
     /// 不再嗅探整句错误文案。
     #[test]
     fn lock_failure_prefixes_match_error_messages() {
-        let busy = LockError::Busy.message(VARIANT_OPS_LOCK_NAME);
-        assert!(busy.starts_with(LOCK_BUSY_MESSAGE_PREFIX), "{busy}");
+        let busy = LockError::Busy.message(variant_ops_lock_name());
+        assert!(busy.starts_with(lock_busy_message_prefix()), "{busy}");
         let unavailable =
-            LockError::Unavailable("磁盘异常".to_string()).message(VARIANT_OPS_LOCK_NAME);
+            LockError::Unavailable("磁盘异常".to_string()).message(variant_ops_lock_name());
         assert!(
-            unavailable.starts_with(LOCK_UNAVAILABLE_MESSAGE_PREFIX),
+            unavailable.starts_with(lock_unavailable_message_prefix()),
             "{unavailable}"
         );
         // 其它锁对象的文案不得被误判成档位锁失败。
         assert!(!LockError::Busy
             .message("关联存储")
-            .starts_with(LOCK_BUSY_MESSAGE_PREFIX));
+            .starts_with(lock_busy_message_prefix()));
     }
 
     #[test]
@@ -2588,7 +2838,7 @@ mod tests {
             assert!(!decision.default_checked);
             assert!(decision.verdict.available_modes().is_empty());
             assert!(
-                decision.reason.contains("不需要同步"),
+                decision.reason.contains("no sync needed"),
                 "{}",
                 decision.reason
             );
@@ -2615,7 +2865,11 @@ mod tests {
             decision.verdict.available_modes(),
             vec![SyncMode::FastForward]
         );
-        assert!(decision.reason.contains("新增 3 条"), "{}", decision.reason);
+        assert!(
+            decision.reason.contains("3 new records"),
+            "{}",
+            decision.reason
+        );
     }
 
     /// 祖先快进不依赖基线：无基线 / 基线不可验证时，B 是 A 的严格有序前缀照样可快进。
@@ -2640,7 +2894,11 @@ mod tests {
             assert_eq!(decision.extra_a, 3);
             assert_eq!(decision.extra_b, 0);
             assert_eq!(decision.common, 5);
-            assert!(decision.reason.contains("新增 3 条"), "{}", decision.reason);
+            assert!(
+                decision.reason.contains("3 new records"),
+                "{}",
+                decision.reason
+            );
         }
     }
 
@@ -2661,7 +2919,11 @@ mod tests {
         assert_eq!(decision.extra_a, 3, "来源比目标多的 3 条才是本次要追加的");
         assert_eq!(decision.extra_b, 0);
         assert_eq!(decision.common, 6);
-        assert!(decision.reason.contains("新增 3 条"), "{}", decision.reason);
+        assert!(
+            decision.reason.contains("3 new records"),
+            "{}",
+            decision.reason
+        );
     }
 
     /// 目标变化样例：A = X、B = X + 5 条 → ahead，仅目标变化，不写目标。
@@ -2683,7 +2945,7 @@ mod tests {
             "ahead 不可勾选"
         );
         assert!(
-            decision.reason.contains("只有目标账号新增"),
+            decision.reason.contains("Only the target account has"),
             "{}",
             decision.reason
         );
@@ -2742,7 +3004,8 @@ mod tests {
         assert_eq!(decision.extra_b, 2);
         assert_eq!(decision.common, 7);
         assert!(
-            decision.reason.contains("已包含") && decision.reason.contains("2 条"),
+            decision.reason.contains("already contains all")
+                && decision.reason.contains("2 extra records"),
             "{}",
             decision.reason
         );
@@ -2765,7 +3028,8 @@ mod tests {
             assert_eq!(decision.extra_a, 0);
             assert_eq!(decision.extra_b, 4);
             assert!(
-                decision.reason.contains("已包含") && decision.reason.contains("4 条"),
+                decision.reason.contains("already contains all")
+                    && decision.reason.contains("4 extra records"),
                 "{}",
                 decision.reason
             );
@@ -2800,7 +3064,9 @@ mod tests {
         );
         assert!(!decision.verdict.allows(SyncMode::FastForward));
         assert!(
-            decision.reason.contains("替换目标账号的完整内容"),
+            decision
+                .reason
+                .contains("replaces the target account's entire content"),
             "{}",
             decision.reason
         );
@@ -2884,7 +3150,9 @@ mod tests {
             "unknown 不得被覆盖绕过"
         );
         assert!(
-            decision.reason.contains("找不到双方上次一致的内容"),
+            decision
+                .reason
+                .contains("Cannot find the content both sides last agreed on"),
             "{}",
             decision.reason
         );
@@ -2921,7 +3189,7 @@ mod tests {
         assert!(BaselineState::Missing
             .unusable_reason()
             .unwrap()
-            .contains("找不到双方上次一致的内容"));
+            .contains("Cannot find the content both sides last agreed on"));
 
         // 正文不可验证：缺失/截断/非法一律不得默认快进。
         let ready = BaselineState::Ready(baseline_from(&base));
@@ -3037,13 +3305,13 @@ mod tests {
         ];
         for decision in &decisions {
             assert!(
-                !decision.reason.contains("消息"),
+                !decision.reason.contains("messages"),
                 "不得把条数叫消息数：{}",
                 decision.reason
             );
         }
         for decision in &decisions[..5] {
-            assert!(decision.reason.contains("条"), "{}", decision.reason);
+            assert!(decision.reason.contains("records"), "{}", decision.reason);
         }
     }
 
@@ -3208,9 +3476,10 @@ mod tests {
         };
         assert!(verify_preview(&token, &binding).is_empty());
 
-        let cases: [(&str, PreviewBinding); 7] = [
+        let cases: [(&str, &str, PreviewBinding); 7] = [
             (
                 "当前应用",
+                "The current app has changed",
                 PreviewBinding {
                     variant: WbVariant::Ai,
                     ..binding.clone()
@@ -3218,6 +3487,7 @@ mod tests {
             ),
             (
                 "关联关系",
+                "The session link has changed",
                 PreviewBinding {
                     group_id: "g-2".to_string(),
                     ..binding.clone()
@@ -3225,6 +3495,7 @@ mod tests {
             ),
             (
                 "关联关系或同步记录",
+                "The session link or sync record has changed",
                 PreviewBinding {
                     group_fingerprint: "changed".to_string(),
                     ..binding.clone()
@@ -3232,6 +3503,7 @@ mod tests {
             ),
             (
                 "来源账号",
+                "The source account's content has changed",
                 PreviewBinding {
                     source: PreviewMemberBinding {
                         raw_digest: "changed".to_string(),
@@ -3242,6 +3514,7 @@ mod tests {
             ),
             (
                 "目标账号",
+                "The target account's content has changed",
                 PreviewBinding {
                     target: PreviewMemberBinding {
                         session_id: "sess-b2".to_string(),
@@ -3252,6 +3525,7 @@ mod tests {
             ),
             (
                 "上次同步的记录",
+                "The last sync record has changed",
                 PreviewBinding {
                     baseline_ref: Some("base-other".to_string()),
                     ..binding.clone()
@@ -3259,17 +3533,18 @@ mod tests {
             ),
             (
                 "检查结果",
+                "The check result has changed",
                 PreviewBinding {
                     verdict: SyncVerdict::Diverge,
                     ..binding.clone()
                 },
             ),
         ];
-        for (name, mutated) in cases {
+        for (name, needle, mutated) in cases {
             let stale = verify_preview(&token, &mutated);
             assert!(!stale.is_empty(), "{name} 不一致必须报过期");
             assert!(
-                stale.iter().any(|reason| reason.contains(name)),
+                stale.iter().any(|reason| reason.contains(needle)),
                 "{name} 的原因文案缺失：{stale:?}"
             );
         }
@@ -3281,7 +3556,9 @@ mod tests {
         };
         let stale = verify_preview(&token, &drifted);
         assert!(
-            stale.iter().any(|reason| reason.contains("上次同步的内容")),
+            stale
+                .iter()
+                .any(|reason| reason.contains("The last synced content has changed")),
             "{stale:?}"
         );
 
@@ -3326,7 +3603,7 @@ mod tests {
         );
         match load_pair_baseline(&paths, &group, "m-uid-a-sess-1", "m-uid-b-sess-b") {
             BaselineState::Unverifiable(reason) => {
-                assert!(reason.contains("记录格式版本"), "{reason}")
+                assert!(reason.contains("Record format version"), "{reason}")
             }
             other => panic!("期望 Unverifiable，实际 {other:?}"),
         }

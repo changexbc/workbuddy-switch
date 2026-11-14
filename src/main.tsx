@@ -5,6 +5,7 @@ import App from "./App";
 import "./index.css";
 import { AppErrorBoundary } from "./components/app-error-boundary";
 import { installGlobalErrorHandlers } from "./lib/error-report";
+import { I18nProvider } from "./lib/i18n";
 import { installNotificationArchive } from "./lib/notify";
 import { applyTheme, getThemePreference, watchSystemTheme } from "./lib/theme";
 
@@ -21,7 +22,9 @@ installGlobalErrorHandlers();
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <AppErrorBoundary>
-      <App />
+      <I18nProvider>
+        <App />
+      </I18nProvider>
     </AppErrorBoundary>
   </React.StrictMode>,
 );

@@ -17,6 +17,7 @@ import {
 import * as api from "@/lib/api";
 import { isDefaultArchiveSyncEnabled } from "@/lib/sync-prefs";
 import { displayName } from "@/lib/account-display";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { accountVariant } from "@/lib/variant";
 import type {
@@ -51,6 +52,7 @@ interface Props {
  * - 展示件与勾选逻辑与 VS Code 插件侧共用（`session-link-shared.tsx`）。
  */
 export function SessionSyncSection({ account, open, disabled, onChange, onMetaChange }: Props) {
+  const t = useT();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<SessionLinksPreview | null>(null);
@@ -105,7 +107,7 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
   const groups = preview?.groups ?? [];
   // 国际版能力判定不通过：整块不可用（后端执行时仍会强制检查能力）。
   const unsupported = Boolean(preview && (!preview.supported || preview.storeStatus === "unsupported"));
-  const targetLabel = account ? displayName(account) : "目标账号";
+  const targetLabel = account ? displayName(account) : t("sessions.common.targetAccount");
 
   // 状态上报：父组件据此渲染 tab 徽标与常驻提示。
   useEffect(() => {
@@ -147,15 +149,15 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
   const storeUnavailable = preview?.storeStatus === "unavailable";
 
   return (
-    <section className="space-y-3" aria-label="关联会话">
+    <section className="space-y-3" aria-label={t("sessions.links.sectionLabel")}>
       <div className="flex items-start gap-3 rounded-md border bg-muted/30 px-3 py-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground">
           <Link2 className="size-4" />
         </span>
         <div className="min-w-0 space-y-0.5">
-          <div className="text-sm font-medium">什么是关联会话？</div>
+          <div className="text-sm font-medium">{t("sessions.links.whatIsTitle")}</div>
           <p className="text-xs text-muted-foreground">
-            通过本工具复制到其他账号的会话，会自动建立关联。切换时，可选择将当前账号的后续内容同步到对应会话。
+            {t("sessions.links.whatIsBody")}
           </p>
         </div>
       </div>
@@ -170,7 +172,7 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
           )}
         >
           <span className="min-w-0 flex-1 text-xs text-muted-foreground">
-            {error ? "暂时无法检查会话，本次不能同步" : "同步记录不可用，本次不会同步"}
+            {error ? t("sessions.links.checkFailed") : t("sessions.links.storeUnavailable")}
           </span>
           <Button
             variant="outline"
@@ -180,7 +182,7 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
             onClick={() => setReloadToken((token) => token + 1)}
           >
             <RotateCw />
-            重新检查
+            {t("sessions.links.recheck")}
           </Button>
         </div>
       )}
@@ -193,7 +195,7 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
           )}
         >
           <p className="text-center text-xs text-muted-foreground">
-            还没有可以同步的会话：先在「复制会话」里复制一次，之后切换回来就能在这里同步新内容。
+            {t("sessions.links.noSessionsToSync")}
           </p>
         </div>
       )}
@@ -206,7 +208,7 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
           )}
         >
           <p className="text-center text-xs text-muted-foreground">
-            这两个账号还没有共同复制过的会话（只处理双方都有的，不涉及其他账号）。
+            {t("sessions.links.noSharedSessions")}
           </p>
         </div>
       )}
@@ -218,11 +220,11 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
               checked={allSyncableSelected ? true : selectedSyncableCount > 0 ? "indeterminate" : false}
               disabled={disabled || syncable.length === 0}
               onCheckedChange={() => toggleAllSyncable()}
-              aria-label="全选可直接同步的会话"
+              aria-label={t("sessions.links.selectAll")}
             />
-            <span className="min-w-0 flex-1 text-sm font-medium">全选可直接同步的会话</span>
+            <span className="min-w-0 flex-1 text-sm font-medium">{t("sessions.links.selectAll")}</span>
             <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-              {`已选 ${selectedCount} / ${groups.length}`}
+              {t("sessions.links.selectedCount", { selected: selectedCount, total: groups.length })}
             </span>
           </div>
           <div
@@ -242,7 +244,7 @@ export function SessionSyncSection({ account, open, disabled, onChange, onMetaCh
               />
             ))}
           </div>
-          <p className="px-1 text-xs text-muted-foreground">全选仅包含可直接同步的会话，覆盖需单独勾选。</p>
+          <p className="px-1 text-xs text-muted-foreground">{t("sessions.links.selectAllHint")}</p>
         </div>
       )}
     </section>

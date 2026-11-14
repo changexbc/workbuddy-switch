@@ -1,5 +1,7 @@
 # Agent Companion desktop component
 
+**English** | [한국어](./agent-companion-integration.ko.md)
+
 The desktop build includes one pinned Agent Companion source snapshot in
 `vendor/agent-companion/`. Its revision and archive digest are recorded in
 `vendor/agent-companion.version.json`. The Rust plugin, embedded pages, and

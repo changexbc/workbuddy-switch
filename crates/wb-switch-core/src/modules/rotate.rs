@@ -27,6 +27,7 @@ use crate::modules::config::{
     RunFlagGuard,
 };
 use crate::modules::credits;
+use crate::modules::i18n;
 use crate::modules::variant::WbVariant;
 
 static ROTATE_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -37,7 +38,12 @@ static LAST_SWITCH_AT: AtomicI64 = AtomicI64::new(0);
 const DAY_MS: i64 = 24 * 3_600_000;
 
 /// 存活门控跳过时的固定原因：轮换日志与"是否该提示"的判定都认这一条。
-const SKIP_LIVE_SESSION_REASON: &str = "有 CodeBuddy CLI 会话在运行，暂不切换";
+fn skip_live_session_reason() -> &'static str {
+    i18n::tr(
+        "A CodeBuddy CLI session is running, so the switch is deferred",
+        "CodeBuddy CLI 세션이 실행 중이라 지금은 전환하지 않습니다",
+    )
+}
 
 /// 推迟提示的通知标题（返回体里的 `notify.title` 与宿主投递用的是同一个值）。
 const ROTATE_NOTIFY_TITLE: &str = "workbuddy-switch";
@@ -142,7 +148,13 @@ pub fn decide_target(
     // 1) 有效候选（可被选为目标）
     let mut valid: Vec<&Candidate> = candidates.iter().filter(|c| c.valid).collect();
     if valid.is_empty() {
-        return Decision::Skip("没有可用账号（查询失败/已过期/无剩余积分）".to_string());
+        return Decision::Skip(
+            i18n::tr(
+                "No usable account (query failed / expired / no remaining credits)",
+                "사용 가능한 계정이 없습니다(조회 실패/만료/남은 크레딧 없음)",
+            )
+            .to_string(),
+        );
     }
     // 2) 目标 = 紧迫度最高（到期最早）
     valid.sort_by_key(|c| c.urgency_key());
@@ -151,31 +163,54 @@ pub fn decide_target(
     if let Some(target_ts) = target.soonest_expire_at {
         let remaining_ms = target_ts - now_ms();
         if remaining_ms > min_urgency_ms {
-            return Decision::Skip(format!(
-                "所有账号到期都还早（最紧迫的还剩 {} 天），无需切换",
-                remaining_ms / (24 * 3_600_000)
+            let days = remaining_ms / (24 * 3_600_000);
+            return Decision::Skip(i18n::pick(
+                format!(
+                    "Every account expires far in the future (the soonest has {days} days left), so no switch is needed"
+                ),
+                format!(
+                    "모든 계정의 만료가 아직 멉니다(가장 급한 계정도 {days}일 남음). 전환할 필요가 없습니다"
+                ),
             ));
         }
     }
     // 4) 已是目标 → 不切
     if current_account_id == Some(target.account_id.as_str()) {
-        return Decision::Skip("当前账号已是最紧迫账号".to_string());
+        return Decision::Skip(
+            i18n::tr(
+                "The current account is already the most urgent",
+                "현재 계정이 이미 가장 급합니다",
+            )
+            .to_string(),
+        );
     }
     // 5) 冷却期
     if let Some(ts) = last_switch_at_ms {
         if ts + cooldown_ms > now_ms() {
-            return Decision::Skip("处于切换冷却期".to_string());
+            return Decision::Skip(
+                i18n::tr(
+                    "The switch is in its cooldown period",
+                    "전환 쿨다운 기간입니다",
+                )
+                .to_string(),
+            );
         }
     }
     // 6) 存活门控：有 CLI 会话在跑 → 不切（活进程持旧 key，切了不生效还会破坏不变式）
     if has_live_session {
-        return Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string());
+        return Decision::Skip(skip_live_session_reason().to_string());
     }
     // 7) 价值过滤：目标剩余积分太少，切过去不值得
     if min_remaining > 0.0 && target.total_remaining < min_remaining {
-        return Decision::Skip(format!(
-            "目标账号剩余积分不足（{}，阈值 {}），不值得切换",
-            target.total_remaining, min_remaining
+        return Decision::Skip(i18n::pick(
+            format!(
+                "The target account has too few credits left ({}; threshold {}), so switching is not worthwhile",
+                target.total_remaining, min_remaining
+            ),
+            format!(
+                "대상 계정의 남은 크레딧이 부족합니다({}, 기준 {}). 전환할 가치가 없습니다",
+                target.total_remaining, min_remaining
+            ),
         ));
     }
     // 8) 防抖动：目标比当前早到期，但差异 < 阈值 → 不切
@@ -187,10 +222,17 @@ pub fn decide_target(
             (current.soonest_expire_at, target.soonest_expire_at)
         {
             if cur_ts > 0 && target_ts < cur_ts && cur_ts - target_ts < min_gap_ms {
-                return Decision::Skip(format!(
-                    "目标到期仅早 {} 小时，未达切换阈值（{} 小时）",
-                    (cur_ts - target_ts) / 3_600_000,
-                    min_gap_ms / 3_600_000
+                return Decision::Skip(i18n::pick(
+                    format!(
+                        "The target expires only {} hours earlier, which is below the switch threshold ({} hours)",
+                        (cur_ts - target_ts) / 3_600_000,
+                        min_gap_ms / 3_600_000
+                    ),
+                    format!(
+                        "대상이 {}시간만 일찍 만료되어 전환 기준({}시간)에 미치지 않습니다",
+                        (cur_ts - target_ts) / 3_600_000,
+                        min_gap_ms / 3_600_000
+                    ),
                 ));
             }
         }
@@ -209,15 +251,27 @@ fn remaining_days_until(expire_at: i64, now: i64) -> i64 {
 /// 口径说明：会话可能是"开着但闲置"，所以只说"检测到有会话在运行"，
 /// 不能写"CLI 正在使用中"。
 fn rotate_deferred_notify(target_name: &str, remaining_days: Option<i64>) -> Value {
-    let expiry = match remaining_days {
-        Some(days) => format!("的积分 {days} 天后到期"),
-        None => "的积分即将到期".to_string(),
+    let body = match remaining_days {
+        Some(days) => i18n::pick(
+            format!(
+                "The credits for \"{target_name}\" expire in {days} days, but a CodeBuddy CLI session is running; the new account takes effect only after you restart the CLI."
+            ),
+            format!(
+                "\"{target_name}\"의 크레딧이 {days}일 후 만료되지만 CodeBuddy CLI 세션이 실행 중입니다. CLI를 다시 시작해야 새 계정이 적용됩니다."
+            ),
+        ),
+        None => i18n::pick(
+            format!(
+                "The credits for \"{target_name}\" are about to expire, but a CodeBuddy CLI session is running; the new account takes effect only after you restart the CLI."
+            ),
+            format!(
+                "\"{target_name}\"의 크레딧이 곧 만료되지만 CodeBuddy CLI 세션이 실행 중입니다. CLI를 다시 시작해야 새 계정이 적용됩니다."
+            ),
+        ),
     };
     json!({
         "title": ROTATE_NOTIFY_TITLE,
-        "body": format!(
-            "「{target_name}」{expiry}，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。"
-        ),
+        "body": body,
     })
 }
 
@@ -230,7 +284,7 @@ fn deferred_prompt_target(
     real_reason: &str,
     decide_without_gate: impl FnOnce() -> Decision,
 ) -> Option<String> {
-    if real_reason != SKIP_LIVE_SESSION_REASON {
+    if real_reason != skip_live_session_reason() {
         return None;
     }
     match decide_without_gate() {
@@ -349,9 +403,15 @@ pub async fn run_rotate_cycle() -> Value {
                         .and_then(|c| c.soonest_expire_at)
                         .map(|expire_at| remaining_days_until(expire_at, now));
                     notify = Some(rotate_deferred_notify(&name, days));
-                    reason = format!("{reason}（已提示）");
+                    reason = format!("{reason}{}", i18n::tr(" (notified)", "(알림 표시됨)"));
                 } else {
-                    reason = format!("{reason}（已达今日提示上限）");
+                    reason = format!(
+                        "{reason}{}",
+                        i18n::tr(
+                            " (daily notification limit reached)",
+                            "(오늘 알림 한도에 도달함)"
+                        )
+                    );
                 }
             }
             log["reason"] = json!(reason);
@@ -488,7 +548,7 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("当前账号已是最紧迫账号".to_string())
+            Decision::Skip("The current account is already the most urgent".to_string())
         );
     }
 
@@ -503,7 +563,7 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("目标到期仅早 3 小时，未达切换阈值（24 小时）".to_string())
+            Decision::Skip("The target expires only 3 hours earlier, which is below the switch threshold (24 hours)".to_string())
         );
     }
 
@@ -539,7 +599,7 @@ mod tests {
                 false,
                 0.0
             ),
-            Decision::Skip("处于切换冷却期".to_string())
+            Decision::Skip("The switch is in its cooldown period".to_string())
         );
         // 冷却结束 → 切
         assert_eq!(
@@ -579,7 +639,9 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("没有可用账号（查询失败/已过期/无剩余积分）".to_string())
+            Decision::Skip(
+                "No usable account (query failed / expired / no remaining credits)".to_string()
+            )
         );
     }
 
@@ -595,7 +657,7 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("所有账号到期都还早（最紧迫的还剩 5 天），无需切换".to_string())
+            Decision::Skip("Every account expires far in the future (the soonest has 5 days left), so no switch is needed".to_string())
         );
     }
 
@@ -609,7 +671,7 @@ mod tests {
         ];
         assert_eq!(
             decide_target(&candidates, Some("a"), None, 0, GAP, URG, true, 0.0),
-            Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string()),
+            Decision::Skip(skip_live_session_reason().to_string()),
             "门控命中时 reason 必须固定，提示判定依赖它"
         );
         assert_eq!(
@@ -630,7 +692,7 @@ mod tests {
         ];
         assert_eq!(
             decide_target(&close_expiry, Some("a"), None, 0, GAP, URG, true, 0.0),
-            Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string())
+            Decision::Skip(skip_live_session_reason().to_string())
         );
         assert!(
             !matches!(
@@ -647,12 +709,12 @@ mod tests {
         ];
         assert_eq!(
             decide_target(&already_target, Some("a"), None, 0, GAP, URG, true, 0.0),
-            Decision::Skip("当前账号已是最紧迫账号".to_string()),
+            Decision::Skip("The current account is already the most urgent".to_string()),
             "已是目标时不会走到门控，也就不会按门控文案提示"
         );
         assert_eq!(
             decide_target(&already_target, Some("a"), None, 0, GAP, URG, false, 0.0),
-            Decision::Skip("当前账号已是最紧迫账号".to_string())
+            Decision::Skip("The current account is already the most urgent".to_string())
         );
     }
 
@@ -671,10 +733,10 @@ mod tests {
         ];
         assert_eq!(
             run(&expiring, true),
-            Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string())
+            Decision::Skip(skip_live_session_reason().to_string())
         );
         assert_eq!(
-            deferred_prompt_target(SKIP_LIVE_SESSION_REASON, || run(&expiring, false)).as_deref(),
+            deferred_prompt_target(skip_live_session_reason(), || run(&expiring, false)).as_deref(),
             Some("b"),
             "除门控外本来会切换 → 提示"
         );
@@ -686,10 +748,10 @@ mod tests {
         ];
         assert_eq!(
             run(&close_expiry, true),
-            Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string())
+            Decision::Skip(skip_live_session_reason().to_string())
         );
         assert_eq!(
-            deferred_prompt_target(SKIP_LIVE_SESSION_REASON, || run(&close_expiry, false)),
+            deferred_prompt_target(skip_live_session_reason(), || run(&close_expiry, false)),
             None,
             "差异未达阈值 → 不提示"
         );
@@ -697,7 +759,7 @@ mod tests {
         // 真实原因不是门控时不该重跑决策链（重跑不免费，而且结论无关）。
         let mut replayed = false;
         assert_eq!(
-            deferred_prompt_target("处于切换冷却期", || {
+            deferred_prompt_target("The switch is in its cooldown period", || {
                 replayed = true;
                 Decision::Switch("b".to_string())
             }),
@@ -713,7 +775,7 @@ mod tests {
         assert_eq!(notify["title"], json!("workbuddy-switch"));
         assert_eq!(
             notify["body"],
-            json!("「账号B」的积分 1 天后到期，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。")
+            json!("The credits for \"账号B\" expire in 1 days, but a CodeBuddy CLI session is running; the new account takes effect only after you restart the CLI.")
         );
         assert!(
             !notify["body"].as_str().unwrap().contains("正在使用中"),
@@ -722,7 +784,7 @@ mod tests {
         // 到期时刻未知（目标没有 soonestExpireAt）时不谎报天数。
         assert_eq!(
             rotate_deferred_notify("B", None)["body"],
-            json!("「B」的积分即将到期，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。")
+            json!("The credits for \"B\" are about to expire, but a CodeBuddy CLI session is running; the new account takes effect only after you restart the CLI.")
         );
     }
 
@@ -749,7 +811,7 @@ mod tests {
         // 目标剩余 10 < 阈值 30 → 不值得切
         assert_eq!(
             decide_target(&candidates, Some("a"), None, 0, GAP, URG, false, 30.0),
-            Decision::Skip("目标账号剩余积分不足（10，阈值 30），不值得切换".to_string())
+            Decision::Skip("The target account has too few credits left (10; threshold 30), so switching is not worthwhile".to_string())
         );
         // 阈值 5：目标剩余 10 达标 → 切
         assert_eq!(

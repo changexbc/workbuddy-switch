@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use wb_switch_core::modules::{
     account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
     codebuddy_ide_session, codebuddy_ide_session_sync, config, credit_usage, credits,
-    export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
+    export_import, i18n, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
     variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
@@ -348,7 +348,10 @@ async fn api_codebuddy_cn_ide_switch(Json(body): Json<Value>) -> Response {
         Ok(items) => items.unwrap_or_default(),
         Err(error) => {
             return json_err(
-                format!("copySessions 条目非法：{error}"),
+                i18n::pick(
+                    format!("Invalid copySessions entry: {error}"),
+                    format!("copySessions 항목이 올바르지 않습니다: {error}"),
+                ),
                 StatusCode::BAD_REQUEST,
             )
         }
@@ -395,10 +398,16 @@ async fn api_codebuddy_cn_ide_session_links_preview(Json(body): Json<Value>) -> 
         .unwrap_or("")
         .to_string();
     if target_account_id.trim().is_empty() {
-        return json_err("缺少 targetAccountId".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let result = tokio::task::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview(&target)
     })
     .await;
@@ -462,7 +471,10 @@ async fn api_vscode_ext_switch(Json(body): Json<Value>) -> Response {
         Ok(items) => items.unwrap_or_default(),
         Err(error) => {
             return json_err(
-                format!("copySessions 条目非法：{error}"),
+                i18n::pick(
+                    format!("Invalid copySessions entry: {error}"),
+                    format!("copySessions 항목이 올바르지 않습니다: {error}"),
+                ),
                 StatusCode::BAD_REQUEST,
             )
         }
@@ -502,10 +514,16 @@ async fn api_vscode_ext_session_links_preview(Json(body): Json<Value>) -> Respon
         .unwrap_or("")
         .to_string();
     if target_account_id.trim().is_empty() {
-        return json_err("缺少 targetAccountId".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let result = tokio::task::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         vscode_session_sync::links_preview(&target)
     })
     .await;
@@ -548,7 +566,10 @@ async fn api_codebuddy_ide_switch(Json(body): Json<Value>) -> Response {
         Ok(items) => items.unwrap_or_default(),
         Err(error) => {
             return json_err(
-                format!("copySessions 条目非法：{error}"),
+                i18n::pick(
+                    format!("Invalid copySessions entry: {error}"),
+                    format!("copySessions 항목이 올바르지 않습니다: {error}"),
+                ),
                 StatusCode::BAD_REQUEST,
             )
         }
@@ -594,10 +615,16 @@ async fn api_codebuddy_intl_ide_session_links_preview(Json(body): Json<Value>) -
         .unwrap_or("")
         .to_string();
     if target_account_id.trim().is_empty() {
-        return json_err("缺少 targetAccountId".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let result = tokio::task::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id).ok_or("目标账号不存在")?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview_intl(&target)
     })
     .await;
@@ -810,7 +837,10 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
         .unwrap_or("")
         .to_string();
     if account_id.trim().is_empty() {
-        return json_err("缺少 accountId".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Missing accountId", "accountId 없음").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let restart = body
         .get("restart")
@@ -838,10 +868,18 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
     {
         let mut running = SWITCH_RUNNING.lock().unwrap();
         if *running {
-            return json_err("已有切换任务进行中".to_string(), StatusCode::CONFLICT);
+            return json_err(
+                i18n::tr(
+                    "A switch is already in progress",
+                    "이미 전환 작업이 진행 중입니다",
+                )
+                .to_string(),
+                StatusCode::CONFLICT,
+            );
         }
         *running = true;
-        *SWITCH_PROGRESS.lock().unwrap() = Some("开始切换账号…".to_string());
+        *SWITCH_PROGRESS.lock().unwrap() =
+            Some(i18n::tr("Starting account switch…", "계정 전환을 시작하는 중…").to_string());
     }
 
     let progress: switch::ProgressFn = Box::new(|msg| {
@@ -900,7 +938,10 @@ async fn api_account_sessions(RawQuery(query): RawQuery) -> Response {
     let account_id = query_param(query.as_deref(), "accountId").unwrap_or_default();
     let client = query_param(query.as_deref(), "client").unwrap_or_else(|| "workbuddy".to_string());
     let Some(account) = account::find_account(&account_id) else {
-        return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     let client = match session_groups::SessionClient::parse(&client) {
         Ok(client) => client,
@@ -912,7 +953,10 @@ async fn api_account_sessions(RawQuery(query): RawQuery) -> Response {
                 .map(|uid| uid.trim().to_string())
                 .filter(|uid| !uid.is_empty())
             else {
-                return json_err("账号缺少 uid".to_string(), StatusCode::BAD_REQUEST);
+                return json_err(
+                    i18n::tr("Account has no uid", "계정에 uid가 없습니다").to_string(),
+                    StatusCode::BAD_REQUEST,
+                );
             };
             json_ok(vscode_session::list_vscode_sessions(&uid))
         }
@@ -920,7 +964,11 @@ async fn api_account_sessions(RawQuery(query): RawQuery) -> Response {
             json_ok(session::list_sessions_for_account(&account))
         }
         session_groups::SessionClient::CodebuddyIde => json_err(
-            "当前客户端暂不支持列出账号会话".to_string(),
+            i18n::tr(
+                "Listing account sessions is not supported for this client yet",
+                "현재 클라이언트에서는 계정 세션 목록을 지원하지 않습니다",
+            )
+            .to_string(),
             StatusCode::BAD_REQUEST,
         ),
     }
@@ -942,7 +990,10 @@ async fn api_copy_sessions(Json(body): Json<Value>) -> Response {
         })
         .unwrap_or_default();
     let Some(target) = account::find_account(&target_account_id) else {
-        return json_err("目标账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     // 档位取目标账号自身（源 uid 也从该档位的登录态读）。
     let variant = account::variant_of(&target);
@@ -983,10 +1034,16 @@ async fn api_copy_sessions_cross(Json(body): Json<Value>) -> Response {
         })
         .unwrap_or_default();
     let Some(source) = account::find_account(&source_account_id) else {
-        return json_err("源账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Source account not found", "원본 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     let Some(target) = account::find_account(&target_account_id) else {
-        return json_err("目标账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     let target_variant = account::variant_of(&target);
     let mut report = match session::copy_sessions_cross(&source, &target, &session_ids) {
@@ -1012,10 +1069,16 @@ async fn api_session_links_preview(Json(body): Json<Value>) -> Response {
         .unwrap_or("")
         .to_string();
     if target_account_id.trim().is_empty() {
-        return json_err("缺少 targetAccountId".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let Some(target) = account::find_account(&target_account_id) else {
-        return json_err("目标账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     let variant = match body.get("variant").and_then(Value::as_str) {
         Some(raw) => WbVariant::parse(Some(raw)),
@@ -1043,13 +1106,22 @@ async fn api_session_links_preview_cross(Json(body): Json<Value>) -> Response {
         .unwrap_or("")
         .to_string();
     if source_account_id.trim().is_empty() {
-        return json_err("缺少 sourceAccountId".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Missing sourceAccountId", "sourceAccountId 없음").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let Some(source) = account::find_account(&source_account_id) else {
-        return json_err("源账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Source account not found", "원본 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     let Some(target) = account::find_account(&target_account_id) else {
-        return json_err("目标账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     match session::session_links_preview_cross(&source, &target) {
         Ok(report) => json_ok(report),
@@ -1072,10 +1144,16 @@ async fn api_session_sync_cross(Json(body): Json<Value>) -> Response {
         .unwrap_or("")
         .to_string();
     let Some(source) = account::find_account(&source_account_id) else {
-        return json_err("源账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Source account not found", "원본 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     let Some(target) = account::find_account(&target_account_id) else {
-        return json_err("目标账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     let selections = match session::parse_sync_selections(body.get("syncSelections")) {
         Ok(selections) => selections,
@@ -1093,7 +1171,7 @@ fn session_group_request(
     let client = body
         .get("client")
         .and_then(Value::as_str)
-        .ok_or_else(|| "缺少 client".to_string())?;
+        .ok_or_else(|| i18n::tr("Missing client", "client가 없습니다").to_string())?;
     let client = session_groups::SessionClient::parse(client)?;
     let scope =
         session_groups::parse_variant_scope(body.get("variantScope").and_then(Value::as_str))?;
@@ -1184,7 +1262,10 @@ async fn api_sync_session_group_unify(Json(body): Json<Value>) -> Response {
         Ok(value) => value,
         Err(error) => {
             return json_err(
-                format!("目标副本参数无效：{error}"),
+                i18n::pick(
+                    format!("Invalid target copy parameters: {error}"),
+                    format!("대상 복사본 매개변수가 올바르지 않습니다: {error}"),
+                ),
                 StatusCode::BAD_REQUEST,
             )
         }
@@ -1342,7 +1423,10 @@ async fn api_delete_session_group(Json(body): Json<Value>) -> Response {
 async fn api_checkin_status(Query(query): Query<HashMap<String, String>>) -> Response {
     if let Some(id) = query.get("accountId") {
         let Some(acc) = account::find_account(id) else {
-            return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+            return json_err(
+                i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string(),
+                StatusCode::BAD_REQUEST,
+            );
         };
         let status = checkin::get_checkin_status_for_display(&acc).await;
         return json_ok(checkin_status_item(&acc, status));
@@ -1366,7 +1450,10 @@ fn checkin_status_item(account: &Value, mut status: Value) -> Value {
 async fn api_credits(Json(body): Json<Value>) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
     let Some(acc) = account::find_account(id) else {
-        return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     json_ok(credits::get_credit_expiry(&acc).await)
 }
@@ -1391,7 +1478,10 @@ async fn api_token_statistics(RawQuery(query): RawQuery) -> Response {
     match tokio::task::spawn_blocking(move || token_stats::get_statistics(days)).await {
         Ok(statistics) => json_ok(statistics),
         Err(error) => json_err(
-            format!("扫描 Token 统计失败: {error}"),
+            i18n::pick(
+                format!("Failed to scan token statistics: {error}"),
+                format!("토큰 통계를 스캔하지 못했습니다: {error}"),
+            ),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     }
@@ -1404,7 +1494,10 @@ async fn api_rate_limits() -> Response {
     match tokio::task::spawn_blocking(limits::get_rate_limits).await {
         Ok(payload) => json_ok(payload),
         Err(error) => json_err(
-            format!("扫描模型限额失败: {error}"),
+            i18n::pick(
+                format!("Failed to scan model rate limits: {error}"),
+                format!("모델 한도를 스캔하지 못했습니다: {error}"),
+            ),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     }
@@ -1422,7 +1515,10 @@ async fn api_rate_limit_hook_status() -> Response {
     match tokio::task::spawn_blocking(rate_limit_hook_status).await {
         Ok(status) => json_ok(status),
         Err(error) => json_err(
-            format!("查询限额 hook 状态失败: {error}"),
+            i18n::pick(
+                format!("Failed to read rate limit hook status: {error}"),
+                format!("한도 hook 상태를 조회하지 못했습니다: {error}"),
+            ),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     }
@@ -1479,7 +1575,10 @@ async fn api_save_rate_limit_config(Json(body): Json<Value>) -> Response {
 async fn api_checkin(Json(body): Json<Value>) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
     let Some(acc) = account::find_account(id) else {
-        return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     json_ok(checkin::checkin_account(&acc).await)
 }
@@ -1558,7 +1657,10 @@ async fn api_save_travel_config(Json(body): Json<Value>) -> Response {
 async fn api_refresh_token(Json(body): Json<Value>) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
     let Some(acc) = account::find_account(id) else {
-        return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     };
     json_ok(refresh::refresh_account_token(acc).await)
 }

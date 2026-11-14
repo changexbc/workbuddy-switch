@@ -20,6 +20,7 @@ import type { SessionLinksMeta } from "@/components/session-link-shared";
 import { VscodeSessionSyncSection } from "@/components/vscode-session-sync-section";
 import * as api from "@/lib/api";
 import { displayName } from "@/lib/account-display";
+import { useT, type Translate } from "@/lib/i18n";
 import type {
   AccountMeta,
   SessionLinkPreviewGroup,
@@ -57,6 +58,7 @@ function tabCount(count: number) {
 
 /** VS Code 扩展会话切换弹窗：可勾选「当前扩展账号」的会话复制到目标账号。 */
 export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeExtStatus, onDone }: Props) {
+  const t = useT();
   const [sessions, setSessions] = useState<VscodeSession[]>([]);
   const [sourceUid, setSourceUid] = useState<string | null>(null);
   /** 扩展数据根目录：`null` = 未找到（与「有目录但无会话」区分）；`undefined` = 后端未返回该字段。 */
@@ -187,55 +189,75 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
       // 生效方式提示：重载窗口读不到外部写入，不再提示；区分「已重开 / 重开失败 / 本来没运行」。
       // 重开失败时前端拿不到原因，用后端 message（含具体错误）兜底。
       const restartHint = res.restarted
-        ? "已切换并重新打开 VS Code"
+        ? t("dialogs.vscode.restarted")
         : res.closedByUs
-          ? res.message || "已切换，但自动重新打开 VS Code 失败，请手动打开"
-          : "已切换；请打开 VS Code 生效";
-      const copiedHint = copied > 0 ? `已复制 ${copied} 个会话` : null;
-      const syncedHint = syncedItems.length > 0 ? `已同步 ${syncedItems.length} 个会话` : null;
+          ? res.message || t("dialogs.vscode.restartFailed")
+          : t("dialogs.vscode.openToApply");
+      const copiedHint = copied > 0 ? t("dialogs.common.copiedCount", { count: copied }) : null;
+      const syncedHint =
+        syncedItems.length > 0 ? t("dialogs.common.syncedCount", { count: syncedItems.length }) : null;
       const requestedSync = syncSelections.length > 0;
 
       if (errors.length > 0) {
-        toast.warning(`已切换至「${nickname}」，但部分会话未复制`, {
+        toast.warning(t("dialogs.common.switchedPartialCopy", { name: nickname }), {
           description: [
-            `已复制 ${copied} 个会话`,
-            `${errors.length} 个失败：${errors.map((e) => e.error).join("；")}`,
+            t("dialogs.common.copiedCount", { count: copied }),
+            t("dialogs.common.failedCount", {
+              count: errors.length,
+              errors: errors.map((e) => e.error).join(t("dialogs.common.separator")),
+            }),
             restartHint,
-          ].join("；"),
+          ].join(t("dialogs.common.separator")),
         });
       } else {
-        toast.success(`已切换至「${nickname}」`, {
-          description: [copiedHint, syncedHint, restartHint].filter(Boolean).join("；"),
+        toast.success(t("dialogs.common.switchedTo", { name: nickname }), {
+          description: [copiedHint, syncedHint, restartHint]
+            .filter(Boolean)
+            .join(t("dialogs.common.separator")),
         });
       }
       // 复制成功但登记失败：复制本身有效，必须提示「未建立关联」而不是当成完整成功。
       if (linkErrors.length > 0) {
-        toast.warning("部分会话已复制但未建立关联", {
+        toast.warning(t("dialogs.common.linkPartialFailed"), {
           description: [
-            ...linkErrors.map((item) => `${item.conversationId ?? "会话"}：${item.error}`),
-            "未建立关联的会话不会出现在「关联会话」列表里。",
-          ].join("；"),
+            ...linkErrors.map((item) =>
+              t("dialogs.common.itemError", {
+                label: item.conversationId ?? t("dialogs.common.sessionFallback"),
+                error: item.error,
+              }),
+            ),
+            t("dialogs.common.unlinkedNotListed"),
+          ].join(t("dialogs.common.separator")),
         });
       }
       // 同步结果：成功、跳过、失败都要能看到，不能只显示成功数。
       const groupLabel = (groupId: string) =>
         syncGroups.find((group) => group.groupId === groupId)?.title || groupId;
       const syncIssues = [
-        ...syncErrors.map(
-          (item) => `${item.groupId ? groupLabel(item.groupId) : "全部会话"}：${item.error}`,
+        ...syncErrors.map((item) =>
+          t("dialogs.common.itemError", {
+            label: item.groupId ? groupLabel(item.groupId) : t("dialogs.common.allSessions"),
+            error: item.error,
+          }),
         ),
         // 预览过期/前置条件变化一律跳过并给出原因，绝不显示成已同步。
-        ...skippedItems.map((item) => `${groupLabel(item.groupId)}：${item.message}`),
+        ...skippedItems.map((item) =>
+          t("dialogs.common.itemError", { label: groupLabel(item.groupId), error: item.message }),
+        ),
       ];
       if (syncIssues.length > 0) {
         if (syncErrors.length > 0) {
-          toast.error("部分关联会话没有同步（失败或已跳过）", { description: syncIssues.join("；") });
+          toast.error(t("dialogs.common.syncPartialFailedLinked"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         } else {
-          toast.warning("有关联会话没有同步（已跳过）", { description: syncIssues.join("；") });
+          toast.warning(t("dialogs.common.syncSkippedLinked"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         }
       } else if (requestedSync && !syncReport) {
-        toast.warning("关联会话未同步", {
-          description: "没有收到同步结果：当前版本可能不支持同步关联会话；账号已切换，但会话没有同步。",
+        toast.warning(t("dialogs.common.syncNotRunLinked"), {
+          description: t("dialogs.common.syncNotRunLinkedDescription"),
         });
       }
       onOpenChange(false);
@@ -256,21 +278,21 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
   const linksAvailable = linksMeta?.available ?? true;
   const summaryMain =
     copyCount > 0 && syncCount > 0
-      ? `将复制 ${copyCount} 个、同步 ${syncCount} 个关联会话`
+      ? t("dialogs.common.summaryCopyAndSync", { copy: copyCount, sync: syncCount })
       : copyCount > 0
-        ? `将复制 ${copyCount} 个会话`
+        ? t("dialogs.common.summaryCopy", { count: copyCount })
         : syncCount > 0
-          ? `将同步 ${syncCount} 个关联会话`
-          : "本次仅切换账号";
+          ? t("dialogs.common.summarySync", { count: syncCount })
+          : t("dialogs.common.summarySwitchOnly");
   const summarySub =
     overwriteCount > 0
-      ? `其中 ${overwriteCount} 个会替换目标账号的完整内容`
+      ? t("dialogs.common.summaryOverwrite", { count: overwriteCount })
       : copyCount === 0 && syncCount === 0
-        ? "未选择复制或同步会话"
+        ? t("dialogs.common.summaryNoneSelected")
         : copyCount === 0
-          ? "未选择复制会话"
+          ? t("dialogs.common.summaryNoCopy")
           : syncCount === 0
-            ? "未选择同步会话"
+            ? t("dialogs.common.summaryNoSync")
             : null;
   const running = vscodeExtStatus?.running === true;
   /** 扩展未登录（`loggedIn === false`）：按新会话写入，仅影响提示文案。 */
@@ -278,31 +300,27 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
   /** 本次会由后端关闭并重开 VS Code（仅在编辑器正在运行且开关打开时）。 */
   const autoClose = running && autoRestart;
   /** 未登录时的追加说明（三态提示共用，渲染为 tooltip 内第二段）。 */
-  const notLoggedInHint = notLoggedIn
-    ? "未检测到 VS Code CodeBuddy 插件登录态，将按新会话写入；切换后打开 VS Code 即登录为目标账号。"
-    : undefined;
-  const emptyHint = emptyStateHint(vscodeExtStatus, loadingSessions, sourceUid, dataRoot, hasCopyable);
+  const notLoggedInHint = notLoggedIn ? t("dialogs.vscode.notLoggedInHint") : undefined;
+  const emptyHint = emptyStateHint(vscodeExtStatus, loadingSessions, sourceUid, dataRoot, hasCopyable, t);
   /** 标题行状态图标：三态提示收进 tooltip，仅以图标色调区分正常/警告。 */
   const statusNotice = running
     ? autoRestart
       ? {
           icon: <RefreshCw className="size-4" />,
-          title: "将自动关闭并重开 VS Code",
-          description:
-            "将先关闭 VS Code（未保存内容由 VS Code 自身提示/热退出保护），写入凭证后自动重新打开。",
+          title: t("dialogs.vscode.autoRestartTitle"),
+          description: t("dialogs.vscode.autoRestartDescription"),
           warning: false,
         }
       : {
           icon: <TriangleAlert className="size-4" />,
-          title: "请先完全退出 VS Code",
-          description:
-            "已关闭「自动关闭并重开」。检测到 VS Code 正在运行，运行中写入会被覆盖且不会生效，请完全退出后重试。",
+          title: t("dialogs.vscode.quitFirstTitle"),
+          description: t("dialogs.vscode.quitFirstDescription"),
           warning: true,
         }
     : {
         icon: <CircleCheck className="size-4" />,
-        title: "VS Code 未运行，可直接切换",
-        description: "写入凭证后打开 VS Code，插件即为目标账号。",
+        title: t("dialogs.vscode.notRunningTitle"),
+        description: t("dialogs.vscode.notRunningDescription"),
         warning: false,
       };
 
@@ -345,7 +363,9 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
         <DialogHeader className="shrink-0">
           <div className="flex items-center gap-3">
             <DialogTitle className="min-w-0 flex-1">
-              切换到「{account ? displayName(account) : "该账号"}」
+              {t("dialogs.common.switchTitle", {
+                name: account ? displayName(account) : t("dialogs.common.targetAccount"),
+              })}
             </DialogTitle>
             {/* 提示收进图标 tooltip、开关与标题同行；mr-6 为右上角关闭按钮留空位。 */}
             <div className="mr-6 flex shrink-0 items-center gap-2">
@@ -377,22 +397,18 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
                       checked={autoRestart}
                       onCheckedChange={toggleAutoRestart}
                       disabled={busy}
-                      aria-label="自动关闭并重开 VS Code"
+                      aria-label={t("dialogs.vscode.autoRestartLabel")}
                     />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" align="end" className="max-w-xs space-y-1">
-                  <div className="font-medium">自动关闭并重开 VS Code</div>
-                  <p className="text-muted-foreground">
-                    VS Code 运行时先自动关闭编辑器，写入凭证后再重新打开
-                  </p>
+                  <div className="font-medium">{t("dialogs.vscode.autoRestartLabel")}</div>
+                  <p className="text-muted-foreground">{t("dialogs.vscode.autoRestartTooltip")}</p>
                 </TooltipContent>
               </Tooltip>
             </div>
           </div>
-          <DialogDescription>
-            将把所选账号写入 VS Code CodeBuddy 插件；可选把当前账号的会话复制过去，并把关联会话的新内容同步过去。
-          </DialogDescription>
+          <DialogDescription>{t("dialogs.vscode.description")}</DialogDescription>
         </DialogHeader>
 
         {busy && (
@@ -400,17 +416,15 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
             <Loader2 className="size-8 animate-spin text-primary" />
             <p className="text-sm font-medium">
               {autoClose
-                ? "正在关闭 VS Code 并写入凭证…"
+                ? t("dialogs.vscode.busyClosing")
                 : copyCount > 0
-                  ? "正在切换并复制会话…"
+                  ? t("dialogs.vscode.busyCopying")
                   : syncCount > 0
-                    ? "正在切换并同步会话…"
-                    : "正在切换账号…"}
+                    ? t("dialogs.vscode.busySyncing")
+                    : t("dialogs.common.switchingAccount")}
             </p>
             <p className="max-w-xs text-center text-xs text-muted-foreground">
-              {autoClose
-                ? "若 VS Code 弹出保存提示请先处理（最多等待 60 秒）"
-                : "正在处理中，请勿关闭窗口"}
+              {autoClose ? t("dialogs.vscode.savePromptHint") : t("dialogs.common.busyHint")}
             </p>
           </div>
         )}
@@ -424,11 +438,11 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
             >
               <TabsList className="h-auto w-full shrink-0 justify-start gap-5 rounded-none border-b border-border bg-transparent p-0">
                 <TabsTrigger value="links" className={TAB_TRIGGER_CLASS}>
-                  关联会话
+                  {t("dialogs.common.linkedSessions")}
                   {tabCount(linksMeta?.groupCount ?? 0)}
                 </TabsTrigger>
                 <TabsTrigger value="copy" className={TAB_TRIGGER_CLASS}>
-                  复制会话
+                  {t("dialogs.common.copySessions")}
                   {tabCount(copyCount)}
                 </TabsTrigger>
               </TabsList>
@@ -476,14 +490,14 @@ export function VscodeSwitchAccountDialog({ open, onOpenChange, account, vscodeE
           </div>
           <div className="flex shrink-0 gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              取消
+              {t("common.cancel")}
             </Button>
             {/* 勾了复制却没选会话时仍然拦住；只要还有同步项可执行就允许确认。 */}
             <Button
               onClick={doSwitch}
               disabled={busy || (copyEnabled && copyCount === 0 && syncCount === 0)}
             >
-              {busy ? "切换中…" : "确认切换"}
+              {busy ? t("dialogs.common.switching") : t("dialogs.common.confirmSwitch")}
             </Button>
           </div>
         </DialogFooter>
@@ -499,12 +513,13 @@ function emptyStateHint(
   sourceUid: string | null,
   dataRoot: string | null | undefined,
   hasCopyable: boolean,
+  t: Translate,
 ): string {
-  if (loading) return "正在加载会话…";
-  if (status && !status.installed) return "未检测到 VS Code，请先安装并登录 CodeBuddy 插件";
-  if (status && !status.extensionInstalled) return "未安装 VS Code CodeBuddy 插件，请先在 VS Code 中安装并登录";
-  if (dataRoot === null) return "未找到 VS Code CodeBuddy 插件数据目录，请先打开 VS Code 并登录插件";
-  if (!sourceUid) return "未检测到 VS Code CodeBuddy 插件当前登录账号，请先在 VS Code 中登录";
-  if (!hasCopyable) return "当前账号暂无可复制的会话（无含正文的历史）";
-  return "将当前账号勾选的会话以新 id 复制给目标账号（加法，不影响源账号）";
+  if (loading) return t("dialogs.common.loadingSessions");
+  if (status && !status.installed) return t("dialogs.vscode.emptyNoVscode");
+  if (status && !status.extensionInstalled) return t("dialogs.vscode.emptyNoExtension");
+  if (dataRoot === null) return t("dialogs.vscode.emptyNoDataRoot");
+  if (!sourceUid) return t("dialogs.vscode.emptyNoLogin");
+  if (!hasCopyable) return t("dialogs.common.noCopyableSessions");
+  return t("dialogs.vscode.copyHint");
 }
