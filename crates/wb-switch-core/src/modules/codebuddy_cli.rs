@@ -216,12 +216,21 @@ fn ensure_region_env_compatible(variant: WbVariant) -> Result<(), String> {
 }
 
 fn env_object_mut(value: &mut Value) -> Result<&mut serde_json::Map<String, Value>, String> {
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| i18n::tr("CodeBuddy settings.json top level is not an object", "CodeBuddy settings.json의 최상위가 객체가 아닙니다").to_string())?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        i18n::tr(
+            "CodeBuddy settings.json top level is not an object",
+            "CodeBuddy settings.json의 최상위가 객체가 아닙니다",
+        )
+        .to_string()
+    })?;
     let env = object.entry("env").or_insert_with(|| json!({}));
-    env.as_object_mut()
-        .ok_or_else(|| i18n::tr("CodeBuddy settings.json env field is not an object", "CodeBuddy settings.json의 env 필드가 객체가 아닙니다").to_string())
+    env.as_object_mut().ok_or_else(|| {
+        i18n::tr(
+            "CodeBuddy settings.json env field is not an object",
+            "CodeBuddy settings.json의 env 필드가 객체가 아닙니다",
+        )
+        .to_string()
+    })
 }
 
 fn apply_cli_region_env(value: &mut Value, variant: WbVariant) -> Result<(), String> {
@@ -270,10 +279,24 @@ fn write_cli_json_string_cache(path: &Path, value: &str) -> Result<(), String> {
             )
         })?;
     }
-    let content = serde_json::to_string(&json!(value))
-        .map_err(|_| auth_config_error(i18n::tr("Configuration stage", "구성 단계"), i18n::tr("Could not generate the CodeBuddy CLI cache", "CodeBuddy CLI 캐시를 생성할 수 없습니다")))?;
-    atomic_write(path, &content)
-        .map_err(|_| auth_config_error(i18n::tr("Configuration stage", "구성 단계"), i18n::tr("Could not write the CodeBuddy CLI cache; please check file permissions", "CodeBuddy CLI 캐시를 쓸 수 없습니다. 파일 권한을 확인해 주세요")))
+    let content = serde_json::to_string(&json!(value)).map_err(|_| {
+        auth_config_error(
+            i18n::tr("Configuration stage", "구성 단계"),
+            i18n::tr(
+                "Could not generate the CodeBuddy CLI cache",
+                "CodeBuddy CLI 캐시를 생성할 수 없습니다",
+            ),
+        )
+    })?;
+    atomic_write(path, &content).map_err(|_| {
+        auth_config_error(
+            i18n::tr("Configuration stage", "구성 단계"),
+            i18n::tr(
+                "Could not write the CodeBuddy CLI cache; please check file permissions",
+                "CodeBuddy CLI 캐시를 쓸 수 없습니다. 파일 권한을 확인해 주세요",
+            ),
+        )
+    })
 }
 
 fn sync_cli_runtime_cache_at(storage_dir: &Path, variant: WbVariant) -> Result<(), String> {
@@ -545,8 +568,15 @@ fn write_settings_env_token(value: &mut Value, token: &str) -> Result<(), String
 }
 
 fn persist_settings_at(settings: &Path, value: &Value) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(value)
-        .map_err(|_| auth_config_error(i18n::tr("Configuration stage", "구성 단계"), i18n::tr("Could not generate CodeBuddy settings.json", "CodeBuddy settings.json을 생성할 수 없습니다")))?;
+    let content = serde_json::to_string_pretty(value).map_err(|_| {
+        auth_config_error(
+            i18n::tr("Configuration stage", "구성 단계"),
+            i18n::tr(
+                "Could not generate CodeBuddy settings.json",
+                "CodeBuddy settings.json을 생성할 수 없습니다",
+            ),
+        )
+    })?;
     if let Some(parent) = settings.parent() {
         std::fs::create_dir_all(parent).map_err(|_| {
             auth_config_error(
@@ -558,21 +588,33 @@ fn persist_settings_at(settings: &Path, value: &Value) -> Result<(), String> {
     atomic_write(settings, &content).map_err(|_| {
         auth_config_error(
             i18n::tr("Configuration stage", "구성 단계"),
-            i18n::tr("Could not write CodeBuddy settings.json; please check file permissions", "CodeBuddy settings.json을 쓸 수 없습니다. 파일 권한을 확인해 주세요"),
+            i18n::tr(
+                "Could not write CodeBuddy settings.json; please check file permissions",
+                "CodeBuddy settings.json을 쓸 수 없습니다. 파일 권한을 확인해 주세요",
+            ),
         )
     })
 }
 
 fn validate_persisted_env_token_at(settings: &PathBuf, expected_token: &str) -> Result<(), String> {
     let persisted = read_json_file(settings).ok_or_else(|| {
-        auth_config_error(i18n::tr("Configuration stage", "구성 단계"), i18n::tr("Could not re-read CodeBuddy settings.json after writing", "쓴 후 CodeBuddy settings.json을 다시 읽을 수 없습니다"))
+        auth_config_error(
+            i18n::tr("Configuration stage", "구성 단계"),
+            i18n::tr(
+                "Could not re-read CodeBuddy settings.json after writing",
+                "쓴 후 CodeBuddy settings.json을 다시 읽을 수 없습니다",
+            ),
+        )
     })?;
     if settings_env_token(&persisted).map(clean_bearer_token)
         != Some(clean_bearer_token(expected_token))
     {
         return Err(auth_config_error(
             i18n::tr("Configuration stage", "구성 단계"),
-            i18n::tr("The written credentials do not match the selected account", "쓴 인증 정보가 선택한 계정과 일치하지 않습니다"),
+            i18n::tr(
+                "The written credentials do not match the selected account",
+                "쓴 인증 정보가 선택한 계정과 일치하지 않습니다",
+            ),
         ));
     }
     Ok(())
@@ -588,7 +630,12 @@ fn prepare_settings_env_update(
         .as_deref()
         .map(serde_json::from_str)
         .transpose()
-        .map_err(|_| i18n::tr("CodeBuddy settings.json is not valid JSON", "CodeBuddy settings.json이 올바른 JSON이 아닙니다"))?
+        .map_err(|_| {
+            i18n::tr(
+                "CodeBuddy settings.json is not valid JSON",
+                "CodeBuddy settings.json이 올바른 JSON이 아닙니다",
+            )
+        })?
         .unwrap_or_else(|| json!({}));
     write_settings_env_token(&mut value, clean_bearer_token(token))?;
     apply_cli_region_env(&mut value, variant)?;
@@ -602,7 +649,12 @@ fn persist_cli_region_env(variant: WbVariant) -> Result<(), String> {
         .as_deref()
         .map(serde_json::from_str)
         .transpose()
-        .map_err(|_| i18n::tr("CodeBuddy settings.json is not valid JSON", "CodeBuddy settings.json이 올바른 JSON이 아닙니다"))?
+        .map_err(|_| {
+            i18n::tr(
+                "CodeBuddy settings.json is not valid JSON",
+                "CodeBuddy settings.json이 올바른 JSON이 아닙니다",
+            )
+        })?
         .unwrap_or_else(|| json!({}));
     apply_cli_region_env(&mut value, variant)?;
     persist_settings_at(&settings, &value).inspect_err(|_| {
@@ -820,11 +872,17 @@ fn helper_validation_error(stage: &str, cause: &str) -> String {
     let hint = i18n::tr("Please make sure Git Bash and Node.js are available, then retry; if it still fails, check the CodeBuddy CLI logs", "Git Bash와 Node.js를 사용할 수 있는지 확인한 후 다시 시도해 주세요. 계속 실패하면 CodeBuddy CLI 로그를 확인해 주세요");
     #[cfg(not(windows))]
     let hint = i18n::tr("Please make sure Node.js is available, then retry; if it still fails, check the CodeBuddy CLI logs", "Node.js를 사용할 수 있는지 확인한 후 다시 시도해 주세요. 계속 실패하면 CodeBuddy CLI 로그를 확인해 주세요");
-    i18n::pick(format!("CodeBuddy CLI helper validation failed ({stage}): {cause}. {hint}"), format!("CodeBuddy CLI helper 검증 실패({stage}): {cause}. {hint}"))
+    i18n::pick(
+        format!("CodeBuddy CLI helper validation failed ({stage}): {cause}. {hint}"),
+        format!("CodeBuddy CLI helper 검증 실패({stage}): {cause}. {hint}"),
+    )
 }
 
 fn auth_config_error(stage: &str, cause: &str) -> String {
-    i18n::pick(format!("CodeBuddy CLI auth configuration failed ({stage}): {cause}"), format!("CodeBuddy CLI 인증 구성 실패({stage}): {cause}"))
+    i18n::pick(
+        format!("CodeBuddy CLI auth configuration failed ({stage}): {cause}"),
+        format!("CodeBuddy CLI 인증 구성 실패({stage}): {cause}"),
+    )
 }
 
 fn validate_helper_output(output: &Output, expected_token: &str) -> Result<(), String> {
@@ -848,17 +906,29 @@ fn validate_helper_result(
             .unwrap_or_else(|| i18n::tr("unknown", "알 수 없음").to_string());
         return Err(helper_validation_error(
             i18n::tr("Execution stage", "실행 단계"),
-            &i18n::pick(format!("helper exited with code {code}"), format!("helper 종료 코드 {code}")),
+            &i18n::pick(
+                format!("helper exited with code {code}"),
+                format!("helper 종료 코드 {code}"),
+            ),
         ));
     }
     let stdout = String::from_utf8_lossy(stdout);
     if stdout.trim().is_empty() {
-        return Err(helper_validation_error(i18n::tr("Output stage", "출력 단계"), i18n::tr("helper did not return an auth result", "helper가 인증 결과를 반환하지 않았습니다")));
+        return Err(helper_validation_error(
+            i18n::tr("Output stage", "출력 단계"),
+            i18n::tr(
+                "helper did not return an auth result",
+                "helper가 인증 결과를 반환하지 않았습니다",
+            ),
+        ));
     }
     if stdout.trim() != format!("Bearer {expected_token}") {
         return Err(helper_validation_error(
             i18n::tr("Output stage", "출력 단계"),
-            i18n::tr("The auth result returned by helper does not match the selected account", "helper가 반환한 인증 결과가 선택한 계정과 일치하지 않습니다"),
+            i18n::tr(
+                "The auth result returned by helper does not match the selected account",
+                "helper가 반환한 인증 결과가 선택한 계정과 일치하지 않습니다",
+            ),
         ));
     }
     Ok(())
@@ -952,14 +1022,20 @@ fn run_helper_command(command: &str) -> Result<Output, String> {
                 Err(_) => {
                     return Err(helper_validation_error(
                         i18n::tr("Startup stage", "시작 단계"),
-                        i18n::tr("Could not start the Git Bash shell", "Git Bash 셸을 시작할 수 없습니다"),
+                        i18n::tr(
+                            "Could not start the Git Bash shell",
+                            "Git Bash 셸을 시작할 수 없습니다",
+                        ),
                     ));
                 }
             }
         }
         Err(helper_validation_error(
             i18n::tr("Startup stage", "시작 단계"),
-            i18n::tr("Git Bash bash.exe not found", "Git Bash bash.exe를 찾을 수 없습니다"),
+            i18n::tr(
+                "Git Bash bash.exe not found",
+                "Git Bash bash.exe를 찾을 수 없습니다",
+            ),
         ))
     }
     #[cfg(target_os = "macos")]
@@ -971,7 +1047,10 @@ fn run_helper_command(command: &str) -> Result<Output, String> {
                 Err(_) => {
                     return Err(helper_validation_error(
                         i18n::tr("Startup stage", "시작 단계"),
-                        i18n::tr("Could not run the helper with Node.js", "Node.js로 helper를 실행할 수 없습니다"),
+                        i18n::tr(
+                            "Could not run the helper with Node.js",
+                            "Node.js로 helper를 실행할 수 없습니다",
+                        ),
                     ));
                 }
             }
@@ -987,7 +1066,12 @@ fn run_helper_command(command: &str) -> Result<Output, String> {
             .arg("-c")
             .arg(command)
             .output()
-            .map_err(|_| helper_validation_error(i18n::tr("Startup stage", "시작 단계"), i18n::tr("Could not start /bin/sh", "/bin/sh를 시작할 수 없습니다")))
+            .map_err(|_| {
+                helper_validation_error(
+                    i18n::tr("Startup stage", "시작 단계"),
+                    i18n::tr("Could not start /bin/sh", "/bin/sh를 시작할 수 없습니다"),
+                )
+            })
     }
 }
 
@@ -1256,7 +1340,15 @@ fn install_env_auth() -> Result<Value, String> {
     let active = state_account_index(&state, &accounts)
         .and_then(|(index, _)| accounts.get(index))
         .or_else(|| accounts.first())
-        .ok_or_else(|| auth_config_error(i18n::tr("Account stage", "계정 단계"), i18n::tr("There is currently no account available for CodeBuddy CLI", "현재 CodeBuddy CLI에서 사용할 수 있는 계정이 없습니다")))?;
+        .ok_or_else(|| {
+            auth_config_error(
+                i18n::tr("Account stage", "계정 단계"),
+                i18n::tr(
+                    "There is currently no account available for CodeBuddy CLI",
+                    "현재 CodeBuddy CLI에서 사용할 수 있는 계정이 없습니다",
+                ),
+            )
+        })?;
     ensure_region_env_compatible(WbVariant::from_account(active))?;
     let token = settings_account_token(active)?;
     let (previous_settings, settings_value) =
@@ -1301,7 +1393,11 @@ pub fn install_helper() -> Result<Value, String> {
             && !same_path(&current, &legacy_target, cfg!(windows))
             && !same_path(&current, &legacy_windows_target, cfg!(windows))
         {
-            return Err(i18n::tr("Another CodeBuddy CLI helper already exists; please confirm before replacing it", "다른 CodeBuddy CLI helper가 이미 있습니다. 확인한 후 교체해 주세요").to_string());
+            return Err(i18n::tr(
+                "Another CodeBuddy CLI helper already exists; please confirm before replacing it",
+                "다른 CodeBuddy CLI helper가 이미 있습니다. 확인한 후 교체해 주세요",
+            )
+            .to_string());
         }
     }
 
@@ -1309,20 +1405,36 @@ pub fn install_helper() -> Result<Value, String> {
     let previous_settings = std::fs::read_to_string(&settings).ok();
     let previous_logic = std::fs::read_to_string(&logic_target).ok();
     let mut settings_value = if let Some(content) = previous_settings.as_ref() {
-        serde_json::from_str(content).map_err(|_| i18n::tr("CodeBuddy settings.json is not valid JSON", "CodeBuddy settings.json이 올바른 JSON이 아닙니다"))?
+        serde_json::from_str(content).map_err(|_| {
+            i18n::tr(
+                "CodeBuddy settings.json is not valid JSON",
+                "CodeBuddy settings.json이 올바른 JSON이 아닙니다",
+            )
+        })?
     } else {
         json!({})
     };
     if !settings_value.is_object() {
-        return Err(i18n::tr("CodeBuddy settings.json top level is not an object", "CodeBuddy settings.json의 최상위가 객체가 아닙니다").to_string());
+        return Err(i18n::tr(
+            "CodeBuddy settings.json top level is not an object",
+            "CodeBuddy settings.json의 최상위가 객체가 아닙니다",
+        )
+        .to_string());
     }
 
     std::fs::create_dir_all(rotate_dir()).map_err(|_| {
         helper_validation_error(i18n::tr("Installation stage", "설치 단계"), i18n::tr("Could not create the helper directory; please check permissions on your home directory", "helper 디렉터리를 만들 수 없습니다. 홈 디렉터리 권한을 확인해 주세요"))
     })?;
     // 各平台都直接配置这份 helper.cjs。
-    atomic_write(&logic_target, STANDARD_HELPER)
-        .map_err(|_| helper_validation_error(i18n::tr("Installation stage", "설치 단계"), i18n::tr("Could not write helper.cjs; please check file permissions", "helper.cjs를 쓸 수 없습니다. 파일 권한을 확인해 주세요")))?;
+    atomic_write(&logic_target, STANDARD_HELPER).map_err(|_| {
+        helper_validation_error(
+            i18n::tr("Installation stage", "설치 단계"),
+            i18n::tr(
+                "Could not write helper.cjs; please check file permissions",
+                "helper.cjs를 쓸 수 없습니다. 파일 권한을 확인해 주세요",
+            ),
+        )
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1331,7 +1443,10 @@ pub fn install_helper() -> Result<Value, String> {
             restore_file(&logic_target, previous_logic.as_deref());
             return Err(helper_validation_error(
                 i18n::tr("Installation stage", "설치 단계"),
-                i18n::tr("Could not set helper execute permission", "helper 실행 권한을 설정할 수 없습니다"),
+                i18n::tr(
+                    "Could not set helper execute permission",
+                    "helper 실행 권한을 설정할 수 없습니다",
+                ),
             ));
         }
     }
@@ -1353,7 +1468,10 @@ pub fn install_helper() -> Result<Value, String> {
             restore_file(&logic_target, previous_logic.as_deref());
             return Err(helper_validation_error(
                 i18n::tr("Configuration stage", "구성 단계"),
-                i18n::tr("Could not generate CodeBuddy settings.json", "CodeBuddy settings.json을 생성할 수 없습니다"),
+                i18n::tr(
+                    "Could not generate CodeBuddy settings.json",
+                    "CodeBuddy settings.json을 생성할 수 없습니다",
+                ),
             ));
         }
     };
@@ -1370,7 +1488,10 @@ pub fn install_helper() -> Result<Value, String> {
         restore_file(&logic_target, previous_logic.as_deref());
         return Err(helper_validation_error(
             i18n::tr("Configuration stage", "구성 단계"),
-            i18n::tr("Could not write CodeBuddy settings.json; please check file permissions", "CodeBuddy settings.json을 쓸 수 없습니다. 파일 권한을 확인해 주세요"),
+            i18n::tr(
+                "Could not write CodeBuddy settings.json; please check file permissions",
+                "CodeBuddy settings.json을 쓸 수 없습니다. 파일 권한을 확인해 주세요",
+            ),
         ));
     }
 
@@ -1493,7 +1614,15 @@ pub fn switch_active_account(account_id: &str) -> Result<Value, String> {
         // helper 校验必须在 state 写完之后：helper 是照 `state.json` 选 token 的，
         // 先校验等于拿旧账号去比对新账号。
         let validation = helper_command()
-            .ok_or_else(|| helper_validation_error(i18n::tr("Configuration stage", "구성 단계"), i18n::tr("apiKeyHelper configuration is empty", "apiKeyHelper 구성이 비어 있습니다")))
+            .ok_or_else(|| {
+                helper_validation_error(
+                    i18n::tr("Configuration stage", "구성 단계"),
+                    i18n::tr(
+                        "apiKeyHelper configuration is empty",
+                        "apiKeyHelper 구성이 비어 있습니다",
+                    ),
+                )
+            })
             .and_then(|command| validate_helper_for_account(&command, &accounts[index]))
             .and_then(|_| persist_cli_region_env(variant));
         if let Err(error) = validation {
@@ -1767,7 +1896,10 @@ mod tests {
 
         // 没有关到进程时不追加那句话（错误保持原样）。
         let error = close_then_write_state(&state_file, "{}", || (false, 0)).unwrap_err();
-        assert!(!error.contains("were closed"), "无进程可关时不追加: {error}");
+        assert!(
+            !error.contains("were closed"),
+            "无进程可关时不追加: {error}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

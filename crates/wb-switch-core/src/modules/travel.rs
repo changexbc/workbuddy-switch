@@ -404,7 +404,10 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
             config
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or(i18n::tr("Could not read the travel configuration", "여행 설정을 읽지 못했습니다")),
+                .unwrap_or(i18n::tr(
+                    "Could not read the travel configuration",
+                    "여행 설정을 읽지 못했습니다",
+                )),
         );
     }
     let locations = config
@@ -519,7 +522,15 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
             i18n::tr("Location unavailable", "장소를 사용할 수 없습니다"),
         )
     } else {
-        depart_result(&acc, uid_ref, false, false, Some("error"), None, i18n::tr("Dispatch failed", "파견에 실패했습니다"))
+        depart_result(
+            &acc,
+            uid_ref,
+            false,
+            false,
+            Some("error"),
+            None,
+            i18n::tr("Dispatch failed", "파견에 실패했습니다"),
+        )
     }
 }
 
@@ -578,7 +589,10 @@ fn apply_daily_limit_reached(result: &mut Value, status: &Value) {
     result["skip"] = json!("daily-limit");
     result["claimed"] = json!(true);
     result["state"] = json!("idle");
-    result["message"] = json!(i18n::tr("Already dispatched today", "오늘은 이미 파견했습니다"));
+    result["message"] = json!(i18n::tr(
+        "Already dispatched today",
+        "오늘은 이미 파견했습니다"
+    ));
     if result.get("claimedAt").and_then(Value::as_i64).unwrap_or(0) == 0 {
         result["claimedAt"] = json!(now_ms());
     }
@@ -698,7 +712,10 @@ async fn claim_travel_for_account(account: &Value, prior: &Value) -> Value {
         result["message"] = json!(status
             .get("error")
             .and_then(Value::as_str)
-            .unwrap_or(i18n::tr("Could not query the travel status", "여행 상태를 조회하지 못했습니다")));
+            .unwrap_or(i18n::tr(
+                "Could not query the travel status",
+                "여행 상태를 조회하지 못했습니다"
+            )));
         return result;
     }
 
@@ -756,7 +773,11 @@ async fn apply_claim_response(account: &Value, result: &mut Value, record_id: i6
         .unwrap_or("")
         .to_lowercase();
     if raw.contains("no unclaimed travel") || raw.contains("daily_limit") {
-        mark_claimed(result, None, Some(i18n::tr("Claimed (web)", "수령 완료(웹)")));
+        mark_claimed(
+            result,
+            None,
+            Some(i18n::tr("Claimed (web)", "수령 완료(웹)")),
+        );
     } else if raw.contains("not arrived yet") {
         result["claimed"] = json!(false);
         result["ok"] = json!(true);
@@ -785,7 +806,10 @@ async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Va
             status
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or(i18n::tr("Could not query the travel status", "여행 상태를 조회하지 못했습니다")),
+                .unwrap_or(i18n::tr(
+                    "Could not query the travel status",
+                    "여행 상태를 조회하지 못했습니다",
+                )),
         );
     }
 
@@ -810,7 +834,15 @@ async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Va
         }
         TravelAction::Claim => {
             let stub = prior.cloned().unwrap_or_else(|| {
-                depart_result(&acc, uid_ref, true, true, None, Some("arrived"), i18n::tr("Arrived", "도착했습니다"))
+                depart_result(
+                    &acc,
+                    uid_ref,
+                    true,
+                    true,
+                    None,
+                    Some("arrived"),
+                    i18n::tr("Arrived", "도착했습니다"),
+                )
             });
             claim_travel_for_account(account, &stub).await
         }
@@ -1067,7 +1099,10 @@ mod tests {
         let resp = travel_request("/whatever", "POST", Some(json!({})), &account).await;
         assert_eq!(resp["code"], -2);
         let msg = resp["message"].as_str().expect("message 应为字符串");
-        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
+        assert!(
+            msg.contains("encrypted WorkBuddy envelope"),
+            "错误文案应可读：{msg}"
+        );
     }
 
     #[test]

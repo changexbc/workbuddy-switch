@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use crate::modules::auth_file;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::modules::config;
-use crate::modules::variant::WbVariant;
 use crate::modules::i18n;
+use crate::modules::variant::WbVariant;
 
 /// 创建子进程命令。Windows 上加 CREATE_NO_WINDOW，避免每次执行 tasklist/powershell
 /// 等控制台命令时闪出 cmd 黑窗口（GUI 应用卡顿/跳动的主因）。
@@ -1005,14 +1005,8 @@ fn validate_macos_startup(
                     if due {
                         last_beat = Some(now);
                         say(&i18n::pick(
-                            format!(
-                                "Running steadily for {}s / 10s…",
-                                since_seen.as_secs()
-                            ),
-                            format!(
-                                "{}초 / 10초 동안 안정적으로 실행 중…",
-                                since_seen.as_secs()
-                            ),
+                            format!("Running steadily for {}s / 10s…", since_seen.as_secs()),
+                            format!("{}초 / 10초 동안 안정적으로 실행 중…", since_seen.as_secs()),
                         ));
                     }
                 }

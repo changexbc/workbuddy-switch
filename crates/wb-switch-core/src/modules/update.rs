@@ -211,7 +211,11 @@ async fn fetch_latest_tag(
     if status == 404 {
         // 无正式 release 或仓库不存在。
         return Err((
-            i18n::tr("No available release found", "사용 가능한 릴리스가 없습니다").to_string(),
+            i18n::tr(
+                "No available release found",
+                "사용 가능한 릴리스가 없습니다",
+            )
+            .to_string(),
             404,
         ));
     }

@@ -21,9 +21,9 @@ use crate::modules::codebuddy_cn_ide;
 use crate::modules::codebuddy_ide;
 use crate::modules::codebuddy_ide_session_sync;
 use crate::modules::config::{backup_dir, utc_iso};
+use crate::modules::i18n;
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::vscode_session::{self, CopyItem, CODEBUDDY_IDE_STORE, IDE_COPY};
-use crate::modules::i18n;
 
 /// 会话复制 / 同步的 IDE 档位。
 ///
@@ -251,10 +251,19 @@ fn switch_ide_with_copy(
     if items.is_empty() && sync_selections.is_empty() {
         return flavor.switch_account(account_id, restart);
     }
-    let acc =
-        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
-    let target_uid = get_str(&acc, "uid")
-        .ok_or_else(|| i18n::tr("The account has no uid, so the CodeBuddy IDE session directory cannot be located", "계정에 uid가 없어 CodeBuddy IDE 세션 디렉터리를 찾을 수 없습니다").to_string())?;
+    let acc = account::find_account(account_id).ok_or_else(|| {
+        i18n::pick(
+            format!("Account not found: {account_id}"),
+            format!("계정을 찾을 수 없습니다: {account_id}"),
+        )
+    })?;
+    let target_uid = get_str(&acc, "uid").ok_or_else(|| {
+        i18n::tr(
+            "The account has no uid, so the CodeBuddy IDE session directory cannot be located",
+            "계정에 uid가 없어 CodeBuddy IDE 세션 디렉터리를 찾을 수 없습니다",
+        )
+        .to_string()
+    })?;
 
     // 与对应档位的 `switch_account` 同序：先把「注定失败」的目标挡在关闭之前。
     let (_, data_dir) = flavor.validate_switch_target(account_id)?;
@@ -285,7 +294,11 @@ fn switch_ide_with_copy(
         }
         match flavor.active_uid() {
             Some(uid) if uid == target_uid => {
-                return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
+                return Err(i18n::tr(
+                    "The source and target accounts are the same; no need to copy sessions",
+                    "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다",
+                )
+                .to_string());
             }
             None if !ide_running => {
                 return Err(
@@ -317,7 +330,11 @@ fn switch_ide_with_copy(
         };
         if source_uid == target_uid {
             relaunch_if_closed(flavor, closed);
-            return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
+            return Err(i18n::tr(
+                "The source and target accounts are the same; no need to copy sessions",
+                "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다",
+            )
+            .to_string());
         }
         match copy_codebuddy_ide_sessions(&root, &source_uid, &target_uid, items) {
             Ok(mut report) => {
@@ -378,10 +395,16 @@ fn switch_ide_with_copy(
         Err(error) => {
             let mut done: Vec<String> = Vec::new();
             if copied > 0 {
-                done.push(i18n::pick(format!("Copied {copied} sessions to the target account"), format!("세션 {copied}개를 대상 계정으로 복사했습니다")));
+                done.push(i18n::pick(
+                    format!("Copied {copied} sessions to the target account"),
+                    format!("세션 {copied}개를 대상 계정으로 복사했습니다"),
+                ));
             }
             if synced > 0 {
-                done.push(i18n::pick(format!("Synced {synced} sessions"), format!("세션 {synced}개를 동기화했습니다")));
+                done.push(i18n::pick(
+                    format!("Synced {synced} sessions"),
+                    format!("세션 {synced}개를 동기화했습니다"),
+                ));
             }
             let error = if done.is_empty() {
                 error
@@ -883,7 +906,10 @@ mod tests {
         let errors = report.get("errors").and_then(Value::as_array).unwrap();
         assert_eq!(errors.len(), 1);
         let message = errors[0].get("error").and_then(Value::as_str).unwrap();
-        assert!(message.contains("Could not write the temporary session directory"), "{message}");
+        assert!(
+            message.contains("Could not write the temporary session directory"),
+            "{message}"
+        );
     }
 
     /// 时序：目标校验必须在关闭 IDE **之前**失败——账号不存在时不触发任何进程操作。

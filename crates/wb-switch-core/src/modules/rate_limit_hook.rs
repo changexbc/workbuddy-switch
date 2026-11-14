@@ -581,15 +581,13 @@ fn install_target(
 ) -> Result<(), String> {
     let original = std::fs::read_to_string(&target.settings).ok();
     let current = match &original {
-        Some(text) => Some(
-            serde_json::from_str::<Value>(text).map_err(|_| {
-                i18n::tr(
-                    "Not valid JSON; skipped without making any changes",
-                    "올바른 JSON이 아니어서 건너뛰었습니다(변경 사항 없음)",
-                )
-                .to_string()
-            })?,
-        ),
+        Some(text) => Some(serde_json::from_str::<Value>(text).map_err(|_| {
+            i18n::tr(
+                "Not valid JSON; skipped without making any changes",
+                "올바른 JSON이 아니어서 건너뛰었습니다(변경 사항 없음)",
+            )
+            .to_string()
+        })?),
         None => None,
     };
     // 备份基线：本次安装「除了本工具条目之外」的内容。

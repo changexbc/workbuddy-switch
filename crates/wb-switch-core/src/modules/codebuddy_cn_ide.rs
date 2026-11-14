@@ -17,10 +17,10 @@ use crate::modules::config::{
 };
 // 复用 process 模块带并发管道读取的正确实现；本地轮询版会在子进程输出
 // 超过 64KB（如 `ps -axo pid=,args=`）时因管道写满而死锁到超时。
+use crate::modules::i18n;
 use crate::modules::process;
 use crate::modules::process::run_cmd_timeout as run_cmd;
 use crate::modules::variant::codebuddy_domain_for;
-use crate::modules::i18n;
 use crate::modules::vscode_cn_inject::{
     codebuddy_cn_data_dir, codebuddy_cn_state_db_path, has_secret_row_for,
     inject_codebuddy_cn_secret, read_codebuddy_cn_secret, CODEBUDDY_CN_TARGET,
@@ -1119,22 +1119,35 @@ fn launch_codebuddy_cn_macos() -> Result<(), String> {
         Some(out) => {
             let reason = String::from_utf8_lossy(&out.stderr).trim().to_string();
             let reason = if reason.is_empty() {
-                i18n::pick(format!("open exited with code {}", out.status.code().unwrap_or(-1)), format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)))
+                i18n::pick(
+                    format!("open exited with code {}", out.status.code().unwrap_or(-1)),
+                    format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)),
+                )
             } else {
                 reason
             };
-            return Err(i18n::pick(format!("Could not start CodeBuddy CN: {reason} (path: {})",
-                app.display()
-            ), format!("CodeBuddy CN을 시작하지 못했습니다: {reason}(경로: {})",
-                app.display()
-            )));
+            return Err(i18n::pick(
+                format!(
+                    "Could not start CodeBuddy CN: {reason} (path: {})",
+                    app.display()
+                ),
+                format!(
+                    "CodeBuddy CN을 시작하지 못했습니다: {reason}(경로: {})",
+                    app.display()
+                ),
+            ));
         }
         None => {
-            return Err(i18n::pick(format!("Could not start CodeBuddy CN: open timed out (path: {})",
-                app.display()
-            ), format!("CodeBuddy CN을 시작하지 못했습니다: open 시간 초과(경로: {})",
-                app.display()
-            )));
+            return Err(i18n::pick(
+                format!(
+                    "Could not start CodeBuddy CN: open timed out (path: {})",
+                    app.display()
+                ),
+                format!(
+                    "CodeBuddy CN을 시작하지 못했습니다: open 시간 초과(경로: {})",
+                    app.display()
+                ),
+            ));
         }
     }
 
@@ -1163,7 +1176,18 @@ pub fn launch_codebuddy_cn() -> Result<(), String> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|e| i18n::pick(format!("Could not start CodeBuddy CN: {e} (path: {})", exe.display()), format!("CodeBuddy CN을 시작하지 못했습니다: {e}(경로: {})", exe.display())))?;
+            .map_err(|e| {
+                i18n::pick(
+                    format!(
+                        "Could not start CodeBuddy CN: {e} (path: {})",
+                        exe.display()
+                    ),
+                    format!(
+                        "CodeBuddy CN을 시작하지 못했습니다: {e}(경로: {})",
+                        exe.display()
+                    ),
+                )
+            })?;
         Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1175,7 +1199,18 @@ pub fn launch_codebuddy_cn() -> Result<(), String> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|e| i18n::pick(format!("Could not start CodeBuddy CN: {e} (path: {})", exe.display()), format!("CodeBuddy CN을 시작하지 못했습니다: {e}(경로: {})", exe.display())))?;
+            .map_err(|e| {
+                i18n::pick(
+                    format!(
+                        "Could not start CodeBuddy CN: {e} (path: {})",
+                        exe.display()
+                    ),
+                    format!(
+                        "CodeBuddy CN을 시작하지 못했습니다: {e}(경로: {})",
+                        exe.display()
+                    ),
+                )
+            })?;
         Ok(())
     }
 }
@@ -1238,16 +1273,34 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
 /// 必须在关闭 IDE **之前**执行：账号不存在、token 为空、数据目录缺失这类「无论怎么关都
 /// 注定失败」的目标，不该让用户的 IDE 被关掉。幂等且廉价，注入前会再次使用返回的数据目录。
 pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf), String> {
-    let acc =
-        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
-    let token = get_str(&acc, "access_token")
-        .ok_or_else(|| i18n::tr("The account has no access_token, so CodeBuddy CN cannot be injected", "계정에 access_token이 없어 CodeBuddy CN에 주입할 수 없습니다").to_string())?;
+    let acc = account::find_account(account_id).ok_or_else(|| {
+        i18n::pick(
+            format!("Account not found: {account_id}"),
+            format!("계정을 찾을 수 없습니다: {account_id}"),
+        )
+    })?;
+    let token = get_str(&acc, "access_token").ok_or_else(|| {
+        i18n::tr(
+            "The account has no access_token, so CodeBuddy CN cannot be injected",
+            "계정에 access_token이 없어 CodeBuddy CN에 주입할 수 없습니다",
+        )
+        .to_string()
+    })?;
     if token.is_empty() {
-        return Err(i18n::tr("The account access_token is empty", "계정 access_token이 비어 있습니다").to_string());
+        return Err(i18n::tr(
+            "The account access_token is empty",
+            "계정 access_token이 비어 있습니다",
+        )
+        .to_string());
     }
 
-    let data_dir =
-        codebuddy_cn_data_dir().ok_or_else(|| i18n::tr("Could not locate the CodeBuddy CN data directory", "CodeBuddy CN 데이터 디렉터리를 찾지 못했습니다").to_string())?;
+    let data_dir = codebuddy_cn_data_dir().ok_or_else(|| {
+        i18n::tr(
+            "Could not locate the CodeBuddy CN data directory",
+            "CodeBuddy CN 데이터 디렉터리를 찾지 못했습니다",
+        )
+        .to_string()
+    })?;
     if !data_dir.exists() {
         return Err(i18n::pick(format!("CodeBuddy CN user data directory not found ({}). Open CodeBuddy CN and sign in once.",
             data_dir.display()
@@ -1329,7 +1382,11 @@ pub fn detect_current_account() -> Result<Value, String> {
         }));
     };
     let Some((uid, token)) = parse_token_from_secret(&secret) else {
-        return Err(i18n::tr("Could not parse the local CodeBuddy CN sign-in information", "로컬 CodeBuddy CN 로그인 정보를 해석하지 못했습니다").to_string());
+        return Err(i18n::tr(
+            "Could not parse the local CodeBuddy CN sign-in information",
+            "로컬 CodeBuddy CN 로그인 정보를 해석하지 못했습니다",
+        )
+        .to_string());
     };
     if let Some(acc) = match_account_for_token(uid.as_deref(), &token) {
         let id = get_str(&acc, "id").unwrap_or_default();

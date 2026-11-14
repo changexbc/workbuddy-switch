@@ -152,7 +152,8 @@ pub async fn oauth_poll(login_id: &str) -> Value {
         }
         if now_secs() > info.expires_at {
             info.done = true;
-            info.error = Some(i18n::tr("Login timed out", "로그인 시간이 초과되었습니다").to_string());
+            info.error =
+                Some(i18n::tr("Login timed out", "로그인 시간이 초과되었습니다").to_string());
             return json!({"done": true, "error": i18n::tr("Login timed out", "로그인 시간이 초과되었습니다")});
         }
         // 用发起档位拼域名与 platform，不跟随当前列表档位。

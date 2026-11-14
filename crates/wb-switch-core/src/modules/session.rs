@@ -535,7 +535,11 @@ pub(crate) fn find_project_jsonl(paths: &SessionPaths, cid: &str) -> Option<Path
 fn backup_workbuddy_db(paths: &SessionPaths, backup_root: &Path) -> Result<PathBuf, String> {
     let db = paths.workbuddy_db();
     if !db.is_file() {
-        return Err(i18n::tr("Session data not found, nothing was copied", "세션 데이터가 없어 복사하지 않았습니다").to_string());
+        return Err(i18n::tr(
+            "Session data not found, nothing was copied",
+            "세션 데이터가 없어 복사하지 않았습니다",
+        )
+        .to_string());
     }
     std::fs::create_dir_all(backup_root).map_err(|error| {
         i18n::pick(
@@ -561,8 +565,12 @@ fn backup_workbuddy_db(paths: &SessionPaths, backup_root: &Path) -> Result<PathB
         );
         if src_len != dest_len {
             return Err(i18n::pick(
-                format!("Backup of {suffix} failed verification: size mismatch, nothing was copied"),
-                format!("{suffix} 백업 검증에 실패했습니다: 크기가 일치하지 않아 복사하지 않았습니다"),
+                format!(
+                    "Backup of {suffix} failed verification: size mismatch, nothing was copied"
+                ),
+                format!(
+                    "{suffix} 백업 검증에 실패했습니다: 크기가 일치하지 않아 복사하지 않았습니다"
+                ),
             ));
         }
     }
@@ -614,7 +622,11 @@ fn insert_session_copy(
     let source_row = if src_db.is_file() {
         // 同档沿用读写连接（与改造前一致）；跨档对源档只读，不触碰源档 WAL 恢复。
         let Some(conn) = open_db(&src_db, !same_db) else {
-            return Err(i18n::tr("Session data could not be opened", "세션 데이터를 열 수 없습니다").to_string());
+            return Err(i18n::tr(
+                "Session data could not be opened",
+                "세션 데이터를 열 수 없습니다",
+            )
+            .to_string());
         };
         if !table_exists(&conn, "sessions") {
             return Ok(DbCopyOutcome::NoSessionsTable);
@@ -628,7 +640,11 @@ fn insert_session_copy(
     };
 
     let Some(conn) = open_db(&dst_db, false) else {
-        return Err(i18n::tr("Session data could not be opened", "세션 데이터를 열 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "Session data could not be opened",
+            "세션 데이터를 열 수 없습니다",
+        )
+        .to_string());
     };
     if !table_exists(&conn, "sessions") {
         return Ok(DbCopyOutcome::NoSessionsTable);
@@ -668,7 +684,12 @@ fn insert_session_copy(
     let sql = format!("INSERT INTO sessions ({colnames}) VALUES ({placeholders})");
     let params: Vec<&rusqlite::types::Value> = vals.iter().collect();
     conn.execute(&sql, rusqlite::params_from_iter(params))
-        .map_err(|e| i18n::pick(format!("Failed to save the session record: {e}"), format!("세션 기록을 저장하지 못했습니다: {e}")))?;
+        .map_err(|e| {
+            i18n::pick(
+                format!("Failed to save the session record: {e}"),
+                format!("세션 기록을 저장하지 못했습니다: {e}"),
+            )
+        })?;
     Ok(DbCopyOutcome::Inserted)
 }
 
@@ -713,8 +734,15 @@ fn session_table_columns(conn: &Connection) -> Result<Vec<String>, String> {
 fn verify_session_row(paths: &SessionPaths, new_cid: &str, target_uid: &str) -> Result<(), String> {
     match session_row_owner(paths, new_cid) {
         Some(owner) if owner == target_uid => Ok(()),
-        Some(owner) => Err(i18n::pick(format!("Session record ownership check failed: expected {target_uid}, found {owner}"), format!("세션 기록 소유권 검사에 실패했습니다: 예상 {target_uid}, 실제 {owner}"))),
-        None => Err(i18n::tr("The session record is not visible after saving and was not treated as a success", "세션 기록이 저장 후 조회되지 않아 성공으로 처리하지 않았습니다").to_string()),
+        Some(owner) => Err(i18n::pick(
+            format!("Session record ownership check failed: expected {target_uid}, found {owner}"),
+            format!("세션 기록 소유권 검사에 실패했습니다: 예상 {target_uid}, 실제 {owner}"),
+        )),
+        None => Err(i18n::tr(
+            "The session record is not visible after saving and was not treated as a success",
+            "세션 기록이 저장 후 조회되지 않아 성공으로 처리하지 않았습니다",
+        )
+        .to_string()),
     }
 }
 
@@ -755,11 +783,19 @@ pub fn copy_sessions_cross(
     let target_paths = SessionPaths::for_variant(target_variant);
     let source_uid = account_uid(source_acc);
     if source_uid.is_empty() {
-        return Err(i18n::tr("The source account has no uid, so sessions cannot be copied", "원본 계정에 uid가 없어 세션을 복사할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The source account has no uid, so sessions cannot be copied",
+            "원본 계정에 uid가 없어 세션을 복사할 수 없습니다",
+        )
+        .to_string());
     }
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
-        return Err(i18n::tr("The target account has no uid, so sessions cannot be copied", "대상 계정에 uid가 없어 세션을 복사할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The target account has no uid, so sessions cannot be copied",
+            "대상 계정에 uid가 없어 세션을 복사할 수 없습니다",
+        )
+        .to_string());
     }
     let source = CopySide {
         paths: &source_paths,
@@ -810,7 +846,11 @@ fn copy_sessions_cross_at(
     ensure_session_copy_supported(source.paths, source.variant)?;
     ensure_session_copy_supported(target.paths, target.variant)?;
     if source.variant == target.variant && source.uid == target.uid {
-        return Err(i18n::tr("The source and target accounts are the same, so there is nothing to copy", "원본 계정과 대상 계정이 같아 복사할 세션이 없습니다").to_string());
+        return Err(i18n::tr(
+            "The source and target accounts are the same, so there is nothing to copy",
+            "원본 계정과 대상 계정이 같아 복사할 세션이 없습니다",
+        )
+        .to_string());
     }
     run_copy(
         &source,
@@ -838,12 +878,25 @@ fn copy_sessions_for_switch_at(
     ensure_session_copy_supported(paths, variant)?;
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
-        return Err(i18n::tr("The target account has no uid, so sessions cannot be copied", "대상 계정에 uid가 없어 세션을 복사할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The target account has no uid, so sessions cannot be copied",
+            "대상 계정에 uid가 없어 세션을 복사할 수 없습니다",
+        )
+        .to_string());
     }
-    let source_uid = current_user_uid_at(&paths.auth_file)
-        .ok_or_else(|| i18n::tr("Could not read the local login state, so the source account is unknown", "로컬 로그인 상태를 읽지 못해 원본 계정을 확인할 수 없습니다").to_string())?;
+    let source_uid = current_user_uid_at(&paths.auth_file).ok_or_else(|| {
+        i18n::tr(
+            "Could not read the local login state, so the source account is unknown",
+            "로컬 로그인 상태를 읽지 못해 원본 계정을 확인할 수 없습니다",
+        )
+        .to_string()
+    })?;
     if source_uid == target_uid {
-        return Err(i18n::tr("The current account is the same as the target account, so there is nothing to copy", "현재 계정이 대상 계정과 같아 복사할 세션이 없습니다").to_string());
+        return Err(i18n::tr(
+            "The current account is the same as the target account, so there is nothing to copy",
+            "현재 계정이 대상 계정과 같아 복사할 세션이 없습니다",
+        )
+        .to_string());
     }
     // 同档路径的源恒为当前登录账号、且上面已拦同账号，因此这里对"目标=当前登录"
     // 恒为放行；保留统一门禁只为与其他写入入口共用同一条规则。
@@ -880,12 +933,12 @@ fn copy_sessions_for_switch_at(
 fn ensure_session_copy_supported(paths: &SessionPaths, variant: WbVariant) -> Result<(), String> {
     if variant == WbVariant::Ai && !session_copy_supported_at(&paths.data_root) {
         return Err(i18n::pick(
-            format!("{} (variant {})", session_copy_unsupported(), variant.as_str()),
             format!(
-                "{}(변형 {})",
+                "{} (variant {})",
                 session_copy_unsupported(),
                 variant.as_str()
             ),
+            format!("{}(변형 {})", session_copy_unsupported(), variant.as_str()),
         ));
     }
     Ok(())
@@ -1092,7 +1145,10 @@ fn resolve_target(context: &CopyContext, cid: &str) -> Result<TargetResolution, 
         }
         StoreState::Ready(store) => store,
         StoreState::Unavailable(reason) => {
-            return Err(i18n::pick(format!("{reason}; copy blocked"), format!("{reason}; 복사를 차단했습니다")));
+            return Err(i18n::pick(
+                format!("{reason}; copy blocked"),
+                format!("{reason}; 복사를 차단했습니다"),
+            ));
         }
     };
     // 身份查找按**源档**（跨档组的源成员记源档位，组级 variant 不参与判定）。
@@ -1160,26 +1216,49 @@ fn write_copy_body(
 ) -> Result<PathBuf, String> {
     let dest = target_body_path(source_path, source_paths, target_paths, new_cid);
     if dest.exists() {
-        return Err(i18n::tr("The target already has a file with the same name, so copying stopped", "대상에 같은 이름의 파일이 이미 있어 복사를 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The target already has a file with the same name, so copying stopped",
+            "대상에 같은 이름의 파일이 이미 있어 복사를 중단했습니다",
+        )
+        .to_string());
     }
     // 跨档时目标档可能没有该工作区目录（源目录名跨档一致，见 `target_body_path`）。
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| i18n::pick(format!("Failed to create the target workspace directory: {error}"), format!("대상 워크스페이스 디렉터리를 만들지 못했습니다: {error}")))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            i18n::pick(
+                format!("Failed to create the target workspace directory: {error}"),
+                format!("대상 워크스페이스 디렉터리를 만들지 못했습니다: {error}"),
+            )
+        })?;
     }
     let text = snapshot.text.replace(cid, new_cid);
     // 正文属于业务完成门禁：会话专用持久化写（sync_all + 父目录持久化）。
-    session_backup::durable_write_str(&dest, &text)
-        .map_err(|error| i18n::pick(format!("Failed to save the copied content: {error}"), format!("복사한 콘텐츠를 저장하지 못했습니다: {error}")))?;
+    session_backup::durable_write_str(&dest, &text).map_err(|error| {
+        i18n::pick(
+            format!("Failed to save the copied content: {error}"),
+            format!("복사한 콘텐츠를 저장하지 못했습니다: {error}"),
+        )
+    })?;
     match session_link::read_content_snapshot(&dest, new_cid) {
         ContentState::Ready(read_back)
             if read_back.normalized.total_digest == snapshot.normalized.total_digest =>
         {
             Ok(dest)
         }
-        ContentState::Ready(_) => Err(i18n::tr("The copied content failed verification after saving and was not treated as a success", "복사한 콘텐츠가 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다").to_string()),
-        ContentState::Missing => Err(i18n::tr("The copied content is missing after saving and was not treated as a success", "복사한 콘텐츠가 저장 후 존재하지 않아 성공으로 처리하지 않았습니다").to_string()),
-        ContentState::Unavailable(reason) => Err(i18n::pick(format!("The copied content could not be confirmed after saving: {reason}"), format!("복사한 콘텐츠를 저장 후 확인할 수 없습니다: {reason}"))),
+        ContentState::Ready(_) => Err(i18n::tr(
+            "The copied content failed verification after saving and was not treated as a success",
+            "복사한 콘텐츠가 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다",
+        )
+        .to_string()),
+        ContentState::Missing => Err(i18n::tr(
+            "The copied content is missing after saving and was not treated as a success",
+            "복사한 콘텐츠가 저장 후 존재하지 않아 성공으로 처리하지 않았습니다",
+        )
+        .to_string()),
+        ContentState::Unavailable(reason) => Err(i18n::pick(
+            format!("The copied content could not be confirmed after saving: {reason}"),
+            format!("복사한 콘텐츠를 저장 후 확인할 수 없습니다: {reason}"),
+        )),
     }
 }
 
@@ -1195,7 +1274,10 @@ fn ensure_link_store_ready(paths: &SessionPaths) -> Result<(), String> {
             Ok(())
         }
         StoreState::Ready(_) => Ok(()),
-        StoreState::Unavailable(reason) => Err(i18n::pick(format!("{reason}; copy blocked"), format!("{reason}; 복사를 차단했습니다"))),
+        StoreState::Unavailable(reason) => Err(i18n::pick(
+            format!("{reason}; copy blocked"),
+            format!("{reason}; 복사를 차단했습니다"),
+        )),
     }
 }
 
@@ -1231,20 +1313,45 @@ fn copy_one_session(context: &CopyContext, cid: &str) -> Result<CopyOutcome, Str
 
     // 源正文与源行都在源档（跨档时与目标档不同）。
     let Some(source_path) = find_project_jsonl(context.source_paths, cid) else {
-        return Err(i18n::tr("Session content not found, nothing was copied", "세션 콘텐츠가 없어 복사하지 않았습니다").to_string());
+        return Err(i18n::tr(
+            "Session content not found, nothing was copied",
+            "세션 콘텐츠가 없어 복사하지 않았습니다",
+        )
+        .to_string());
     };
     let snapshot = match session_link::read_content_snapshot(&source_path, cid) {
         ContentState::Ready(snapshot) => snapshot,
-        ContentState::Missing => return Err(i18n::tr("Session content not found, nothing was copied", "세션 콘텐츠가 없어 복사하지 않았습니다").to_string()),
+        ContentState::Missing => {
+            return Err(i18n::tr(
+                "Session content not found, nothing was copied",
+                "세션 콘텐츠가 없어 복사하지 않았습니다",
+            )
+            .to_string())
+        }
         ContentState::Unavailable(reason) => {
-            return Err(i18n::pick(format!("Session content could not be verified ({reason}), nothing was copied"), format!("세션 콘텐츠를 검증할 수 없어({reason}) 복사하지 않았습니다")));
+            return Err(i18n::pick(
+                format!("Session content could not be verified ({reason}), nothing was copied"),
+                format!("세션 콘텐츠를 검증할 수 없어({reason}) 복사하지 않았습니다"),
+            ));
         }
     };
     let source_owner = session_row_owner(context.source_paths, cid);
     match source_owner.as_deref() {
         Some(owner) if owner == context.source_uid => {}
-        Some(_) => return Err(i18n::tr("The source session does not belong to the current account, nothing was copied", "원본 세션이 현재 계정 소유가 아니어서 복사하지 않았습니다").to_string()),
-        None => return Err(i18n::tr("The source session record is not in the database, nothing was copied", "데이터베이스에서 원본 세션 기록을 찾지 못해 복사하지 않았습니다").to_string()),
+        Some(_) => {
+            return Err(i18n::tr(
+                "The source session does not belong to the current account, nothing was copied",
+                "원본 세션이 현재 계정 소유가 아니어서 복사하지 않았습니다",
+            )
+            .to_string())
+        }
+        None => {
+            return Err(i18n::tr(
+                "The source session record is not in the database, nothing was copied",
+                "데이터베이스에서 원본 세션 기록을 찾지 못해 복사하지 않았습니다",
+            )
+            .to_string())
+        }
     }
 
     let resolution = resolve_target(context, cid)?;
@@ -1351,7 +1458,10 @@ fn finish_backup_cleanup(
     if let Err(error) = session_backup::mark_cleanup_pending(paths, lifecycle, None) {
         // 业务已完成、维护记录仍是 protected：下次维护按 Completed 补转后清理。
         return CleanupOutcome::Pending {
-            reason: i18n::pick(format!("Failed to advance the cleanup state ({error})"), format!("정리 상태를 진행하지 못했습니다({error})")),
+            reason: i18n::pick(
+                format!("Failed to advance the cleanup state ({error})"),
+                format!("정리 상태를 진행하지 못했습니다({error})"),
+            ),
         };
     }
     session_backup::cleanup_after_success(paths, variant, lifecycle)
@@ -1438,10 +1548,26 @@ fn finish_copy_from_body(
     )? {
         DbCopyOutcome::Inserted => {}
         DbCopyOutcome::SourceRowMissing => {
-            return Err(i18n::tr("The source session record is not in the database, nothing was copied", "데이터베이스에서 원본 세션 기록을 찾지 못해 복사하지 않았습니다").to_string())
+            return Err(i18n::tr(
+                "The source session record is not in the database, nothing was copied",
+                "데이터베이스에서 원본 세션 기록을 찾지 못해 복사하지 않았습니다",
+            )
+            .to_string())
         }
-        DbCopyOutcome::NoSessionsTable => return Err(i18n::tr("Session data is missing a table, nothing was copied", "세션 데이터에 테이블이 없어 복사하지 않았습니다").to_string()),
-        DbCopyOutcome::NoDb => return Err(i18n::tr("Session data not found, nothing was copied", "세션 데이터가 없어 복사하지 않았습니다").to_string()),
+        DbCopyOutcome::NoSessionsTable => {
+            return Err(i18n::tr(
+                "Session data is missing a table, nothing was copied",
+                "세션 데이터에 테이블이 없어 복사하지 않았습니다",
+            )
+            .to_string())
+        }
+        DbCopyOutcome::NoDb => {
+            return Err(i18n::tr(
+                "Session data not found, nothing was copied",
+                "세션 데이터가 없어 복사하지 않았습니다",
+            )
+            .to_string())
+        }
     }
     verify_session_row(paths, &operation.target.session_id, &operation.target.uid)?;
     advance_operation(paths, operation, OpPhase::DbWritten)?;
@@ -1620,7 +1746,11 @@ fn committed_links_present(paths: &SessionPaths, operation: &Operation) -> Resul
                 .iter()
                 .find(|group| group.id == operation.group_id)
             else {
-                return Err(i18n::tr("The session link is missing, so recovery stopped", "세션 연결 정보가 없어 복구를 중단했습니다").to_string());
+                return Err(i18n::tr(
+                    "The session link is missing, so recovery stopped",
+                    "세션 연결 정보가 없어 복구를 중단했습니다",
+                )
+                .to_string());
             };
             let has_source = session_link::find_member(
                 group,
@@ -1635,11 +1765,19 @@ fn committed_links_present(paths: &SessionPaths, operation: &Operation) -> Resul
             )
             .is_some();
             if !has_source || !has_target {
-                return Err(i18n::tr("The corresponding session is missing, so recovery stopped", "해당 세션이 없어 복구를 중단했습니다").to_string());
+                return Err(i18n::tr(
+                    "The corresponding session is missing, so recovery stopped",
+                    "해당 세션이 없어 복구를 중단했습니다",
+                )
+                .to_string());
             }
             Ok(())
         }
-        StoreState::Missing => Err(i18n::tr("The sync record's main file is missing, so recovery stopped", "동기화 기록의 기본 파일이 없어 복구를 중단했습니다").to_string()),
+        StoreState::Missing => Err(i18n::tr(
+            "The sync record's main file is missing, so recovery stopped",
+            "동기화 기록의 기본 파일이 없어 복구를 중단했습니다",
+        )
+        .to_string()),
         StoreState::Unavailable(reason) => Err(reason),
     }
 }
@@ -1695,17 +1833,30 @@ impl SyncSelection {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|text| !text.is_empty())
-            .ok_or_else(|| i18n::tr("The sync selection is missing groupId", "동기화 선택 항목에 groupId가 없습니다").to_string())?;
+            .ok_or_else(|| {
+                i18n::tr(
+                    "The sync selection is missing groupId",
+                    "동기화 선택 항목에 groupId가 없습니다",
+                )
+                .to_string()
+            })?;
         let preview_token = value
             .get("previewToken")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|text| !text.is_empty())
-            .ok_or_else(|| i18n::pick(format!("The sync selection is missing previewToken (group {group_id})"), format!("동기화 선택 항목에 previewToken이 없습니다(그룹 {group_id})")))?;
-        let mode = value
-            .get("mode")
-            .and_then(Value::as_str)
-            .ok_or_else(|| i18n::pick(format!("The sync selection is missing mode (group {group_id})"), format!("동기화 선택 항목에 mode가 없습니다(그룹 {group_id})")))?;
+            .ok_or_else(|| {
+                i18n::pick(
+                    format!("The sync selection is missing previewToken (group {group_id})"),
+                    format!("동기화 선택 항목에 previewToken이 없습니다(그룹 {group_id})"),
+                )
+            })?;
+        let mode = value.get("mode").and_then(Value::as_str).ok_or_else(|| {
+            i18n::pick(
+                format!("The sync selection is missing mode (group {group_id})"),
+                format!("동기화 선택 항목에 mode가 없습니다(그룹 {group_id})"),
+            )
+        })?;
         Ok(Self {
             group_id: group_id.to_string(),
             preview_token: preview_token.to_string(),
@@ -1723,7 +1874,11 @@ pub fn parse_sync_selections(value: Option<&Value>) -> Result<Vec<SyncSelection>
         return Ok(Vec::new());
     }
     let Some(items) = value.as_array() else {
-        return Err(i18n::tr("syncSelections must be an array", "syncSelections는 배열이어야 합니다").to_string());
+        return Err(i18n::tr(
+            "syncSelections must be an array",
+            "syncSelections는 배열이어야 합니다",
+        )
+        .to_string());
     };
     items.iter().map(SyncSelection::parse).collect()
 }
@@ -1792,10 +1947,19 @@ enum SessionStatus {
 ///
 /// 读失败按 Err 上抛：状态是写入门禁，读不出来就不能声称「不具备归档资格」。
 fn read_member_status(paths: &SessionPaths, cid: &str) -> Result<SessionStatus, String> {
-    let conn = open_db(&paths.workbuddy_db(), true)
-        .ok_or_else(|| i18n::tr("Session data could not be opened, so the session status cannot be read", "세션 데이터를 열 수 없어 세션 상태를 읽을 수 없습니다").to_string())?;
+    let conn = open_db(&paths.workbuddy_db(), true).ok_or_else(|| {
+        i18n::tr(
+            "Session data could not be opened, so the session status cannot be read",
+            "세션 데이터를 열 수 없어 세션 상태를 읽을 수 없습니다",
+        )
+        .to_string()
+    })?;
     if !table_exists(&conn, "sessions") {
-        return Err(i18n::tr("Session data is missing a table, so the session status cannot be read", "세션 데이터에 테이블이 없어 세션 상태를 읽을 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "Session data is missing a table, so the session status cannot be read",
+            "세션 데이터에 테이블이 없어 세션 상태를 읽을 수 없습니다",
+        )
+        .to_string());
     }
     if !column_exists(&conn, "sessions", "status") {
         return Ok(SessionStatus::Unsupported);
@@ -1807,7 +1971,12 @@ fn read_member_status(paths: &SessionPaths, cid: &str) -> Result<SessionStatus, 
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(|error| i18n::pick(format!("Failed to read the session status: {error}"), format!("세션 상태를 읽지 못했습니다: {error}")))?;
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the session status: {error}"),
+                format!("세션 상태를 읽지 못했습니다: {error}"),
+            )
+        })?;
     match row {
         // 行不存在或已软删除：与 Absent 同义。
         None | Some((_, Some(_))) => Ok(SessionStatus::Absent),
@@ -1958,12 +2127,25 @@ fn session_links_preview_at(
 ) -> Result<Value, String> {
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
-        return Err(i18n::tr("The target account has no uid, so sessions cannot be synced", "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The target account has no uid, so sessions cannot be synced",
+            "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다",
+        )
+        .to_string());
     }
-    let source_uid = current_user_uid_at(&paths.auth_file)
-        .ok_or_else(|| i18n::tr("Could not read the local login state, so the source account is unknown", "로컬 로그인 상태를 읽지 못해 원본 계정을 확인할 수 없습니다").to_string())?;
+    let source_uid = current_user_uid_at(&paths.auth_file).ok_or_else(|| {
+        i18n::tr(
+            "Could not read the local login state, so the source account is unknown",
+            "로컬 로그인 상태를 읽지 못해 원본 계정을 확인할 수 없습니다",
+        )
+        .to_string()
+    })?;
     if source_uid == target_uid {
-        return Err(i18n::tr("The current account is the same as the target account, so there is nothing to sync", "현재 계정이 대상 계정과 같아 동기화할 세션이 없습니다").to_string());
+        return Err(i18n::tr(
+            "The current account is the same as the target account, so there is nothing to sync",
+            "현재 계정이 대상 계정과 같아 동기화할 세션이 없습니다",
+        )
+        .to_string());
     }
     // 能力探测与复制同口径：只对国际版生效（国内版数据根与改造前同构）。
     let supported = variant != WbVariant::Ai || session_copy_supported_at(&paths.data_root);
@@ -2039,14 +2221,26 @@ fn session_links_preview_cross_at(
 ) -> Result<Value, String> {
     let source_uid = account_uid(source_acc);
     if source_uid.is_empty() {
-        return Err(i18n::tr("The source account has no uid, so sessions cannot be previewed", "원본 계정에 uid가 없어 세션을 미리 볼 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The source account has no uid, so sessions cannot be previewed",
+            "원본 계정에 uid가 없어 세션을 미리 볼 수 없습니다",
+        )
+        .to_string());
     }
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
-        return Err(i18n::tr("The target account has no uid, so sessions cannot be synced", "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The target account has no uid, so sessions cannot be synced",
+            "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다",
+        )
+        .to_string());
     }
     if source_variant == target_variant && source_uid == target_uid {
-        return Err(i18n::tr("The source and target accounts are the same, so there is nothing to sync", "원본 계정과 대상 계정이 같아 동기화할 세션이 없습니다").to_string());
+        return Err(i18n::tr(
+            "The source and target accounts are the same, so there is nothing to sync",
+            "원본 계정과 대상 계정이 같아 동기화할 세션이 없습니다",
+        )
+        .to_string());
     }
     // 能力探测与复制同口径：成员数据根只有国际版需要同构检查（读也依赖）。
     let mut supported = true;
@@ -2131,7 +2325,12 @@ fn preview_group_item(
             let paths = member_paths(group, member);
             session_row_info(&paths, &member.session_id)
         })
-        .unwrap_or_else(|| (i18n::tr("(Untitled)", "(제목 없음)").to_string(), String::new()));
+        .unwrap_or_else(|| {
+            (
+                i18n::tr("(Untitled)", "(제목 없음)").to_string(),
+                String::new(),
+            )
+        });
     let source_summary = member_summary(source_any);
     let target_summary = member_summary(target_any);
 
@@ -2325,7 +2524,11 @@ fn plan_sync_selection(
     // 身份由凭据的组成员绑定与指纹校验（verify_preview）逐项兜底。
     if binding.group_id != selection.group_id {
         return SyncItemOutcome::Rejected {
-            message: i18n::tr("The check result does not match the selected session, so the request was rejected", "검사 결과가 선택한 세션과 일치하지 않아 거부했습니다").to_string(),
+            message: i18n::tr(
+                "The check result does not match the selected session, so the request was rejected",
+                "검사 결과가 선택한 세션과 일치하지 않아 거부했습니다",
+            )
+            .to_string(),
         };
     }
     let skip = |message: String| SyncItemOutcome::Skipped {
@@ -2335,10 +2538,22 @@ fn plan_sync_selection(
     };
     // 来源身份取登录态、目标身份取入参：与预览不一致说明账号已经变了。
     if binding.source.uid != source_uid || binding.target.uid != target_uid {
-        return skip(i18n::tr("The account changed, so the check result is stale", "계정이 변경되어 검사 결과가 만료되었습니다").to_string());
+        return skip(
+            i18n::tr(
+                "The account changed, so the check result is stale",
+                "계정이 변경되어 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     }
     let Some(store) = store else {
-        return skip(i18n::tr("The sync record does not exist or is unusable, so the check result is stale", "동기화 기록이 없거나 사용할 수 없어 검사 결과가 만료되었습니다").to_string());
+        return skip(
+            i18n::tr(
+                "The sync record does not exist or is unusable, so the check result is stale",
+                "동기화 기록이 없거나 사용할 수 없어 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     // 组查找只按 id：跨档组的组级 variant 是创建档位，不作为身份过滤；
     // 两侧成员身份由 active_member_for 与凭据中的成员绑定逐项校验。
@@ -2347,13 +2562,25 @@ fn plan_sync_selection(
         .iter()
         .find(|group| group.id == selection.group_id)
     else {
-        return skip(i18n::tr("The session link no longer exists, so the check result is stale", "세션 연결 정보가 더 이상 없어 검사 결과가 만료되었습니다").to_string());
+        return skip(
+            i18n::tr(
+                "The session link no longer exists, so the check result is stale",
+                "세션 연결 정보가 더 이상 없어 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     let (Some(source_member), Some(target_member)) = (
         session_link::active_member_for(group, source_uid),
         session_link::active_member_for(group, target_uid),
     ) else {
-        return skip(i18n::tr("The corresponding session is no longer valid, so the check result is stale", "해당 세션이 더 이상 유효하지 않아 검사 결과가 만료되었습니다").to_string());
+        return skip(
+            i18n::tr(
+                "The corresponding session is no longer valid, so the check result is stale",
+                "해당 세션이 더 이상 유효하지 않아 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     // 会话行缺失/归属异常：成员实际已失效（与预览的判定口径一致），提前拦下不写。
     // 源行在源档读、目标行在目标档读（跨档时不同数据库）。
@@ -2441,7 +2668,13 @@ fn plan_sync_selection(
     let (ContentState::Ready(source_snapshot), ContentState::Ready(target_snapshot)) =
         (&source_content, &target_content)
     else {
-        return skip(i18n::tr("The content on both sides cannot be verified, so the check result is stale", "양쪽 콘텐츠를 검증할 수 없어 검사 결과가 만료되었습니다").to_string());
+        return skip(
+            i18n::tr(
+                "The content on both sides cannot be verified, so the check result is stale",
+                "양쪽 콘텐츠를 검증할 수 없어 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     // 归档资格在写入前重新核验（来源仍已归档、目标仍在终态白名单）；任一项不满足
     // 整体判为预览失效，不静默执行另一组副作用。
@@ -2455,11 +2688,25 @@ fn plan_sync_selection(
             Err(error) => return SyncItemOutcome::Rejected { message: error },
         };
         if !archive_qualifies(&source_status, &target_status) {
-            return skip(i18n::tr("The session archive status changed, so the check result is stale", "세션 보관 상태가 변경되어 검사 결과가 만료되었습니다").to_string());
+            return skip(
+                i18n::tr(
+                    "The session archive status changed, so the check result is stale",
+                    "세션 보관 상태가 변경되어 검사 결과가 만료되었습니다",
+                )
+                .to_string(),
+            );
         }
         match target_status {
             SessionStatus::Present(status) => status,
-            _ => return skip(i18n::tr("The session archive status changed, so the check result is stale", "세션 보관 상태가 변경되어 검사 결과가 만료되었습니다").to_string()),
+            _ => {
+                return skip(
+                    i18n::tr(
+                        "The session archive status changed, so the check result is stale",
+                        "세션 보관 상태가 변경되어 검사 결과가 만료되었습니다",
+                    )
+                    .to_string(),
+                )
+            }
         }
     } else {
         None
@@ -2562,22 +2809,35 @@ fn sync_sessions_for_switch_at(
     }
     if variant == WbVariant::Ai && !session_copy_supported_at(&paths.data_root) {
         return Err(i18n::pick(
-            format!("{} (variant {})", session_sync_unsupported(), variant.as_str()),
             format!(
-                "{}(변형 {})",
+                "{} (variant {})",
                 session_sync_unsupported(),
                 variant.as_str()
             ),
+            format!("{}(변형 {})", session_sync_unsupported(), variant.as_str()),
         ));
     }
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
-        return Err(i18n::tr("The target account has no uid, so sessions cannot be synced", "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The target account has no uid, so sessions cannot be synced",
+            "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다",
+        )
+        .to_string());
     }
-    let source_uid = current_user_uid_at(&paths.auth_file)
-        .ok_or_else(|| i18n::tr("Could not read the local login state, so the source account is unknown", "로컬 로그인 상태를 읽지 못해 원본 계정을 확인할 수 없습니다").to_string())?;
+    let source_uid = current_user_uid_at(&paths.auth_file).ok_or_else(|| {
+        i18n::tr(
+            "Could not read the local login state, so the source account is unknown",
+            "로컬 로그인 상태를 읽지 못해 원본 계정을 확인할 수 없습니다",
+        )
+        .to_string()
+    })?;
     if source_uid == target_uid {
-        return Err(i18n::tr("The current account is the same as the target account, so there is nothing to sync", "현재 계정이 대상 계정과 같아 동기화할 세션이 없습니다").to_string());
+        return Err(i18n::tr(
+            "The current account is the same as the target account, so there is nothing to sync",
+            "현재 계정이 대상 계정과 같아 동기화할 세션이 없습니다",
+        )
+        .to_string());
     }
     // 与复制同一条门禁：同档路径的源恒为当前登录账号，这里恒为放行（统一规则）。
     if app_running_blocks_target_write(paths, variant, &target_uid, &is_app_running) {
@@ -2690,11 +2950,19 @@ pub fn sync_sessions_cross(
     let target_paths = SessionPaths::for_variant(target_variant);
     let source_uid = account_uid(source_acc);
     if source_uid.is_empty() {
-        return Err(i18n::tr("The source account has no uid, so sessions cannot be synced", "원본 계정에 uid가 없어 세션을 동기화할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The source account has no uid, so sessions cannot be synced",
+            "원본 계정에 uid가 없어 세션을 동기화할 수 없습니다",
+        )
+        .to_string());
     }
     let target_uid = account_uid(target_acc);
     if target_uid.is_empty() {
-        return Err(i18n::tr("The target account has no uid, so sessions cannot be synced", "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The target account has no uid, so sessions cannot be synced",
+            "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다",
+        )
+        .to_string());
     }
     let source = CopySide {
         paths: &source_paths,
@@ -3006,18 +3274,41 @@ fn backup_file_with_digest(
     dest: &Path,
     expected_raw_digest: &str,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(source).map_err(|error| i18n::pick(format!("Failed to read the backup: {error}"), format!("백업을 읽지 못했습니다: {error}")))?;
+    let bytes = std::fs::read(source).map_err(|error| {
+        i18n::pick(
+            format!("Failed to read the backup: {error}"),
+            format!("백업을 읽지 못했습니다: {error}"),
+        )
+    })?;
     if full_digest_of(&bytes) != expected_raw_digest {
         return Err(i18n::tr("The backup content differs from what was read (it changed after being read), so saving stopped", "백업 내용이 읽을 때와 일치하지 않아(읽은 뒤 변경됨) 저장을 중단했습니다").to_string());
     }
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| i18n::pick(format!("Failed to create the backup directory: {error}"), format!("백업 디렉터리를 만들지 못했습니다: {error}")))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            i18n::pick(
+                format!("Failed to create the backup directory: {error}"),
+                format!("백업 디렉터리를 만들지 못했습니다: {error}"),
+            )
+        })?;
     }
-    session_backup::durable_write(dest, &bytes)
-        .map_err(|error| i18n::pick(format!("Failed to save the backup: {error}"), format!("백업을 저장하지 못했습니다: {error}")))?;
-    let read_back = std::fs::read(dest).map_err(|error| i18n::pick(format!("Failed to read the backup back: {error}"), format!("백업을 다시 읽지 못했습니다: {error}")))?;
+    session_backup::durable_write(dest, &bytes).map_err(|error| {
+        i18n::pick(
+            format!("Failed to save the backup: {error}"),
+            format!("백업을 저장하지 못했습니다: {error}"),
+        )
+    })?;
+    let read_back = std::fs::read(dest).map_err(|error| {
+        i18n::pick(
+            format!("Failed to read the backup back: {error}"),
+            format!("백업을 다시 읽지 못했습니다: {error}"),
+        )
+    })?;
     if full_digest_of(&read_back) != expected_raw_digest {
-        return Err(i18n::tr("The backup failed verification after saving and was not treated as a success", "백업이 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다").to_string());
+        return Err(i18n::tr(
+            "The backup failed verification after saving and was not treated as a success",
+            "백업이 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다",
+        )
+        .to_string());
     }
     Ok(())
 }
@@ -3028,19 +3319,41 @@ fn backup_file_with_digest(
 /// 数据库文件（同时自动带上未 checkpoint 的 WAL 内容），并做写后核验。
 fn snapshot_workbuddy_db(source: &Path, dest: &Path) -> Result<(), String> {
     if !source.is_file() {
-        return Err(i18n::tr("Session data not found, so it cannot be backed up", "세션 데이터가 없어 백업할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "Session data not found, so it cannot be backed up",
+            "세션 데이터가 없어 백업할 수 없습니다",
+        )
+        .to_string());
     }
     if dest.exists() {
-        return Err(i18n::tr("A backup database with the same name already exists and was not overwritten", "같은 이름의 백업 데이터베이스가 이미 있어 덮어쓰지 않았습니다").to_string());
+        return Err(i18n::tr(
+            "A backup database with the same name already exists and was not overwritten",
+            "같은 이름의 백업 데이터베이스가 이미 있어 덮어쓰지 않았습니다",
+        )
+        .to_string());
     }
     // 源连接用读写打开：WAL 库在缺 -shm 时无法只读打开，而备份是写入门禁，
     // 不能因此失败。App 已关闭且持有档位锁，读写打开不会改动会话内容。
-    let src = open_db(source, false).ok_or_else(|| i18n::tr("Session data could not be opened, nothing was synced", "세션 데이터를 열 수 없어 동기화하지 않았습니다").to_string())?;
+    let src = open_db(source, false).ok_or_else(|| {
+        i18n::tr(
+            "Session data could not be opened, nothing was synced",
+            "세션 데이터를 열 수 없어 동기화하지 않았습니다",
+        )
+        .to_string()
+    })?;
     {
-        let mut dst =
-            Connection::open(dest).map_err(|error| i18n::pick(format!("Failed to create the backup database: {error}"), format!("백업 데이터베이스를 만들지 못했습니다: {error}")))?;
-        let backup = Backup::new(&src, &mut dst)
-            .map_err(|error| i18n::pick(format!("Failed to initialize the database snapshot: {error}"), format!("데이터베이스 스냅샷을 초기화하지 못했습니다: {error}")))?;
+        let mut dst = Connection::open(dest).map_err(|error| {
+            i18n::pick(
+                format!("Failed to create the backup database: {error}"),
+                format!("백업 데이터베이스를 만들지 못했습니다: {error}"),
+            )
+        })?;
+        let backup = Backup::new(&src, &mut dst).map_err(|error| {
+            i18n::pick(
+                format!("Failed to initialize the database snapshot: {error}"),
+                format!("데이터베이스 스냅샷을 초기화하지 못했습니다: {error}"),
+            )
+        })?;
         let deadline = Instant::now() + DB_BACKUP_TIMEOUT;
         loop {
             match backup.step(DB_BACKUP_PAGES_PER_STEP) {
@@ -3052,7 +3365,12 @@ fn snapshot_workbuddy_db(source: &Path, dest: &Path) -> Result<(), String> {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 Ok(_) => {}
-                Err(error) => return Err(i18n::pick(format!("The database snapshot failed: {error}"), format!("데이터베이스 스냅샷에 실패했습니다: {error}"))),
+                Err(error) => {
+                    return Err(i18n::pick(
+                        format!("The database snapshot failed: {error}"),
+                        format!("데이터베이스 스냅샷에 실패했습니다: {error}"),
+                    ))
+                }
             }
         }
     }
@@ -3061,16 +3379,33 @@ fn snapshot_workbuddy_db(source: &Path, dest: &Path) -> Result<(), String> {
 
 /// 快照核验：可回读、完整性检查通过、会话表存在。
 fn verify_db_snapshot(path: &Path) -> Result<(), String> {
-    let conn =
-        open_db(path, true).ok_or_else(|| i18n::tr("The backup database could not be read back and was not treated as a success", "백업 데이터베이스를 다시 읽을 수 없어 성공으로 처리하지 않았습니다").to_string())?;
+    let conn = open_db(path, true).ok_or_else(|| {
+        i18n::tr(
+            "The backup database could not be read back and was not treated as a success",
+            "백업 데이터베이스를 다시 읽을 수 없어 성공으로 처리하지 않았습니다",
+        )
+        .to_string()
+    })?;
     let check: String = conn
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
-        .map_err(|error| i18n::pick(format!("The backup database integrity check failed: {error}"), format!("백업 데이터베이스 무결성 검사에 실패했습니다: {error}")))?;
+        .map_err(|error| {
+            i18n::pick(
+                format!("The backup database integrity check failed: {error}"),
+                format!("백업 데이터베이스 무결성 검사에 실패했습니다: {error}"),
+            )
+        })?;
     if check != "ok" {
-        return Err(i18n::pick(format!("The backup database did not pass the integrity check: {check}"), format!("백업 데이터베이스가 무결성 검사를 통과하지 못했습니다: {check}")));
+        return Err(i18n::pick(
+            format!("The backup database did not pass the integrity check: {check}"),
+            format!("백업 데이터베이스가 무결성 검사를 통과하지 못했습니다: {check}"),
+        ));
     }
     if !table_exists(&conn, "sessions") {
-        return Err(i18n::tr("The backup database is missing a table and was not treated as a success", "백업 데이터베이스에 테이블이 없어 성공으로 처리하지 않았습니다").to_string());
+        return Err(i18n::tr(
+            "The backup database is missing a table and was not treated as a success",
+            "백업 데이터베이스에 테이블이 없어 성공으로 처리하지 않았습니다",
+        )
+        .to_string());
     }
     Ok(())
 }
@@ -3081,14 +3416,33 @@ fn read_session_row(conn: &Connection, cid: &str) -> Result<Option<SyncBackupRow
     // for older databases, but propagate every failure while inspecting the schema.
     let mut statement = conn
         .prepare("PRAGMA table_info(sessions)")
-        .map_err(|error| i18n::pick(format!("Failed to read the session table schema: {error}"), format!("세션 테이블 구조를 읽지 못했습니다: {error}")))?;
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the session table schema: {error}"),
+                format!("세션 테이블 구조를 읽지 못했습니다: {error}"),
+            )
+        })?;
     let columns = statement
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| i18n::pick(format!("Failed to read the session table schema: {error}"), format!("세션 테이블 구조를 읽지 못했습니다: {error}")))?
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the session table schema: {error}"),
+                format!("세션 테이블 구조를 읽지 못했습니다: {error}"),
+            )
+        })?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| i18n::pick(format!("Failed to read the session table schema: {error}"), format!("세션 테이블 구조를 읽지 못했습니다: {error}")))?;
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to read the session table schema: {error}"),
+                format!("세션 테이블 구조를 읽지 못했습니다: {error}"),
+            )
+        })?;
     if columns.is_empty() {
-        return Err(i18n::tr("Session data is missing a table, so the target session record cannot be read", "세션 데이터에 테이블이 없어 대상 세션 기록을 읽을 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "Session data is missing a table, so the target session record cannot be read",
+            "세션 데이터에 테이블이 없어 대상 세션 기록을 읽을 수 없습니다",
+        )
+        .to_string());
     }
     // `custom_title` 与 `status` 都可能缺失：缺列时在 SELECT 里用 NULL 占位保持列数，
     // 避免旧库（含旧测试用例）抛「列名不存在」，也避免 row.get 索引错位。
@@ -3124,13 +3478,23 @@ fn read_session_row(conn: &Connection, cid: &str) -> Result<Option<SyncBackupRow
         })
     })
     .optional()
-    .map_err(|error| i18n::pick(format!("Failed to read the target session record: {error}"), format!("대상 세션 기록을 읽지 못했습니다: {error}")))
+    .map_err(|error| {
+        i18n::pick(
+            format!("Failed to read the target session record: {error}"),
+            format!("대상 세션 기록을 읽지 못했습니다: {error}"),
+        )
+    })
 }
 
 /// 会话行的覆盖前快照；只有成功查询且没有命中时才返回 None。
 fn session_row_snapshot(paths: &SessionPaths, cid: &str) -> Result<Option<SyncBackupRow>, String> {
-    let conn = open_db(&paths.workbuddy_db(), true)
-        .ok_or_else(|| i18n::tr("Session data could not be opened, so the target session record cannot be read", "세션 데이터를 열 수 없어 대상 세션 기록을 읽을 수 없습니다").to_string())?;
+    let conn = open_db(&paths.workbuddy_db(), true).ok_or_else(|| {
+        i18n::tr(
+            "Session data could not be opened, so the target session record cannot be read",
+            "세션 데이터를 열 수 없어 대상 세션 기록을 읽을 수 없습니다",
+        )
+        .to_string()
+    })?;
     read_session_row(&conn, cid)
 }
 
@@ -3144,7 +3508,11 @@ fn load_sync_manifest(dir: &Path) -> Option<SyncBackupManifest> {
 /// 备份完整性核验：覆盖前正文与待写入正文都能按清单摘要读回，数据库快照可回读。
 fn verify_sync_backup(dir: &Path, manifest: &SyncBackupManifest) -> Result<(), String> {
     let Some(target_body_file) = manifest.target.body_file.as_deref() else {
-        return Err(i18n::tr("The backup manifest is missing the target content backup location", "백업 매니페스트에 대상 콘텐츠 백업 위치가 없습니다").to_string());
+        return Err(i18n::tr(
+            "The backup manifest is missing the target content backup location",
+            "백업 매니페스트에 대상 콘텐츠 백업 위치가 없습니다",
+        )
+        .to_string());
     };
     for (relative, digest) in [
         (target_body_file, manifest.target.body_raw_digest.as_str()),
@@ -3153,20 +3521,40 @@ fn verify_sync_backup(dir: &Path, manifest: &SyncBackupManifest) -> Result<(), S
             manifest.incoming.body_raw_digest.as_str(),
         ),
     ] {
-        let bytes = std::fs::read(dir.join(relative))
-            .map_err(|error| i18n::pick(format!("The backup file is missing or unreadable ({relative}): {error}"), format!("백업 파일이 없거나 읽을 수 없습니다({relative}): {error}")))?;
+        let bytes = std::fs::read(dir.join(relative)).map_err(|error| {
+            i18n::pick(
+                format!("The backup file is missing or unreadable ({relative}): {error}"),
+                format!("백업 파일이 없거나 읽을 수 없습니다({relative}): {error}"),
+            )
+        })?;
         if full_digest_of(&bytes) != digest {
-            return Err(i18n::pick(format!("The backup file digest does not match ({relative}), so recovery stopped"), format!("백업 파일 요약이 일치하지 않아({relative}) 복구를 중단했습니다")));
+            return Err(i18n::pick(
+                format!("The backup file digest does not match ({relative}), so recovery stopped"),
+                format!("백업 파일 요약이 일치하지 않아({relative}) 복구를 중단했습니다"),
+            ));
         }
     }
     let snapshot = dir.join(&manifest.db.snapshot_file);
     if !snapshot.is_file() {
-        return Err(i18n::tr("The database snapshot is missing, so recovery stopped", "데이터베이스 스냅샷이 없어 복구를 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The database snapshot is missing, so recovery stopped",
+            "데이터베이스 스냅샷이 없어 복구를 중단했습니다",
+        )
+        .to_string());
     }
-    let conn =
-        open_db(&snapshot, true).ok_or_else(|| i18n::tr("The database snapshot could not be opened, so recovery stopped", "데이터베이스 스냅샷을 열 수 없어 복구를 중단했습니다").to_string())?;
+    let conn = open_db(&snapshot, true).ok_or_else(|| {
+        i18n::tr(
+            "The database snapshot could not be opened, so recovery stopped",
+            "데이터베이스 스냅샷을 열 수 없어 복구를 중단했습니다",
+        )
+        .to_string()
+    })?;
     if !table_exists(&conn, "sessions") {
-        return Err(i18n::tr("The database snapshot is missing a table, so recovery stopped", "데이터베이스 스냅샷에 테이블이 없어 복구를 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The database snapshot is missing a table, so recovery stopped",
+            "데이터베이스 스냅샷에 테이블이 없어 복구를 중단했습니다",
+        )
+        .to_string());
     }
     Ok(())
 }
@@ -3184,7 +3572,11 @@ fn validated_target_body_path(
         .file_name()
         .is_some_and(|name| name.to_string_lossy() == expected_name);
     if !path.starts_with(paths.projects_dir()) || !name_matches {
-        return Err(i18n::tr("The target content path in the backup manifest is invalid, so saving stopped", "백업 매니페스트에 기록된 대상 콘텐츠 경로가 올바르지 않아 저장을 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The target content path in the backup manifest is invalid, so saving stopped",
+            "백업 매니페스트에 기록된 대상 콘텐츠 경로가 올바르지 않아 저장을 중단했습니다",
+        )
+        .to_string());
     }
     Ok(path)
 }
@@ -3206,10 +3598,18 @@ fn create_sync_backup(
 ) -> Result<SyncBackup, String> {
     let dir = sync_backup_dir(paths, variant, operation_id)?;
     if !dir.is_dir() {
-        return Err(i18n::tr("The operation directory does not exist, so no backup was created", "작업 전용 디렉터리가 없어 백업을 만들지 않았습니다").to_string());
+        return Err(i18n::tr(
+            "The operation directory does not exist, so no backup was created",
+            "작업 전용 디렉터리가 없어 백업을 만들지 않았습니다",
+        )
+        .to_string());
     }
-    std::fs::create_dir_all(dir.join("bodies"))
-        .map_err(|error| i18n::pick(format!("Failed to create the sync backup directory: {error}"), format!("동기화 백업 디렉터리를 만들지 못했습니다: {error}")))?;
+    std::fs::create_dir_all(dir.join("bodies")).map_err(|error| {
+        i18n::pick(
+            format!("Failed to create the sync backup directory: {error}"),
+            format!("동기화 백업 디렉터리를 만들지 못했습니다: {error}"),
+        )
+    })?;
 
     // 1) 覆盖前正文备份 + 摘要核验（恢复/回滚的唯一依据）。
     let original_rel = format!("bodies/original-{}.jsonl", plan.target_member.session_id);
@@ -3221,13 +3621,19 @@ fn create_sync_backup(
     // 2) 待写入正文备份 + 摘要核验（写入与恢复都只写这份字节）。
     let incoming_rel = format!("bodies/incoming-{}.jsonl", plan.target_member.session_id);
     let incoming_raw = plan.incoming_text.as_bytes();
-    std::fs::write(dir.join(&incoming_rel), incoming_raw)
-        .map_err(|error| i18n::pick(format!("Failed to back up the pending content: {error}"), format!("저장할 콘텐츠를 백업하지 못했습니다: {error}")))?;
+    std::fs::write(dir.join(&incoming_rel), incoming_raw).map_err(|error| {
+        i18n::pick(
+            format!("Failed to back up the pending content: {error}"),
+            format!("저장할 콘텐츠를 백업하지 못했습니다: {error}"),
+        )
+    })?;
     let incoming_raw_digest = full_digest_of(incoming_raw);
-    if full_digest_of(
-        &std::fs::read(dir.join(&incoming_rel))
-            .map_err(|error| i18n::pick(format!("Failed to read back the pending content: {error}"), format!("저장할 콘텐츠를 다시 읽지 못했습니다: {error}")))?,
-    ) != incoming_raw_digest
+    if full_digest_of(&std::fs::read(dir.join(&incoming_rel)).map_err(|error| {
+        i18n::pick(
+            format!("Failed to read back the pending content: {error}"),
+            format!("저장할 콘텐츠를 다시 읽지 못했습니다: {error}"),
+        )
+    })?) != incoming_raw_digest
     {
         return Err(i18n::tr("The pending content backup failed verification after saving and was not treated as a success", "저장할 콘텐츠의 백업이 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다").to_string());
     }
@@ -3240,7 +3646,11 @@ fn create_sync_backup(
     if plan.archive_target
         && target_row.as_ref().and_then(|row| row.status.clone()) != plan.target_status_before
     {
-        return Err(i18n::tr("The target session status changed after validation, so saving stopped", "대상 세션 상태가 검증 후 변경되어 저장을 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The target session status changed after validation, so saving stopped",
+            "대상 세션 상태가 검증 후 변경되어 저장을 중단했습니다",
+        )
+        .to_string());
     }
 
     let manifest = SyncBackupManifest {
@@ -3302,8 +3712,12 @@ fn create_sync_backup(
     // 4) 清单落盘并回读核验：备份必须可验证恢复，读不回来的清单不算备份成功。
     let content = serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?;
     let manifest_file = sync_manifest_file(&dir);
-    session_backup::durable_write_str(&manifest_file, &content)
-        .map_err(|error| i18n::pick(format!("Failed to save the sync backup manifest: {error}"), format!("동기화 백업 매니페스트를 저장하지 못했습니다: {error}")))?;
+    session_backup::durable_write_str(&manifest_file, &content).map_err(|error| {
+        i18n::pick(
+            format!("Failed to save the sync backup manifest: {error}"),
+            format!("동기화 백업 매니페스트를 저장하지 못했습니다: {error}"),
+        )
+    })?;
     match load_sync_manifest(&dir) {
         Some(read_back) if read_back == manifest => {}
         _ => return Err(i18n::tr("The sync backup manifest failed verification after saving and was not treated as a success", "동기화 백업 매니페스트가 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다").to_string()),
@@ -3358,15 +3772,30 @@ fn write_sync_body(
     expected_digest: &str,
 ) -> Result<NormalizedContent, String> {
     // 正文属于业务完成门禁：会话专用持久化写（sync_all + 父目录持久化）。
-    session_backup::durable_write_str(target_body_path, text)
-        .map_err(|error| i18n::pick(format!("Failed to save the synced content: {error}"), format!("동기화 콘텐츠를 저장하지 못했습니다: {error}")))?;
+    session_backup::durable_write_str(target_body_path, text).map_err(|error| {
+        i18n::pick(
+            format!("Failed to save the synced content: {error}"),
+            format!("동기화 콘텐츠를 저장하지 못했습니다: {error}"),
+        )
+    })?;
     match session_link::read_content_snapshot(target_body_path, target_session_id) {
         ContentState::Ready(read_back) if read_back.normalized.total_digest == expected_digest => {
             Ok(read_back.normalized)
         }
-        ContentState::Ready(_) => Err(i18n::tr("The synced content failed verification after saving and was not treated as a success", "동기화 콘텐츠가 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다").to_string()),
-        ContentState::Missing => Err(i18n::tr("The synced content is missing after saving and was not treated as a success", "동기화 콘텐츠가 저장 후 존재하지 않아 성공으로 처리하지 않았습니다").to_string()),
-        ContentState::Unavailable(reason) => Err(i18n::pick(format!("The synced content could not be confirmed after saving: {reason}"), format!("동기화 콘텐츠를 저장 후 확인할 수 없습니다: {reason}"))),
+        ContentState::Ready(_) => Err(i18n::tr(
+            "The synced content failed verification after saving and was not treated as a success",
+            "동기화 콘텐츠가 저장 후 검증과 일치하지 않아 성공으로 처리하지 않았습니다",
+        )
+        .to_string()),
+        ContentState::Missing => Err(i18n::tr(
+            "The synced content is missing after saving and was not treated as a success",
+            "동기화 콘텐츠가 저장 후 존재하지 않아 성공으로 처리하지 않았습니다",
+        )
+        .to_string()),
+        ContentState::Unavailable(reason) => Err(i18n::pick(
+            format!("The synced content could not be confirmed after saving: {reason}"),
+            format!("동기화 콘텐츠를 저장 후 확인할 수 없습니다: {reason}"),
+        )),
     }
 }
 
@@ -3378,13 +3807,26 @@ fn apply_sync_body(
     expected_digest: &str,
 ) -> Result<NormalizedContent, String> {
     let target_body_path = validated_target_body_path(paths, manifest)?;
-    let bytes = std::fs::read(backup_dir.join(&manifest.incoming.body_file))
-        .map_err(|error| i18n::pick(format!("Failed to read the pending content backup: {error}"), format!("저장할 콘텐츠의 백업을 읽지 못했습니다: {error}")))?;
+    let bytes = std::fs::read(backup_dir.join(&manifest.incoming.body_file)).map_err(|error| {
+        i18n::pick(
+            format!("Failed to read the pending content backup: {error}"),
+            format!("저장할 콘텐츠의 백업을 읽지 못했습니다: {error}"),
+        )
+    })?;
     if full_digest_of(&bytes) != manifest.incoming.body_raw_digest {
-        return Err(i18n::tr("The pending content backup does not match the manifest, so saving stopped", "저장할 콘텐츠의 백업이 매니페스트와 일치하지 않아 저장을 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The pending content backup does not match the manifest, so saving stopped",
+            "저장할 콘텐츠의 백업이 매니페스트와 일치하지 않아 저장을 중단했습니다",
+        )
+        .to_string());
     }
-    let text =
-        String::from_utf8(bytes).map_err(|_| i18n::tr("The pending content is not valid UTF-8, nothing was saved", "저장할 콘텐츠가 올바른 UTF-8이 아니어서 저장하지 않았습니다").to_string())?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        i18n::tr(
+            "The pending content is not valid UTF-8, nothing was saved",
+            "저장할 콘텐츠가 올바른 UTF-8이 아니어서 저장하지 않았습니다",
+        )
+        .to_string()
+    })?;
     write_sync_body(
         &target_body_path,
         &manifest.target.session_id,
@@ -3413,16 +3855,28 @@ fn update_target_session_row(
     before: Option<&SyncBackupRow>,
     status_change: Option<&StatusChange<'_>>,
 ) -> Result<(), String> {
-    let mut conn = open_db(&paths.workbuddy_db(), false)
-        .ok_or_else(|| i18n::tr("Session data could not be opened, nothing was synced", "세션 데이터를 열 수 없어 동기화하지 않았습니다").to_string())?;
+    let mut conn = open_db(&paths.workbuddy_db(), false).ok_or_else(|| {
+        i18n::tr(
+            "Session data could not be opened, nothing was synced",
+            "세션 데이터를 열 수 없어 동기화하지 않았습니다",
+        )
+        .to_string()
+    })?;
     if !table_exists(&conn, "sessions") {
-        return Err(i18n::tr("Session data is missing a table, nothing was synced", "세션 데이터에 테이블이 없어 동기화하지 않았습니다").to_string());
+        return Err(i18n::tr(
+            "Session data is missing a table, nothing was synced",
+            "세션 데이터에 테이블이 없어 동기화하지 않았습니다",
+        )
+        .to_string());
     }
     // 写事务的提交必须可靠持久：在本次实际写连接上确认 synchronous ≥ FULL。
     session_backup::ensure_full_synchronous(&conn)?;
-    let tx = conn
-        .transaction()
-        .map_err(|error| i18n::pick(format!("Failed to start the session data transaction: {error}"), format!("세션 데이터 트랜잭션을 시작하지 못했습니다: {error}")))?;
+    let tx = conn.transaction().map_err(|error| {
+        i18n::pick(
+            format!("Failed to start the session data transaction: {error}"),
+            format!("세션 데이터 트랜잭션을 시작하지 못했습니다: {error}"),
+        )
+    })?;
     // 状态写入用条件 UPDATE：目标在事务内被改为活跃态/被取消归档时 affected 为 0，
     // 事务外的一次读取不能替代事务内的条件。
     let affected = match status_change {
@@ -3447,7 +3901,12 @@ fn update_target_session_row(
             rusqlite::params![new_updated_at, target.session_id, target.uid],
         ),
     }
-    .map_err(|error| i18n::pick(format!("Failed to update the target session record: {error}"), format!("대상 세션 기록을 갱신하지 못했습니다: {error}")))?;
+    .map_err(|error| {
+        i18n::pick(
+            format!("Failed to update the target session record: {error}"),
+            format!("대상 세션 기록을 갱신하지 못했습니다: {error}"),
+        )
+    })?;
     if affected != 1 {
         return Err(
             i18n::tr("Target session record ownership check failed: the session is missing, not owned by the target account, or deleted, so it was not treated as a success", "대상 세션 기록 소유권 검사에 실패했습니다: 세션이 없거나, 대상 계정 소유가 아니거나, 삭제되어 성공으로 처리하지 않았습니다")
@@ -3481,8 +3940,12 @@ fn update_target_session_row(
         }
         (Some(_), None) => {}
     }
-    tx.commit()
-        .map_err(|error| i18n::pick(format!("Failed to commit the session data: {error}"), format!("세션 데이터를 커밋하지 못했습니다: {error}")))?;
+    tx.commit().map_err(|error| {
+        i18n::pick(
+            format!("Failed to commit the session data: {error}"),
+            format!("세션 데이터를 커밋하지 못했습니다: {error}"),
+        )
+    })?;
     Ok(())
 }
 
@@ -3508,7 +3971,11 @@ fn commit_sync_baseline(
             .iter_mut()
             .find(|group| group.id == manifest.group_id)
         else {
-            return Err(i18n::tr("The session link no longer exists, so the sync result was not committed", "세션 연결 정보가 더 이상 없어 동기화 결과를 커밋하지 않았습니다").to_string());
+            return Err(i18n::tr(
+                "The session link no longer exists, so the sync result was not committed",
+                "세션 연결 정보가 더 이상 없어 동기화 결과를 커밋하지 않았습니다",
+            )
+            .to_string());
         };
         if !group
             .members
@@ -3546,7 +4013,11 @@ fn verify_sync_baseline_committed(
 ) -> Result<(), String> {
     // 仅同步归档没有新基线：这类操作不会走到本函数，缺引用即为清单异常。
     let Some(new_baseline_ref) = manifest.new_baseline_ref.as_deref() else {
-        return Err(i18n::tr("The sync backup manifest is missing the new baseline reference, so recovery stopped", "동기화 백업 매니페스트에 새 베이스라인 참조가 없어 복구를 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The sync backup manifest is missing the new baseline reference, so recovery stopped",
+            "동기화 백업 매니페스트에 새 베이스라인 참조가 없어 복구를 중단했습니다",
+        )
+        .to_string());
     };
     match session_link::load_store(paths) {
         StoreState::Ready(store) => {
@@ -3555,24 +4026,44 @@ fn verify_sync_baseline_committed(
                 .iter()
                 .find(|group| group.id == manifest.group_id)
             else {
-                return Err(i18n::tr("The session link is missing, so recovery stopped", "세션 연결 정보가 없어 복구를 중단했습니다").to_string());
+                return Err(i18n::tr(
+                    "The session link is missing, so recovery stopped",
+                    "세션 연결 정보가 없어 복구를 중단했습니다",
+                )
+                .to_string());
             };
             let Some(pair) = session_link::find_pair_base(
                 group,
                 &manifest.source.member_id,
                 &manifest.target.member_id,
             ) else {
-                return Err(i18n::tr("The sync record is missing, so recovery stopped", "동기화 기록이 없어 복구를 중단했습니다").to_string());
+                return Err(i18n::tr(
+                    "The sync record is missing, so recovery stopped",
+                    "동기화 기록이 없어 복구를 중단했습니다",
+                )
+                .to_string());
             };
             if Some(pair.baseline_ref.as_str()) != manifest.new_baseline_ref.as_deref() {
-                return Err(i18n::tr("The sync record does not match this save, so recovery stopped", "동기화 기록이 이번 저장과 일치하지 않아 복구를 중단했습니다").to_string());
+                return Err(i18n::tr(
+                    "The sync record does not match this save, so recovery stopped",
+                    "동기화 기록이 이번 저장과 일치하지 않아 복구를 중단했습니다",
+                )
+                .to_string());
             }
             if session_link::load_baseline(paths, new_baseline_ref).is_none() {
-                return Err(i18n::tr("The sync record is missing or its content does not match, so recovery stopped", "동기화 기록이 없거나 내용이 일치하지 않아 복구를 중단했습니다").to_string());
+                return Err(i18n::tr(
+                    "The sync record is missing or its content does not match, so recovery stopped",
+                    "동기화 기록이 없거나 내용이 일치하지 않아 복구를 중단했습니다",
+                )
+                .to_string());
             }
             Ok(())
         }
-        StoreState::Missing => Err(i18n::tr("The sync record's main file is missing, so recovery stopped", "동기화 기록의 기본 파일이 없어 복구를 중단했습니다").to_string()),
+        StoreState::Missing => Err(i18n::tr(
+            "The sync record's main file is missing, so recovery stopped",
+            "동기화 기록의 기본 파일이 없어 복구를 중단했습니다",
+        )
+        .to_string()),
         StoreState::Unavailable(reason) => Err(reason),
     }
 }
@@ -3584,18 +4075,39 @@ fn restore_sync_backup_body(
     manifest: &SyncBackupManifest,
 ) -> Result<(), String> {
     let Some(relative) = manifest.target.body_file.as_deref() else {
-        return Err(i18n::tr("The backup manifest is missing the target content backup location", "백업 매니페스트에 대상 콘텐츠 백업 위치가 없습니다").to_string());
+        return Err(i18n::tr(
+            "The backup manifest is missing the target content backup location",
+            "백업 매니페스트에 대상 콘텐츠 백업 위치가 없습니다",
+        )
+        .to_string());
     };
-    let bytes =
-        std::fs::read(dir.join(relative)).map_err(|error| i18n::pick(format!("Failed to read the backup content: {error}"), format!("백업 내용을 읽지 못했습니다: {error}")))?;
+    let bytes = std::fs::read(dir.join(relative)).map_err(|error| {
+        i18n::pick(
+            format!("Failed to read the backup content: {error}"),
+            format!("백업 내용을 읽지 못했습니다: {error}"),
+        )
+    })?;
     if full_digest_of(&bytes) != manifest.target.body_raw_digest {
-        return Err(i18n::tr("The backup content digest does not match, so the rollback stopped", "백업 내용 요약이 일치하지 않아 롤백을 중단했습니다").to_string());
+        return Err(i18n::tr(
+            "The backup content digest does not match, so the rollback stopped",
+            "백업 내용 요약이 일치하지 않아 롤백을 중단했습니다",
+        )
+        .to_string());
     }
-    let text =
-        String::from_utf8(bytes).map_err(|_| i18n::tr("The backup content is not valid UTF-8, nothing was rolled back", "백업 내용이 올바른 UTF-8이 아니어서 롤백하지 않았습니다").to_string())?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        i18n::tr(
+            "The backup content is not valid UTF-8, nothing was rolled back",
+            "백업 내용이 올바른 UTF-8이 아니어서 롤백하지 않았습니다",
+        )
+        .to_string()
+    })?;
     let target_body_path = validated_target_body_path(paths, manifest)?;
-    session_backup::durable_write_str(&target_body_path, &text)
-        .map_err(|error| i18n::pick(format!("Failed to roll back the target content: {error}"), format!("대상 콘텐츠를 롤백하지 못했습니다: {error}")))
+    session_backup::durable_write_str(&target_body_path, &text).map_err(|error| {
+        i18n::pick(
+            format!("Failed to roll back the target content: {error}"),
+            format!("대상 콘텐츠를 롤백하지 못했습니다: {error}"),
+        )
+    })
 }
 
 /// 清单里的状态写入要求（新状态 + 覆盖前状态）；缺覆盖前状态即不可核验。
@@ -3666,7 +4178,13 @@ fn run_status_only_phases(
                 }
             }
         }
-        SyncBodyState::Gone => return Err(i18n::tr("The target content does not exist, so the status sync did not run", "대상 콘텐츠가 없어 상태 동기화를 실행하지 않았습니다").to_string()),
+        SyncBodyState::Gone => {
+            return Err(i18n::tr(
+                "The target content does not exist, so the status sync did not run",
+                "대상 콘텐츠가 없어 상태 동기화를 실행하지 않았습니다",
+            )
+            .to_string())
+        }
         SyncBodyState::Unknown(reason) => return Err(reason),
     }
     // 2) 状态：归档是本次唯一动作，必须带可核验的覆盖前状态。
@@ -3716,11 +4234,25 @@ fn run_sync_phases(
                     content.normalized
                 }
                 ContentState::Ready(_) => {
-                    return Err(i18n::tr("The target content does not match this save, so recovery stopped", "대상 콘텐츠가 이번 저장과 일치하지 않아 복구를 중단했습니다").to_string())
+                    return Err(i18n::tr(
+                        "The target content does not match this save, so recovery stopped",
+                        "대상 콘텐츠가 이번 저장과 일치하지 않아 복구를 중단했습니다",
+                    )
+                    .to_string())
                 }
-                ContentState::Missing => return Err(i18n::tr("The target content is gone, so recovery stopped", "대상 콘텐츠가 사라져 복구를 중단했습니다").to_string()),
+                ContentState::Missing => {
+                    return Err(i18n::tr(
+                        "The target content is gone, so recovery stopped",
+                        "대상 콘텐츠가 사라져 복구를 중단했습니다",
+                    )
+                    .to_string())
+                }
                 ContentState::Unavailable(reason) => {
-                    return Err(i18n::pick(format!("The target content could not be verified ({reason}), so recovery stopped"), format!("대상 콘텐츠를 검증할 수 없어({reason}) 복구를 중단했습니다")))
+                    let en = format!(
+                        "The target content could not be verified ({reason}), so recovery stopped"
+                    );
+                    let ko = format!("대상 콘텐츠를 검증할 수 없어({reason}) 복구를 중단했습니다");
+                    return Err(i18n::pick(en, ko));
                 }
             }
         }
@@ -3747,10 +4279,19 @@ fn run_sync_phases(
             == Some(manifest.db.new_updated_at);
     if db_already_applied {
         // 行仍归属目标账号且未删除即可视为本操作的产物，不写库、不改状态。
-        let owner = session_row_owner(paths, &operation.target.session_id)
-            .ok_or_else(|| i18n::tr("The target session record does not exist or was deleted, so recovery stopped", "대상 세션 기록이 없거나 삭제되어 복구를 중단했습니다").to_string())?;
+        let owner = session_row_owner(paths, &operation.target.session_id).ok_or_else(|| {
+            i18n::tr(
+                "The target session record does not exist or was deleted, so recovery stopped",
+                "대상 세션 기록이 없거나 삭제되어 복구를 중단했습니다",
+            )
+            .to_string()
+        })?;
         if owner != operation.target.uid {
-            return Err(i18n::tr("The target session record has an unexpected owner, so recovery stopped", "대상 세션 기록의 소유권이 잘못되어 복구를 중단했습니다").to_string());
+            return Err(i18n::tr(
+                "The target session record has an unexpected owner, so recovery stopped",
+                "대상 세션 기록의 소유권이 잘못되어 복구를 중단했습니다",
+            )
+            .to_string());
         }
     } else {
         let status_change = planned_status_change(paths, operation, manifest)?;
@@ -3809,8 +4350,14 @@ fn execute_sync_item(
             ),
         ));
     }
-    let target_body_path = find_project_jsonl(paths, &plan.target_member.session_id)
-        .ok_or_else(|| i18n::tr("The target content does not exist, nothing was synced", "대상 콘텐츠가 없어 동기화하지 않았습니다").to_string())?;
+    let target_body_path =
+        find_project_jsonl(paths, &plan.target_member.session_id).ok_or_else(|| {
+            i18n::tr(
+                "The target content does not exist, nothing was synced",
+                "대상 콘텐츠가 없어 동기화하지 않았습니다",
+            )
+            .to_string()
+        })?;
     let new_updated_at = now_ms();
     let last_synced_at = now_ms();
     // 仅同步归档不产生新正文，也就没有新配对基线：显式记为 None，不用空引用占位。
@@ -4065,12 +4612,19 @@ fn check_target_body(paths: &SessionPaths, operation: &Operation) -> BodyCheck {
                 )
             }
         }
-        Some(ContentState::Unavailable(reason)) => {
-            BodyCheck::NeedsRecovery(i18n::pick(format!("The target content cannot be verified ({reason}), so recovery stopped"), format!("대상 콘텐츠를 검증할 수 없어({reason}) 복구를 중단했습니다")))
-        }
+        Some(ContentState::Unavailable(reason)) => BodyCheck::NeedsRecovery(i18n::pick(
+            format!("The target content cannot be verified ({reason}), so recovery stopped"),
+            format!("대상 콘텐츠를 검증할 수 없어({reason}) 복구를 중단했습니다"),
+        )),
         Some(ContentState::Missing) | None => {
             if operation.phase >= OpPhase::BodyWritten {
-                BodyCheck::NeedsRecovery(i18n::tr("The target content is gone, so recovery stopped", "대상 콘텐츠가 사라져 복구를 중단했습니다").to_string())
+                BodyCheck::NeedsRecovery(
+                    i18n::tr(
+                        "The target content is gone, so recovery stopped",
+                        "대상 콘텐츠가 사라져 복구를 중단했습니다",
+                    )
+                    .to_string(),
+                )
             } else {
                 BodyCheck::Absent
             }
@@ -4156,7 +4710,14 @@ fn recover_sync_operation(paths: &SessionPaths, mut operation: Operation) -> Rec
             return RecoverOutcome::Abandoned(operation_id);
         }
         SyncBodyState::Gone if operation.phase >= OpPhase::BodyWritten => {
-            return needs(i18n::tr("The target content is gone, so recovery stopped", "대상 콘텐츠가 사라져 복구를 중단했습니다").to_string(), false);
+            return needs(
+                i18n::tr(
+                    "The target content is gone, so recovery stopped",
+                    "대상 콘텐츠가 사라져 복구를 중단했습니다",
+                )
+                .to_string(),
+                false,
+            );
         }
         _ => {}
     }
@@ -4192,10 +4753,24 @@ fn recover_sync_operation(paths: &SessionPaths, mut operation: Operation) -> Rec
     }
     let Some(row) = row else {
         // row_absent 已经把 None 分支处理掉，这里只是形式上的兜底。
-        return needs(i18n::tr("The target session record could not be read, so recovery stopped", "대상 세션 기록을 읽을 수 없어 복구를 중단했습니다").to_string(), false);
+        return needs(
+            i18n::tr(
+                "The target session record could not be read, so recovery stopped",
+                "대상 세션 기록을 읽을 수 없어 복구를 중단했습니다",
+            )
+            .to_string(),
+            false,
+        );
     };
     if row.user_id != operation.target.uid {
-        return needs(i18n::tr("The target session record has an unexpected owner, so recovery stopped", "대상 세션 기록의 소유권이 잘못되어 복구를 중단했습니다").to_string(), false);
+        return needs(
+            i18n::tr(
+                "The target session record has an unexpected owner, so recovery stopped",
+                "대상 세션 기록의 소유권이 잘못되어 복구를 중단했습니다",
+            )
+            .to_string(),
+            false,
+        );
     }
     let before_row = manifest.db.target_row.as_ref();
     let before_updated_at = before_row.and_then(|row| row.updated_at);
@@ -4302,11 +4877,25 @@ fn recover_copy_operation(
     match session_row_owner(paths, &operation.target.session_id) {
         Some(owner) if owner == operation.target.uid => {}
         Some(_) => {
-            return needs(i18n::tr("The target session record has an unexpected owner, so recovery stopped", "대상 세션 기록의 소유권이 잘못되어 복구를 중단했습니다").to_string(), false);
+            return needs(
+                i18n::tr(
+                    "The target session record has an unexpected owner, so recovery stopped",
+                    "대상 세션 기록의 소유권이 잘못되어 복구를 중단했습니다",
+                )
+                .to_string(),
+                false,
+            );
         }
         None => {
             if operation.phase >= OpPhase::DbWritten {
-                return needs(i18n::tr("The target session record is gone, so recovery stopped", "대상 세션 기록이 사라져 복구를 중단했습니다").to_string(), false);
+                return needs(
+                    i18n::tr(
+                        "The target session record is gone, so recovery stopped",
+                        "대상 세션 기록이 사라져 복구를 중단했습니다",
+                    )
+                    .to_string(),
+                    false,
+                );
             }
             match insert_session_copy(
                 read_paths,
@@ -5074,7 +5663,13 @@ mod tests {
             |_| false,
         )
         .expect_err("缺 uid 仍必须返回错误");
-        assert_eq!(cn_err, i18n::tr("The target account has no uid, so sessions cannot be copied", "대상 계정에 uid가 없어 세션을 복사할 수 없습니다"));
+        assert_eq!(
+            cn_err,
+            i18n::tr(
+                "The target account has no uid, so sessions cannot be copied",
+                "대상 계정에 uid가 없어 세션을 복사할 수 없습니다"
+            )
+        );
         assert!(
             !cn_err.contains(session_copy_unsupported()),
             "国内版不得被能力探测拦截: {cn_err}"
@@ -5103,7 +5698,13 @@ mod tests {
             |_| false,
         )
         .expect_err("缺 uid 必须返回错误");
-        assert_eq!(err, i18n::tr("The target account has no uid, so sessions cannot be copied", "대상 계정에 uid가 없어 세션을 복사할 수 없습니다"));
+        assert_eq!(
+            err,
+            i18n::tr(
+                "The target account has no uid, so sessions cannot be copied",
+                "대상 계정에 uid가 없어 세션을 복사할 수 없습니다"
+            )
+        );
     }
 
     /// 未登录 / 目标即当前账号：拒绝且不写任何东西。
@@ -5119,7 +5720,10 @@ mod tests {
             |_| false,
         )
         .expect_err("缺登录态必须报错");
-        assert!(err.contains("Could not read the local login state"), "{err}");
+        assert!(
+            err.contains("Could not read the local login state"),
+            "{err}"
+        );
 
         env.set_login("uid-b");
         let err = copy_sessions_for_switch_at(
@@ -5130,7 +5734,10 @@ mod tests {
             |_| false,
         )
         .expect_err("同一账号必须报错");
-        assert!(err.contains("The current account is the same as the target account"), "{err}");
+        assert!(
+            err.contains("The current account is the same as the target account"),
+            "{err}"
+        );
         assert_eq!(env.rows_for("uid-b").len(), 0);
     }
 
@@ -5656,7 +6263,13 @@ mod tests {
         assert_eq!(mixed["alreadyLinked"][0]["id"], "sess-1");
         assert_eq!(mixed["errors"].as_array().unwrap().len(), 1);
         assert_eq!(mixed["errors"][0]["id"], "sess-2");
-        assert_eq!(mixed["errors"][0]["error"], i18n::tr("Session content not found, nothing was copied", "세션 콘텐츠가 없어 복사하지 않았습니다"));
+        assert_eq!(
+            mixed["errors"][0]["error"],
+            i18n::tr(
+                "Session content not found, nothing was copied",
+                "세션 콘텐츠가 없어 복사하지 않았습니다"
+            )
+        );
         // 复用/失败都不算未完成写入。
         assert!(mixed.get("needsRecovery").is_none());
     }
@@ -5672,7 +6285,13 @@ mod tests {
 
         let report = copy(&env, "uid-b", &["sess-1"]);
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
-        assert_eq!(report["errors"][0]["error"], i18n::tr("Session content not found, nothing was copied", "세션 콘텐츠가 없어 복사하지 않았습니다"));
+        assert_eq!(
+            report["errors"][0]["error"],
+            i18n::tr(
+                "Session content not found, nothing was copied",
+                "세션 콘텐츠가 없어 복사하지 않았습니다"
+            )
+        );
         assert_eq!(env.rows_for("uid-b").len(), 0, "不得写出半成品会话记录");
         assert_eq!(env.body_files().len(), 0);
     }
@@ -5685,7 +6304,10 @@ mod tests {
         let report = copy(&env, "uid-b", &["sess-1"]);
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("Session content could not be verified"), "{error}");
+        assert!(
+            error.contains("Session content could not be verified"),
+            "{error}"
+        );
         assert_eq!(env.rows_for("uid-b").len(), 0);
     }
 
@@ -5698,7 +6320,10 @@ mod tests {
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         assert_eq!(
             report["errors"][0]["error"],
-            i18n::tr("The source session record is not in the database, nothing was copied", "데이터베이스에서 원본 세션 기록을 찾지 못해 복사하지 않았습니다")
+            i18n::tr(
+                "The source session record is not in the database, nothing was copied",
+                "데이터베이스에서 원본 세션 기록을 찾지 못해 복사하지 않았습니다"
+            )
         );
         assert_eq!(env.body_files().len(), 1, "不得写出无数据库行的内容");
     }
@@ -5716,7 +6341,13 @@ mod tests {
 
         let report = copy(&env, "uid-b", &["sess-1"]);
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
-        assert_eq!(report["errors"][0]["error"], i18n::tr("The source session does not belong to the current account, nothing was copied", "원본 세션이 현재 계정 소유가 아니어서 복사하지 않았습니다"));
+        assert_eq!(
+            report["errors"][0]["error"],
+            i18n::tr(
+                "The source session does not belong to the current account, nothing was copied",
+                "원본 세션이 현재 계정 소유가 아니어서 복사하지 않았습니다"
+            )
+        );
     }
 
     /// 复制不再依赖云端映射库：库缺失也照常成功，不重建、不写行。
@@ -5815,7 +6446,10 @@ mod tests {
         }
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("Failed to save the copied content"), "{error}");
+        assert!(
+            error.contains("Failed to save the copied content"),
+            "{error}"
+        );
         assert_eq!(env.rows_for("uid-b").len(), 0);
         assert_eq!(env.body_files().len(), 1);
     }
@@ -6021,7 +6655,9 @@ mod tests {
         let issue = &report.needs_recovery[0];
         assert!(!issue.retryable);
         assert!(
-            issue.reason.contains("The target content does not match the operation log"),
+            issue
+                .reason
+                .contains("The target content does not match the operation log"),
             "{}",
             issue.reason
         );
@@ -6207,7 +6843,10 @@ mod tests {
             session_display_title(Some("汉字详情页".into()), None),
             "汉字详情页"
         );
-        assert_eq!(session_display_title(None, None), i18n::tr("(Untitled)", "(제목 없음)"));
+        assert_eq!(
+            session_display_title(None, None),
+            i18n::tr("(Untitled)", "(제목 없음)")
+        );
         assert_eq!(
             session_display_title(Some("  ".into()), Some("".into())),
             i18n::tr("(Untitled)", "(제목 없음)")
@@ -7266,7 +7905,10 @@ mod tests {
         assert_eq!(group["target"]["sessionId"], target_id);
         assert_eq!(group["target"]["state"], "active");
         assert!(group["previewToken"].as_str().is_some());
-        assert!(group["reason"].as_str().unwrap().contains("you can sync directly"));
+        assert!(group["reason"]
+            .as_str()
+            .unwrap()
+            .contains("you can sync directly"));
         // 预览是只读的：目标正文与关联版本都不变。
         assert_eq!(
             std::fs::read_to_string(env.body_path(&target_id)).unwrap(),
@@ -7467,7 +8109,10 @@ mod tests {
         let skipped = &report["skipped"][0];
         assert_eq!(skipped["reasonCode"], REASON_PREVIEW_STALE);
         assert!(
-            skipped["message"].as_str().unwrap().contains("The account changed"),
+            skipped["message"]
+                .as_str()
+                .unwrap()
+                .contains("The account changed"),
             "{skipped}"
         );
         assert_eq!(env.store().revision, revision_before);
@@ -7677,7 +8322,10 @@ mod tests {
             let errors = report["errors"].as_array().unwrap();
             assert_eq!(errors.len(), 1, "{report}");
             assert!(
-                errors[0]["error"].as_str().unwrap().contains("cannot be synced in"),
+                errors[0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("cannot be synced in"),
                 "{report}"
             );
         }
@@ -7986,7 +8634,13 @@ mod tests {
             |_| false,
         )
         .unwrap_err();
-        assert_eq!(err, i18n::tr("The target account has no uid, so sessions cannot be synced", "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다"));
+        assert_eq!(
+            err,
+            i18n::tr(
+                "The target account has no uid, so sessions cannot be synced",
+                "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다"
+            )
+        );
         let err = sync_sessions_for_switch_at(
             &env.paths(),
             WbVariant::Cn,
@@ -7995,7 +8649,10 @@ mod tests {
             |_| false,
         )
         .unwrap_err();
-        assert!(err.contains("The current account is the same as the target account"), "{err}");
+        assert!(
+            err.contains("The current account is the same as the target account"),
+            "{err}"
+        );
 
         // 失败的两条（缺 uid / 同账号）都不应再触碰目标正文。
         assert_eq!(
@@ -8476,7 +9133,10 @@ mod tests {
         );
         assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("Could not create the temporary directory"), "{error}");
+        assert!(
+            error.contains("Could not create the temporary directory"),
+            "{error}"
+        );
 
         // 零写入：正文、数据库行、基线、关联版本原样保留。
         assert_eq!(body_bytes(&env, &target_id), target_before);
@@ -8516,7 +9176,10 @@ mod tests {
         }
         assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("Failed to save the synced content"), "{error}");
+        assert!(
+            error.contains("Failed to save the synced content"),
+            "{error}"
+        );
         assert_eq!(report["needsRecovery"], true);
 
         // 正文与数据库都没变；备份已生成并留下未完成操作（阶段停在 Prepared）。
@@ -8578,7 +9241,10 @@ mod tests {
         );
         assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("Failed to update the target session record"), "{error}");
+        assert!(
+            error.contains("Failed to update the target session record"),
+            "{error}"
+        );
         assert_eq!(report["needsRecovery"], true);
 
         // 正文已写入，但数据库未更新：绝不报成功；组表也未提交。
@@ -9787,8 +10453,12 @@ mod tests {
             recovery.needs_recovery[0]
         );
         assert!(
-            recovery.needs_recovery[0].reason.contains("matches neither")
-                || recovery.needs_recovery[0].reason.contains("could not be verified"),
+            recovery.needs_recovery[0]
+                .reason
+                .contains("matches neither")
+                || recovery.needs_recovery[0]
+                    .reason
+                    .contains("could not be verified"),
             "{}",
             recovery.needs_recovery[0].reason
         );
@@ -9856,7 +10526,9 @@ mod tests {
         assert_eq!(recovery.needs_recovery.len(), 1);
         assert!(!recovery.needs_recovery[0].retryable);
         assert!(
-            recovery.needs_recovery[0].reason.contains("unexpected owner"),
+            recovery.needs_recovery[0]
+                .reason
+                .contains("unexpected owner"),
             "{}",
             recovery.needs_recovery[0].reason
         );
@@ -10097,7 +10769,10 @@ mod tests {
         assert_eq!(report["needsRecovery"], true, "{report}");
         assert_eq!(report["errors"].as_array().unwrap().len(), 1, "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("The previous session save has not finished"), "{error}");
+        assert!(
+            error.contains("The previous session save has not finished"),
+            "{error}"
+        );
         assert_eq!(body_bytes(&env, &target_id), target_before);
         assert_eq!(env.body_files().len(), 2);
         assert_eq!(

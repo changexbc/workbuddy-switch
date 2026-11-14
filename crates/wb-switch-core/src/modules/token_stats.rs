@@ -820,16 +820,28 @@ fn ide_workspace_meta(conv_index: &Path, conv_id: &str) -> (Option<String>, Stri
         .and_then(|parent| parent.parent())
         .map(|parent| parent.join("index.json"))
     else {
-        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
+        return (
+            None,
+            i18n::tr("Unknown model", "알 수 없는 모델").to_string(),
+        );
     };
     let Ok(text) = std::fs::read_to_string(ws_index) else {
-        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
+        return (
+            None,
+            i18n::tr("Unknown model", "알 수 없는 모델").to_string(),
+        );
     };
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
+        return (
+            None,
+            i18n::tr("Unknown model", "알 수 없는 모델").to_string(),
+        );
     };
     let Some(conversations) = value.get("conversations").and_then(Value::as_array) else {
-        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
+        return (
+            None,
+            i18n::tr("Unknown model", "알 수 없는 모델").to_string(),
+        );
     };
     for conversation in conversations {
         if conversation.get("id").and_then(Value::as_str) != Some(conv_id) {
@@ -843,7 +855,10 @@ fn ide_workspace_meta(conv_index: &Path, conv_id: &str) -> (Option<String>, Stri
             .unwrap_or_else(|| i18n::tr("Unknown model", "알 수 없는 모델").to_string());
         return (title, model);
     }
-    (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string())
+    (
+        None,
+        i18n::tr("Unknown model", "알 수 없는 모델").to_string(),
+    )
 }
 
 fn ide_request_usage(request: &Value) -> Option<Usage> {

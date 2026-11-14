@@ -10,11 +10,11 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 use crate::modules::codebuddy_ide_session::{self, IdeFlavor};
+use crate::modules::i18n;
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::variant::WbVariant;
 use crate::modules::vscode_session::CODEBUDDY_IDE_STORE;
 use crate::modules::vscode_session_sync;
-use crate::modules::i18n;
 
 /// 为本次复制成功的会话登记「源 ↔ 副本」关联，返回逐条失败原因。
 ///
@@ -46,8 +46,13 @@ pub fn links_preview_intl(target_acc: &Value) -> Result<Value, String> {
 }
 
 fn links_preview_for(flavor: IdeFlavor, target_acc: &Value) -> Result<Value, String> {
-    let root = codebuddy_ide_session::ide_data_root()
-        .ok_or_else(|| i18n::tr("CodeBuddy IDE data directory not found, so sessions cannot be synced", "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다").to_string())?;
+    let root = codebuddy_ide_session::ide_data_root().ok_or_else(|| {
+        i18n::tr(
+            "CodeBuddy IDE data directory not found, so sessions cannot be synced",
+            "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다",
+        )
+        .to_string()
+    })?;
     let source_uid = active_source_uid(flavor)?;
     // 共用 `codebuddy_ide_session_links.json`：按组的 variant 过滤，国内版组不进国际版预览。
     vscode_session_sync::links_preview_in_for_variant(
@@ -78,8 +83,13 @@ pub(crate) fn sync_selected_for(
                 .to_string(),
         );
     }
-    let root = codebuddy_ide_session::ide_data_root()
-        .ok_or_else(|| i18n::tr("CodeBuddy IDE data directory not found, so sessions cannot be synced", "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다").to_string())?;
+    let root = codebuddy_ide_session::ide_data_root().ok_or_else(|| {
+        i18n::tr(
+            "CodeBuddy IDE data directory not found, so sessions cannot be synced",
+            "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다",
+        )
+        .to_string()
+    })?;
     let source_uid = active_source_uid(flavor)?;
     vscode_session_sync::sync_selected_in_for_variant(
         CODEBUDDY_IDE_STORE,

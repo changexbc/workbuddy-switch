@@ -11,8 +11,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::modules::config;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Locale {
+    #[default]
     En = 0,
     Ko = 1,
 }
@@ -31,12 +32,6 @@ impl Locale {
             Self::En => "en",
             Self::Ko => "ko",
         }
-    }
-}
-
-impl Default for Locale {
-    fn default() -> Self {
-        Self::En
     }
 }
 

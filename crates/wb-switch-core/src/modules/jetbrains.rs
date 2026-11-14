@@ -28,9 +28,9 @@ use std::time::Instant;
 use crate::modules::account::{self, get_str};
 use crate::modules::codebuddy_cn_ide::{match_account_for_token, parse_token_from_secret};
 use crate::modules::config::{atomic_write, now_ms, store_dir};
+use crate::modules::i18n;
 use crate::modules::process;
 use crate::modules::vscode_ext::build_ext_session_json;
-use crate::modules::i18n;
 
 const STATE_FILE: &str = "jetbrains.json";
 /// CodeBuddy 插件写入 `SecretStorage` 的会话密钥（与 VS Code 扩展同 key）。
@@ -276,8 +276,12 @@ fn read_secret_for(config_dir: &Path) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| i18n::pick(format!("Could not read {}: {e}", path.display()), format!("{} 읽기에 실패했습니다: {e}", path.display())))?;
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        i18n::pick(
+            format!("Could not read {}: {e}", path.display()),
+            format!("{} 읽기에 실패했습니다: {e}", path.display()),
+        )
+    })?;
     Ok(parse_secret_entries(&content)
         .into_iter()
         .find(|(key, _)| key == SECRET_KEY)
@@ -288,11 +292,20 @@ fn read_secret_for(config_dir: &Path) -> Result<Option<String>, String> {
 fn write_secret_for(config_dir: &Path, value: &str) -> Result<PathBuf, String> {
     let path = secret_path_for(config_dir);
     let mut entries: Vec<(String, String)> = if path.exists() {
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| i18n::pick(format!("Could not read {}: {e}", path.display()), format!("{} 읽기에 실패했습니다: {e}", path.display())))?;
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            i18n::pick(
+                format!("Could not read {}: {e}", path.display()),
+                format!("{} 읽기에 실패했습니다: {e}", path.display()),
+            )
+        })?;
         // 写前备份（单份覆盖式）：secret 丢了大不了重新登录，但零成本留个还原点。
         let backup = path.with_extension("xml.wb-switch-bak");
-        std::fs::copy(&path, &backup).map_err(|e| i18n::pick(format!("Could not back up {}: {e}", path.display()), format!("{} 백업에 실패했습니다: {e}", path.display())))?;
+        std::fs::copy(&path, &backup).map_err(|e| {
+            i18n::pick(
+                format!("Could not back up {}: {e}", path.display()),
+                format!("{} 백업에 실패했습니다: {e}", path.display()),
+            )
+        })?;
         parse_secret_entries(&content)
     } else {
         Vec::new()
@@ -304,8 +317,12 @@ fn write_secret_for(config_dir: &Path, value: &str) -> Result<PathBuf, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    atomic_write(&path, &serialize_secret_entries(&entries))
-        .map_err(|e| i18n::pick(format!("Could not write {}: {e}", path.display()), format!("{} 쓰기에 실패했습니다: {e}", path.display())))?;
+    atomic_write(&path, &serialize_secret_entries(&entries)).map_err(|e| {
+        i18n::pick(
+            format!("Could not write {}: {e}", path.display()),
+            format!("{} 쓰기에 실패했습니다: {e}", path.display()),
+        )
+    })?;
     Ok(path)
 }
 
@@ -741,27 +758,40 @@ fn process_alive(pid: u32) -> bool {
 
 /// 重新打开被我们关闭的 IDE（只用关闭前记录的路径）。
 fn launch_ide(inst: &RunningIde) -> Result<(), String> {
-    let target = inst
-        .launch_target
-        .as_ref()
-        .ok_or_else(|| i18n::tr("Could not record the IDE executable path; open it manually", "IDE 실행 파일 경로를 기록하지 못했습니다. 직접 실행해 주세요").to_string())?;
+    let target = inst.launch_target.as_ref().ok_or_else(|| {
+        i18n::tr(
+            "Could not record the IDE executable path; open it manually",
+            "IDE 실행 파일 경로를 기록하지 못했습니다. 직접 실행해 주세요",
+        )
+        .to_string()
+    })?;
     #[cfg(target_os = "macos")]
     {
         let app = target.to_string_lossy().into_owned();
         match process::run_cmd_timeout("open", &[app.as_str()], 10) {
             Some(out) if out.status.success() => Ok(()),
-            Some(out) => Err(i18n::pick(format!("Could not reopen the IDE: {} (path: {})",
-                String::from_utf8_lossy(&out.stderr).trim(),
-                target.display()
-            ), format!("IDE를 다시 열지 못했습니다: {}(경로: {})",
-                String::from_utf8_lossy(&out.stderr).trim(),
-                target.display()
-            ))),
-            None => Err(i18n::pick(format!("Could not reopen the IDE: open timed out (path: {})",
-                target.display()
-            ), format!("IDE를 다시 열지 못했습니다: open 시간 초과(경로: {})",
-                target.display()
-            ))),
+            Some(out) => Err(i18n::pick(
+                format!(
+                    "Could not reopen the IDE: {} (path: {})",
+                    String::from_utf8_lossy(&out.stderr).trim(),
+                    target.display()
+                ),
+                format!(
+                    "IDE를 다시 열지 못했습니다: {}(경로: {})",
+                    String::from_utf8_lossy(&out.stderr).trim(),
+                    target.display()
+                ),
+            )),
+            None => Err(i18n::pick(
+                format!(
+                    "Could not reopen the IDE: open timed out (path: {})",
+                    target.display()
+                ),
+                format!(
+                    "IDE를 다시 열지 못했습니다: open 시간 초과(경로: {})",
+                    target.display()
+                ),
+            )),
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -770,7 +800,15 @@ fn launch_ide(inst: &RunningIde) -> Result<(), String> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| i18n::pick(format!("Could not reopen the IDE: {e} (path: {})", target.display()), format!("IDE를 다시 열지 못했습니다: {e}(경로: {})", target.display())))?;
+            .map_err(|e| {
+                i18n::pick(
+                    format!("Could not reopen the IDE: {e} (path: {})", target.display()),
+                    format!(
+                        "IDE를 다시 열지 못했습니다: {e}(경로: {})",
+                        target.display()
+                    ),
+                )
+            })?;
         Ok(())
     }
 }
@@ -909,16 +947,33 @@ fn validate_switch_target(
     account_id: &str,
     config_dirs: Option<&[String]>,
 ) -> Result<(Value, Vec<Target>), String> {
-    let acc =
-        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
-    let token = get_str(&acc, "access_token")
-        .ok_or_else(|| i18n::tr("The account has no access_token, so the JetBrains IDE plugin cannot be injected", "계정에 access_token이 없어 JetBrains IDE 플러그인에 주입할 수 없습니다").to_string())?;
+    let acc = account::find_account(account_id).ok_or_else(|| {
+        i18n::pick(
+            format!("Account not found: {account_id}"),
+            format!("계정을 찾을 수 없습니다: {account_id}"),
+        )
+    })?;
+    let token = get_str(&acc, "access_token").ok_or_else(|| {
+        i18n::tr(
+            "The account has no access_token, so the JetBrains IDE plugin cannot be injected",
+            "계정에 access_token이 없어 JetBrains IDE 플러그인에 주입할 수 없습니다",
+        )
+        .to_string()
+    })?;
     if token.is_empty() {
-        return Err(i18n::tr("The account access_token is empty", "계정 access_token이 비어 있습니다").to_string());
+        return Err(i18n::tr(
+            "The account access_token is empty",
+            "계정 access_token이 비어 있습니다",
+        )
+        .to_string());
     }
 
     if jetbrains_config_root().is_none() {
-        return Err(i18n::tr("Could not locate the JetBrains configuration directory", "JetBrains 설정 디렉터리를 찾지 못했습니다").to_string());
+        return Err(i18n::tr(
+            "Could not locate the JetBrains configuration directory",
+            "JetBrains 설정 디렉터리를 찾지 못했습니다",
+        )
+        .to_string());
     }
     let targets: Vec<Target> = list_targets()
         .into_iter()
@@ -984,7 +1039,10 @@ fn describe_secret_error(err: String) -> String {
 
 /// 注入失败的文案映射。
 fn describe_inject_error(err: String) -> String {
-    i18n::pick(format!("Could not inject the JetBrains IDE plugin sign-in state: {err}"), format!("JetBrains IDE 플러그인 로그인 상태 주입에 실패했습니다: {err}"))
+    i18n::pick(
+        format!("Could not inject the JetBrains IDE plugin sign-in state: {err}"),
+        format!("JetBrains IDE 플러그인 로그인 상태 주입에 실패했습니다: {err}"),
+    )
 }
 
 /// 切换成功文案：区分「已重新打开」「重开失败」「本来没运行」。
@@ -997,7 +1055,10 @@ fn switch_message(
     let scope = if written.is_empty() {
         String::new()
     } else {
-        i18n::pick(format!(", targets: {}", written.join("、")), format!("，목표: {}", written.join("、")))
+        i18n::pick(
+            format!(", targets: {}", written.join("、")),
+            format!("，목표: {}", written.join("、")),
+        )
     };
     match (restarted, relaunch_error) {
         (true, _) => i18n::pick(format!("Wrote the JetBrains IDE CodeBuddy plugin credentials ({name}{scope}), and the IDE has been reopened."), format!("JetBrains IDE CodeBuddy 플러그인 자격 증명을 기록했습니다({name}{scope}). IDE를 다시 열었습니다.")),

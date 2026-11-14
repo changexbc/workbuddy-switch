@@ -232,11 +232,11 @@ pub fn resolve_state_db_path_for(
         Some(p) => p.to_path_buf(),
         None => (target.data_dir_resolver)().ok_or_else(|| {
             i18n::pick(
-                format!("Unable to locate the {} data directory", target.display_name),
                 format!(
-                    "{} 데이터 디렉터리를 찾을 수 없습니다",
+                    "Unable to locate the {} data directory",
                     target.display_name
                 ),
+                format!("{} 데이터 디렉터리를 찾을 수 없습니다", target.display_name),
             )
         })?,
     };
@@ -517,15 +517,13 @@ fn get_windows_encryption_key(data_root: &Path) -> Result<Vec<u8>, String> {
             format!("Local State 파싱 실패: {e}"),
         )
     })?;
-    let encrypted_key_b64 = json["os_crypt"]["encrypted_key"]
-        .as_str()
-        .ok_or_else(|| {
-            i18n::tr(
-                "Local State is missing os_crypt.encrypted_key",
-                "Local State에 os_crypt.encrypted_key가 없습니다",
-            )
-            .to_string()
-        })?;
+    let encrypted_key_b64 = json["os_crypt"]["encrypted_key"].as_str().ok_or_else(|| {
+        i18n::tr(
+            "Local State is missing os_crypt.encrypted_key",
+            "Local State에 os_crypt.encrypted_key가 없습니다",
+        )
+        .to_string()
+    })?;
     let encrypted_key_bytes = general_purpose::STANDARD
         .decode(encrypted_key_b64)
         .map_err(|e| format!("Base64 decode failed for encrypted_key: {e}"))?;
@@ -708,11 +706,11 @@ pub fn read_secret_for(
         Some(p) => p.to_path_buf(),
         None => (target.data_dir_resolver)().ok_or_else(|| {
             i18n::pick(
-                format!("Unable to locate the {} data directory", target.display_name),
                 format!(
-                    "{} 데이터 디렉터리를 찾을 수 없습니다",
+                    "Unable to locate the {} data directory",
                     target.display_name
                 ),
+                format!("{} 데이터 디렉터리를 찾을 수 없습니다", target.display_name),
             )
         })?,
     };
@@ -770,14 +768,13 @@ pub fn has_secret_row_for(
         return Ok(false);
     };
     // 只读打开：避免在「文件不存在」等边缘情况下由 SQLite 兜底新建空库。
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(
-        |e| {
+    let conn =
+        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
             i18n::pick(
                 format!("Failed to open state.vscdb: {e}"),
                 format!("state.vscdb 열기 실패: {e}"),
             )
-        },
-    )?;
+        })?;
     let key = secret_storage_item_key_for(target);
     match conn.query_row(
         "SELECT 1 FROM ItemTable WHERE key = ?1 LIMIT 1",

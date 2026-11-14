@@ -27,8 +27,8 @@ use crate::modules::config::{
     RunFlagGuard,
 };
 use crate::modules::credits;
-use crate::modules::variant::WbVariant;
 use crate::modules::i18n;
+use crate::modules::variant::WbVariant;
 
 static ROTATE_RUNNING: AtomicBool = AtomicBool::new(false);
 static LAST_CHECK_AT: AtomicI64 = AtomicI64::new(0);
@@ -148,11 +148,13 @@ pub fn decide_target(
     // 1) 有效候选（可被选为目标）
     let mut valid: Vec<&Candidate> = candidates.iter().filter(|c| c.valid).collect();
     if valid.is_empty() {
-        return Decision::Skip(i18n::tr(
-            "No usable account (query failed / expired / no remaining credits)",
-            "사용 가능한 계정이 없습니다(조회 실패/만료/남은 크레딧 없음)",
-        )
-        .to_string());
+        return Decision::Skip(
+            i18n::tr(
+                "No usable account (query failed / expired / no remaining credits)",
+                "사용 가능한 계정이 없습니다(조회 실패/만료/남은 크레딧 없음)",
+            )
+            .to_string(),
+        );
     }
     // 2) 目标 = 紧迫度最高（到期最早）
     valid.sort_by_key(|c| c.urgency_key());
@@ -637,7 +639,9 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("No usable account (query failed / expired / no remaining credits)".to_string())
+            Decision::Skip(
+                "No usable account (query failed / expired / no remaining credits)".to_string()
+            )
         );
     }
 
@@ -705,9 +709,7 @@ mod tests {
         ];
         assert_eq!(
             decide_target(&already_target, Some("a"), None, 0, GAP, URG, true, 0.0),
-            Decision::Skip(
-                "The current account is already the most urgent".to_string()
-            ),
+            Decision::Skip("The current account is already the most urgent".to_string()),
             "已是目标时不会走到门控，也就不会按门控文案提示"
         );
         assert_eq!(

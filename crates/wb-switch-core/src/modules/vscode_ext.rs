@@ -23,9 +23,9 @@ use crate::modules::account::{self, get_str};
 use crate::modules::auth_file::build_account_obj;
 use crate::modules::codebuddy_cn_ide::{match_account_for_token, parse_token_from_secret};
 use crate::modules::config::{atomic_write, now_ms, store_dir};
+use crate::modules::i18n;
 use crate::modules::process;
 use crate::modules::variant::codebuddy_domain_for;
-use crate::modules::i18n;
 use crate::modules::vscode_cn_inject::{
     has_secret_row_for, inject_secret_for, read_secret_for, state_db_path_for,
     VscodeSafeStorageTarget,
@@ -629,7 +629,10 @@ fn close_vscode(pids: &[u32], timeout_secs: i64) -> Result<(), String> {
 fn open_error_reason(out: &std::process::Output) -> String {
     let reason = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if reason.is_empty() {
-        i18n::pick(format!("open exited with code {}", out.status.code().unwrap_or(-1)), format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)))
+        i18n::pick(
+            format!("open exited with code {}", out.status.code().unwrap_or(-1)),
+            format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)),
+        )
     } else {
         reason
     }
@@ -648,29 +651,45 @@ fn launch_vscode(inst: &RunningInstance) -> Result<(), String> {
                 let app = bundle.to_string_lossy().into_owned();
                 match process::run_cmd_timeout("open", &[app.as_str()], 10) {
                     Some(out) if out.status.success() => Ok(()),
-                    Some(out) => Err(i18n::pick(format!("Could not reopen VS Code: {} (path: {})",
-                        open_error_reason(&out),
-                        bundle.display()
-                    ), format!("VS Code를 다시 열지 못했습니다: {}(경로: {})",
-                        open_error_reason(&out),
-                        bundle.display()
-                    ))),
-                    None => Err(i18n::pick(format!("Could not reopen VS Code: open timed out (path: {})",
-                        bundle.display()
-                    ), format!("VS Code를 다시 열지 못했습니다: open 시간 초과(경로: {})",
-                        bundle.display()
-                    ))),
+                    Some(out) => Err(i18n::pick(
+                        format!(
+                            "Could not reopen VS Code: {} (path: {})",
+                            open_error_reason(&out),
+                            bundle.display()
+                        ),
+                        format!(
+                            "VS Code를 다시 열지 못했습니다: {}(경로: {})",
+                            open_error_reason(&out),
+                            bundle.display()
+                        ),
+                    )),
+                    None => Err(i18n::pick(
+                        format!(
+                            "Could not reopen VS Code: open timed out (path: {})",
+                            bundle.display()
+                        ),
+                        format!(
+                            "VS Code를 다시 열지 못했습니다: open 시간 초과(경로: {})",
+                            bundle.display()
+                        ),
+                    )),
                 }
             }
             // 退化：记录不到 bundle 路径时按 bundle id 打开。
             None => match process::run_cmd_timeout("open", &["-b", "com.microsoft.VSCode"], 10) {
                 Some(out) if out.status.success() => Ok(()),
-                Some(out) => Err(i18n::pick(format!("Could not reopen VS Code: {}",
-                    open_error_reason(&out)
-                ), format!("VS Code를 다시 열지 못했습니다: {}",
-                    open_error_reason(&out)
-                ))),
-                None => Err(i18n::tr("Could not reopen VS Code: open timed out", "VS Code를 다시 열지 못했습니다: open 시간 초과").to_string()),
+                Some(out) => Err(i18n::pick(
+                    format!("Could not reopen VS Code: {}", open_error_reason(&out)),
+                    format!(
+                        "VS Code를 다시 열지 못했습니다: {}",
+                        open_error_reason(&out)
+                    ),
+                )),
+                None => Err(i18n::tr(
+                    "Could not reopen VS Code: open timed out",
+                    "VS Code를 다시 열지 못했습니다: open 시간 초과",
+                )
+                .to_string()),
             },
         }
     }
@@ -678,13 +697,27 @@ fn launch_vscode(inst: &RunningInstance) -> Result<(), String> {
     {
         let exe = inst
             .launch_target()
-            .ok_or_else(|| i18n::tr("Could not record the VS Code executable path; open VS Code manually", "VS Code 실행 파일 경로를 기록하지 못했습니다. VS Code를 직접 실행해 주세요").to_string())?
+            .ok_or_else(|| {
+                i18n::tr(
+                    "Could not record the VS Code executable path; open VS Code manually",
+                    "VS Code 실행 파일 경로를 기록하지 못했습니다. VS Code를 직접 실행해 주세요",
+                )
+                .to_string()
+            })?
             .to_path_buf();
         process::cmd_builder(&exe)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| i18n::pick(format!("Could not reopen VS Code: {e} (path: {})", exe.display()), format!("VS Code를 다시 열지 못했습니다: {e}(경로: {})", exe.display())))?;
+            .map_err(|e| {
+                i18n::pick(
+                    format!("Could not reopen VS Code: {e} (path: {})", exe.display()),
+                    format!(
+                        "VS Code를 다시 열지 못했습니다: {e}(경로: {})",
+                        exe.display()
+                    ),
+                )
+            })?;
         Ok(())
     }
 }
@@ -721,15 +754,29 @@ fn switch_message(name: &str, restarted: bool, relaunch_error: Option<&str>) -> 
 /// 「无论怎么关都注定失败」的目标，不该让用户的编辑器被关掉。返回目标账号条目与用户数据目录；
 /// 幂等且廉价，[`switch_account_after_close`] 会再校验一次。
 pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf), String> {
-    let acc =
-        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
+    let acc = account::find_account(account_id).ok_or_else(|| {
+        i18n::pick(
+            format!("Account not found: {account_id}"),
+            format!("계정을 찾을 수 없습니다: {account_id}"),
+        )
+    })?;
     let token = get_str(&acc, "access_token")
         .ok_or_else(|| i18n::tr("The account has no access_token, so the VS Code CodeBuddy extension cannot be injected", "계정에 access_token이 없어 VS Code CodeBuddy 확장에 주입할 수 없습니다").to_string())?;
     if token.is_empty() {
-        return Err(i18n::tr("The account access_token is empty", "계정 access_token이 비어 있습니다").to_string());
+        return Err(i18n::tr(
+            "The account access_token is empty",
+            "계정 access_token이 비어 있습니다",
+        )
+        .to_string());
     }
 
-    let data_dir = vscode_data_dir().ok_or_else(|| i18n::tr("Could not locate the VS Code data directory", "VS Code 데이터 디렉터리를 찾지 못했습니다").to_string())?;
+    let data_dir = vscode_data_dir().ok_or_else(|| {
+        i18n::tr(
+            "Could not locate the VS Code data directory",
+            "VS Code 데이터 디렉터리를 찾지 못했습니다",
+        )
+        .to_string()
+    })?;
     if !data_dir.exists() {
         return Err(i18n::pick(format!("VS Code user data directory not found ({}). Open VS Code, install the CodeBuddy extension, and try again.",
             data_dir.display()
@@ -738,8 +785,13 @@ pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf
         )));
     }
 
-    let db_path =
-        vscode_ext_state_db_path().ok_or_else(|| i18n::tr("Could not locate the VS Code data directory", "VS Code 데이터 디렉터리를 찾지 못했습니다").to_string())?;
+    let db_path = vscode_ext_state_db_path().ok_or_else(|| {
+        i18n::tr(
+            "Could not locate the VS Code data directory",
+            "VS Code 데이터 디렉터리를 찾지 못했습니다",
+        )
+        .to_string()
+    })?;
     if !db_path.exists() {
         return Err(i18n::pick(format!("VS Code state database not found ({}). Open VS Code once (signing in to the extension is not required) and try again.",
             db_path.display()
@@ -891,7 +943,11 @@ pub fn detect_current_account() -> Result<Value, String> {
         }));
     };
     let Some((uid, token)) = parse_token_from_secret(&secret) else {
-        return Err(i18n::tr("Could not parse the local VS Code CodeBuddy extension sign-in information", "로컬 VS Code CodeBuddy 확장 로그인 정보를 해석하지 못했습니다").to_string());
+        return Err(i18n::tr(
+            "Could not parse the local VS Code CodeBuddy extension sign-in information",
+            "로컬 VS Code CodeBuddy 확장 로그인 정보를 해석하지 못했습니다",
+        )
+        .to_string());
     };
     if let Some(acc) = match_account_for_token(uid.as_deref(), &token) {
         let id = get_str(&acc, "id").unwrap_or_default();
@@ -1195,7 +1251,10 @@ mod tests {
     fn close_timeout_error_lists_pids_and_manual_hint() {
         let message = close_timeout_error(&[4242, 4243]);
         assert!(message.contains("4242, 4243"), "{message}");
-        assert!(message.contains("Handle the save prompts in VS Code"), "{message}");
+        assert!(
+            message.contains("Handle the save prompts in VS Code"),
+            "{message}"
+        );
         // 等待期间被重新打开也会表现为「仍有进程」→ 文案要点出这条排查方向。
         assert!(message.contains("reopened VS Code"), "{message}");
     }
@@ -1294,7 +1353,10 @@ mod tests {
     #[test]
     fn switch_message_matches_design_states() {
         let restarted = switch_message("测试号", true, None);
-        assert!(restarted.contains("VS Code has been reopened"), "{restarted}");
+        assert!(
+            restarted.contains("VS Code has been reopened"),
+            "{restarted}"
+        );
         assert!(!restarted.contains("reload"), "{restarted}");
 
         let relaunch_failed = switch_message("测试号", false, Some("open 超时"));
@@ -1304,7 +1366,10 @@ mod tests {
         );
 
         let not_running = switch_message("测试号", false, None);
-        assert!(not_running.contains("open VS Code for them to take effect"), "{not_running}");
+        assert!(
+            not_running.contains("open VS Code for them to take effect"),
+            "{not_running}"
+        );
         assert!(!not_running.contains("重载"), "{not_running}");
     }
 }

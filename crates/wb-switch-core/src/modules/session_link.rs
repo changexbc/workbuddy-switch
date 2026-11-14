@@ -29,10 +29,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::modules::config::{atomic_write, now_ms};
+use crate::modules::i18n;
 use crate::modules::session::SessionPaths;
 use crate::modules::session_backup;
 use crate::modules::variant::WbVariant;
-use crate::modules::i18n;
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -143,7 +143,11 @@ pub(crate) fn line_digest_of(line: &str) -> String {
 pub fn normalize_jsonl(text: &str, own_session_id: &str) -> Result<NormalizedContent, String> {
     let own_session_id = own_session_id.trim();
     if own_session_id.is_empty() {
-        return Err(i18n::tr("Missing session id; cannot read the content", "세션 id가 없어 내용을 읽을 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "Missing session id; cannot read the content",
+            "세션 id가 없어 내용을 읽을 수 없습니다",
+        )
+        .to_string());
     }
     if text.trim().is_empty() {
         return Err(i18n::tr("The content is empty", "내용이 비어 있습니다").to_string());
@@ -159,10 +163,26 @@ pub fn normalize_jsonl(text: &str, own_session_id: &str) -> Result<NormalizedCon
     for (index, raw) in lines.iter().enumerate() {
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         if line.trim().is_empty() {
-            return Err(i18n::pick(format!("Line {} is empty; the content may be incomplete", index + 1), format!("{}번째 줄이 비어 있습니다. 내용이 불완전할 수 있습니다", index + 1)));
+            return Err(i18n::pick(
+                format!("Line {} is empty; the content may be incomplete", index + 1),
+                format!(
+                    "{}번째 줄이 비어 있습니다. 내용이 불완전할 수 있습니다",
+                    index + 1
+                ),
+            ));
         }
-        serde_json::from_str::<serde_json::Value>(line)
-            .map_err(|_| i18n::pick(format!("The format of line {} is not recognized; the content may be incomplete", index + 1), format!("{}번째 줄의 형식을 인식할 수 없습니다. 내용이 불완전할 수 있습니다", index + 1)))?;
+        serde_json::from_str::<serde_json::Value>(line).map_err(|_| {
+            i18n::pick(
+                format!(
+                    "The format of line {} is not recognized; the content may be incomplete",
+                    index + 1
+                ),
+                format!(
+                    "{}번째 줄의 형식을 인식할 수 없습니다. 내용이 불완전할 수 있습니다",
+                    index + 1
+                ),
+            )
+        })?;
         line_digests.push(line_digest_of(
             &line.replace(own_session_id, SESSION_ID_MARKER),
         ));
@@ -180,12 +200,22 @@ pub fn read_content_snapshot(path: &Path, own_session_id: &str) -> ContentState 
     let before = match std::fs::metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == ErrorKind::NotFound => return ContentState::Missing,
-        Err(error) => return ContentState::Unavailable(i18n::pick(format!("Could not read the content: {error}"), format!("내용을 읽을 수 없습니다: {error}"))),
+        Err(error) => {
+            return ContentState::Unavailable(i18n::pick(
+                format!("Could not read the content: {error}"),
+                format!("내용을 읽을 수 없습니다: {error}"),
+            ))
+        }
     };
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => return ContentState::Missing,
-        Err(error) => return ContentState::Unavailable(i18n::pick(format!("Failed to read the content: {error}"), format!("내용 읽기에 실패했습니다: {error}"))),
+        Err(error) => {
+            return ContentState::Unavailable(i18n::pick(
+                format!("Failed to read the content: {error}"),
+                format!("내용 읽기에 실패했습니다: {error}"),
+            ))
+        }
     };
     let after = std::fs::metadata(path);
     let changed = match after {
@@ -193,11 +223,25 @@ pub fn read_content_snapshot(path: &Path, own_session_id: &str) -> ContentState 
         Err(_) => true,
     };
     if changed {
-        return ContentState::Unavailable(i18n::tr("The content changed while it was being read, so completeness cannot be confirmed", "읽는 동안 내용이 변경되어 완전성을 확인할 수 없습니다").to_string());
+        return ContentState::Unavailable(
+            i18n::tr(
+                "The content changed while it was being read, so completeness cannot be confirmed",
+                "읽는 동안 내용이 변경되어 완전성을 확인할 수 없습니다",
+            )
+            .to_string(),
+        );
     }
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
-        Err(_) => return ContentState::Unavailable(i18n::tr("The content format is invalid and cannot be read", "내용 형식이 올바르지 않아 읽을 수 없습니다").to_string()),
+        Err(_) => {
+            return ContentState::Unavailable(
+                i18n::tr(
+                    "The content format is invalid and cannot be read",
+                    "내용 형식이 올바르지 않아 읽을 수 없습니다",
+                )
+                .to_string(),
+            )
+        }
     };
     let full_digest = full_digest_of(text.as_bytes());
     match normalize_jsonl(&text, own_session_id) {
@@ -480,7 +524,10 @@ impl SyncMode {
             "overwrite" => Ok(SyncMode::Overwrite),
             "unifyOverwrite" => Ok(SyncMode::UnifyOverwrite),
             "statusOnly" => Ok(SyncMode::StatusOnly),
-            other => Err(i18n::pick(format!("Unknown sync mode: {other}"), format!("알 수 없는 동기화 모드: {other}"))),
+            other => Err(i18n::pick(
+                format!("Unknown sync mode: {other}"),
+                format!("알 수 없는 동기화 모드: {other}"),
+            )),
         }
     }
 }
@@ -577,16 +624,28 @@ pub fn decide_sync(
     let (source, target) = match (source, target) {
         (ContentState::Ready(source), ContentState::Ready(target)) => (source, target),
         (ContentState::Missing, _) => {
-            return SyncDecision::unknown(i18n::tr("The current account's content does not exist, so it cannot be confirmed", "현재 계정의 내용이 없어 확인할 수 없습니다"))
+            return SyncDecision::unknown(i18n::tr(
+                "The current account's content does not exist, so it cannot be confirmed",
+                "현재 계정의 내용이 없어 확인할 수 없습니다",
+            ))
         }
         (ContentState::Unavailable(reason), _) => {
-            return SyncDecision::unknown(i18n::pick(format!("The current account's content cannot be confirmed: {reason}"), format!("현재 계정의 내용을 확인할 수 없습니다: {reason}")))
+            return SyncDecision::unknown(i18n::pick(
+                format!("The current account's content cannot be confirmed: {reason}"),
+                format!("현재 계정의 내용을 확인할 수 없습니다: {reason}"),
+            ))
         }
         (_, ContentState::Missing) => {
-            return SyncDecision::unknown(i18n::tr("The target account's content does not exist, so it cannot be confirmed", "대상 계정의 내용이 없어 확인할 수 없습니다"))
+            return SyncDecision::unknown(i18n::tr(
+                "The target account's content does not exist, so it cannot be confirmed",
+                "대상 계정의 내용이 없어 확인할 수 없습니다",
+            ))
         }
         (_, ContentState::Unavailable(reason)) => {
-            return SyncDecision::unknown(i18n::pick(format!("The target account's content cannot be confirmed: {reason}"), format!("대상 계정의 내용을 확인할 수 없습니다: {reason}")))
+            return SyncDecision::unknown(i18n::pick(
+                format!("The target account's content cannot be confirmed: {reason}"),
+                format!("대상 계정의 내용을 확인할 수 없습니다: {reason}"),
+            ))
         }
     };
     let counts = multiset_counts(
@@ -598,11 +657,16 @@ pub fn decide_sync(
         return SyncDecision::decide(
             SyncVerdict::Identical,
             counts,
-            i18n::pick(format!("Both sides have identical content ({} records each); no sync needed",
-                source.normalized.record_count
-            ), format!("양쪽 내용이 동일합니다(각 {}건). 동기화할 필요가 없습니다",
-                source.normalized.record_count
-            )),
+            i18n::pick(
+                format!(
+                    "Both sides have identical content ({} records each); no sync needed",
+                    source.normalized.record_count
+                ),
+                format!(
+                    "양쪽 내용이 동일합니다(각 {}건). 동기화할 필요가 없습니다",
+                    source.normalized.record_count
+                ),
+            ),
         );
     }
     // 目标内容全部包含在来源里（B 是 A 的严格有序前缀）：追加同步零覆盖，
@@ -937,8 +1001,15 @@ pub fn try_acquire_variant_ops_lock(
 /// The caller holds it across duplicate checks, copy/sync, and link registration.
 pub fn try_acquire_client_ops_lock(paths: &SessionPaths) -> Result<FileLock, String> {
     try_lock_file(&paths.client_ops_lock_file()).map_err(|error| match error {
-        LockError::Busy => i18n::tr("This client is running another session operation; please try again later", "이 클라이언트에서 다른 세션 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요").to_string(),
-        LockError::Unavailable(reason) => i18n::pick(format!("Could not create the client session operation lock: {reason}"), format!("클라이언트 세션 작업 잠금을 만들지 못했습니다: {reason}")),
+        LockError::Busy => i18n::tr(
+            "This client is running another session operation; please try again later",
+            "이 클라이언트에서 다른 세션 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요",
+        )
+        .to_string(),
+        LockError::Unavailable(reason) => i18n::pick(
+            format!("Could not create the client session operation lock: {reason}"),
+            format!("클라이언트 세션 작업 잠금을 만들지 못했습니다: {reason}"),
+        ),
     })
 }
 
@@ -949,11 +1020,18 @@ fn acquire_link_store_lock(paths: &SessionPaths) -> Result<FileLock, String> {
             Ok(lock) => return Ok(lock),
             Err(LockError::Busy) => std::thread::sleep(STORE_LOCK_RETRY_INTERVAL),
             Err(LockError::Unavailable(reason)) => {
-                return Err(i18n::pick(format!("The sync record is temporarily unavailable: {reason}"), format!("동기화 기록을 일시적으로 사용할 수 없습니다: {reason}")));
+                return Err(i18n::pick(
+                    format!("The sync record is temporarily unavailable: {reason}"),
+                    format!("동기화 기록을 일시적으로 사용할 수 없습니다: {reason}"),
+                ));
             }
         }
     }
-    Err(i18n::tr("The sync record is in use by another operation; please try again later", "동기화 기록이 다른 작업에서 사용 중입니다. 잠시 후 다시 시도해 주세요").to_string())
+    Err(i18n::tr(
+        "The sync record is in use by another operation; please try again later",
+        "동기화 기록이 다른 작업에서 사용 중입니다. 잠시 후 다시 시도해 주세요",
+    )
+    .to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,7 +1105,13 @@ pub fn load_store(paths: &SessionPaths) -> StoreState {
     let mut store = match serde_json::from_str::<LinkStore>(&text) {
         Ok(store) => store,
         Err(_) => {
-            return StoreState::Unavailable(i18n::tr("The sync record is damaged; the original file was preserved", "동기화 기록이 손상되었습니다. 원본 파일은 보존했습니다").to_string());
+            return StoreState::Unavailable(
+                i18n::tr(
+                    "The sync record is damaged; the original file was preserved",
+                    "동기화 기록이 손상되었습니다. 원본 파일은 보존했습니다",
+                )
+                .to_string(),
+            );
         }
     };
     if store.version != LINK_STORE_VERSION {
@@ -1040,7 +1124,10 @@ pub fn load_store(paths: &SessionPaths) -> StoreState {
     // 旧存储兼容：成员缺 `variant` 时用组级 `variant` 回填（跨档组成员显式保存）。
     backfill_member_variants(&mut store);
     if let Err(reason) = validate_store(&store) {
-        return StoreState::Unavailable(i18n::pick(format!("The sync record content is inconsistent: {reason}"), format!("동기화 기록 내용이 일치하지 않습니다: {reason}")));
+        return StoreState::Unavailable(i18n::pick(
+            format!("The sync record content is inconsistent: {reason}"),
+            format!("동기화 기록 내용이 일치하지 않습니다: {reason}"),
+        ));
     }
     StoreState::Ready(store)
 }
@@ -1055,13 +1142,19 @@ pub fn validate_store(store: &LinkStore) -> Result<(), String> {
     let mut identities = std::collections::HashSet::new();
     for group in &store.groups {
         if !group_ids.insert(group.id.as_str()) {
-            return Err(i18n::pick(format!("Duplicate group record: {}", group.id), format!("그룹 기록이 중복되었습니다: {}", group.id)));
+            return Err(i18n::pick(
+                format!("Duplicate group record: {}", group.id),
+                format!("그룹 기록이 중복되었습니다: {}", group.id),
+            ));
         }
         let mut member_ids = std::collections::HashSet::new();
         let mut active_by_uid = std::collections::HashSet::new();
         for member in &group.members {
             if !member_ids.insert(member.member_id.as_str()) {
-                return Err(i18n::pick(format!("Duplicate member record: {}", member.member_id), format!("멤버 기록이 중복되었습니다: {}", member.member_id)));
+                return Err(i18n::pick(
+                    format!("Duplicate member record: {}", member.member_id),
+                    format!("멤버 기록이 중복되었습니다: {}", member.member_id),
+                ));
             }
             let identity = (
                 member_variant(group, member).as_str(),
@@ -1069,28 +1162,52 @@ pub fn validate_store(store: &LinkStore) -> Result<(), String> {
                 member.session_id.as_str(),
             );
             if !identities.insert(identity) {
-                return Err(i18n::pick(format!("Session {} belongs to more than one sync group", member.session_id), format!("여러 동기화 그룹에 속한 세션이 있습니다: {}", member.session_id)));
+                return Err(i18n::pick(
+                    format!(
+                        "Session {} belongs to more than one sync group",
+                        member.session_id
+                    ),
+                    format!(
+                        "여러 동기화 그룹에 속한 세션이 있습니다: {}",
+                        member.session_id
+                    ),
+                ));
             }
             if member.state == MemberState::Active && !active_by_uid.insert(member.uid.as_str()) {
-                return Err(i18n::pick(format!("Account {} has multiple active member records in the same group",
-                    member.uid
-                ), format!("같은 그룹에 유효한 멤버 기록이 여러 개인 계정이 있습니다: {}",
-                    member.uid
-                )));
+                return Err(i18n::pick(
+                    format!(
+                        "Account {} has multiple active member records in the same group",
+                        member.uid
+                    ),
+                    format!(
+                        "같은 그룹에 유효한 멤버 기록이 여러 개인 계정이 있습니다: {}",
+                        member.uid
+                    ),
+                ));
             }
         }
         let mut pairs = std::collections::HashSet::new();
         for pair in &group.pair_bases {
             if !pairs.insert(pair_key(&pair.member_ids[0], &pair.member_ids[1])) {
-                return Err(i18n::pick(format!("The same member pair has duplicate sync records: {}",
-                    pair.baseline_ref
-                ), format!("같은 멤버 쌍의 동기화 기록이 중복 저장되었습니다: {}",
-                    pair.baseline_ref
-                )));
+                return Err(i18n::pick(
+                    format!(
+                        "The same member pair has duplicate sync records: {}",
+                        pair.baseline_ref
+                    ),
+                    format!(
+                        "같은 멤버 쌍의 동기화 기록이 중복 저장되었습니다: {}",
+                        pair.baseline_ref
+                    ),
+                ));
             }
             for member_id in pair.member_ids.iter() {
                 if !member_ids.contains(member_id.as_str()) {
-                    return Err(i18n::pick(format!("The sync record references a member that does not exist: {member_id}"), format!("동기화 기록이 존재하지 않는 멤버를 참조합니다: {member_id}")));
+                    return Err(i18n::pick(
+                        format!(
+                            "The sync record references a member that does not exist: {member_id}"
+                        ),
+                        format!("동기화 기록이 존재하지 않는 멤버를 참조합니다: {member_id}"),
+                    ));
                 }
             }
         }
@@ -1125,7 +1242,12 @@ pub fn with_link_store_write<T>(
         StoreState::Unavailable(reason) => return Err(reason),
     };
     let outcome = mutate(&mut store)?;
-    validate_store(&store).map_err(|reason| i18n::pick(format!("Refused to save an inconsistent sync record: {reason}"), format!("일치하지 않는 동기화 기록의 저장을 거부했습니다: {reason}")))?;
+    validate_store(&store).map_err(|reason| {
+        i18n::pick(
+            format!("Refused to save an inconsistent sync record: {reason}"),
+            format!("일치하지 않는 동기화 기록의 저장을 거부했습니다: {reason}"),
+        )
+    })?;
     store.version = LINK_STORE_VERSION;
     store.revision = store.revision.saturating_add(1);
     let content = serde_json::to_string_pretty(&store).map_err(|error| error.to_string())?;
@@ -1135,9 +1257,15 @@ pub fn with_link_store_write<T>(
     // 共享关联表属于业务完成门禁：走会话专用持久化写（design §4）。
     session_backup::durable_write_str(&paths.session_links_file(), &content).map_err(|error| {
         if !existed {
-            i18n::pick(format!("The first save of the sync record failed: {error}"), format!("동기화 기록 최초 저장에 실패했습니다: {error}"))
+            i18n::pick(
+                format!("The first save of the sync record failed: {error}"),
+                format!("동기화 기록 최초 저장에 실패했습니다: {error}"),
+            )
         } else {
-            i18n::pick(format!("Failed to save the sync record: {error}"), format!("동기화 기록 저장에 실패했습니다: {error}"))
+            i18n::pick(
+                format!("Failed to save the sync record: {error}"),
+                format!("동기화 기록 저장에 실패했습니다: {error}"),
+            )
         }
     })?;
     Ok(outcome)
@@ -1267,7 +1395,11 @@ pub fn save_baseline(
         line_digests: normalized.line_digests.clone(),
     };
     if !record.is_self_consistent() {
-        return Err(i18n::tr("The last sync record content is inconsistent and cannot be saved", "마지막 동기화 기록 내용이 일치하지 않아 저장할 수 없습니다").to_string());
+        return Err(i18n::tr(
+            "The last sync record content is inconsistent and cannot be saved",
+            "마지막 동기화 기록 내용이 일치하지 않아 저장할 수 없습니다",
+        )
+        .to_string());
     }
     std::fs::create_dir_all(paths.baselines_dir()).map_err(|error| error.to_string())?;
     let content = serde_json::to_string_pretty(&record).map_err(|error| error.to_string())?;
@@ -1320,15 +1452,26 @@ pub fn load_pair_baseline(
         return BaselineState::Missing;
     };
     if pair.normalization_version != NORMALIZATION_VERSION {
-        return BaselineState::Unverifiable(i18n::pick(format!("Record format version {} is not supported (current: {})",
-            pair.normalization_version, NORMALIZATION_VERSION
-        ), format!("지원하지 않는 기록 형식 버전입니다: {} (현재 {})",
-            pair.normalization_version, NORMALIZATION_VERSION
-        )));
+        return BaselineState::Unverifiable(i18n::pick(
+            format!(
+                "Record format version {} is not supported (current: {})",
+                pair.normalization_version, NORMALIZATION_VERSION
+            ),
+            format!(
+                "지원하지 않는 기록 형식 버전입니다: {} (현재 {})",
+                pair.normalization_version, NORMALIZATION_VERSION
+            ),
+        ));
     }
     match load_baseline(paths, &pair.baseline_ref) {
         Some(record) => BaselineState::Ready(record),
-        None => BaselineState::Unverifiable(i18n::tr("The last sync record is missing or damaged", "마지막 동기화 기록이 없거나 손상되었습니다").to_string()),
+        None => BaselineState::Unverifiable(
+            i18n::tr(
+                "The last sync record is missing or damaged",
+                "마지막 동기화 기록이 없거나 손상되었습니다",
+            )
+            .to_string(),
+        ),
     }
 }
 
@@ -1478,8 +1621,12 @@ pub fn save_preview_token(paths: &SessionPaths, binding: PreviewBinding) -> Resu
     // （不受文件系统时间戳精度影响）。
     prune_preview_tokens(paths, KEEP_PREVIEW_TOKENS.saturating_sub(1));
     let content = serde_json::to_string_pretty(&token).map_err(|error| error.to_string())?;
-    atomic_write(&preview_file(paths, &preview_id), &content)
-        .map_err(|error| i18n::pick(format!("Could not write the preview token: {error}"), format!("미리보기 자격 증명을 쓰지 못했습니다: {error}")))?;
+    atomic_write(&preview_file(paths, &preview_id), &content).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the preview token: {error}"),
+            format!("미리보기 자격 증명을 쓰지 못했습니다: {error}"),
+        )
+    })?;
     Ok(preview_id)
 }
 
@@ -1527,40 +1674,96 @@ pub fn prune_preview_tokens(paths: &SessionPaths, keep: usize) -> usize {
 pub fn verify_preview(preview: &PreviewToken, live: &PreviewBinding) -> Vec<String> {
     let mut stale: Vec<String> = Vec::new();
     if preview.version != PREVIEW_TOKEN_VERSION {
-        stale.push(i18n::tr("The check result has expired; please check again", "검사 결과가 만료되었습니다. 다시 검사해 주세요").to_string());
+        stale.push(
+            i18n::tr(
+                "The check result has expired; please check again",
+                "검사 결과가 만료되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     let expected = &preview.binding;
     if expected.variant != live.variant {
         stale.push(i18n::tr("The current app has changed", "현재 앱이 변경되었습니다").to_string());
     }
     if expected.group_id != live.group_id {
-        stale.push(i18n::tr("The session link has changed", "세션 연결이 변경되었습니다").to_string());
+        stale.push(
+            i18n::tr("The session link has changed", "세션 연결이 변경되었습니다").to_string(),
+        );
     }
     if expected.group_fingerprint != live.group_fingerprint {
-        stale.push(i18n::tr("The session link or sync record has changed", "세션 연결 또는 동기화 기록이 변경되었습니다").to_string());
+        stale.push(
+            i18n::tr(
+                "The session link or sync record has changed",
+                "세션 연결 또는 동기화 기록이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.source != live.source {
-        stale.push(i18n::tr("The source account's content has changed", "원본 계정의 내용이 변경되었습니다").to_string());
+        stale.push(
+            i18n::tr(
+                "The source account's content has changed",
+                "원본 계정의 내용이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.target != live.target {
-        stale.push(i18n::tr("The target account's content has changed", "대상 계정의 내용이 변경되었습니다").to_string());
+        stale.push(
+            i18n::tr(
+                "The target account's content has changed",
+                "대상 계정의 내용이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.baseline_ref != live.baseline_ref {
-        stale.push(i18n::tr("The last sync record has changed", "마지막 동기화 기록이 변경되었습니다").to_string());
+        stale.push(
+            i18n::tr(
+                "The last sync record has changed",
+                "마지막 동기화 기록이 변경되었습니다",
+            )
+            .to_string(),
+        );
     } else if expected.baseline_total_digest != live.baseline_total_digest
         || expected.baseline_record_count != live.baseline_record_count
     {
-        stale.push(i18n::tr("The last synced content has changed", "마지막으로 동기화한 내용이 변경되었습니다").to_string());
+        stale.push(
+            i18n::tr(
+                "The last synced content has changed",
+                "마지막으로 동기화한 내용이 변경되었습니다",
+            )
+            .to_string(),
+        );
     }
     if expected.verdict != live.verdict {
-        stale.push(i18n::tr("The check result has changed; please check again", "검사 결과가 변경되었습니다. 다시 검사해 주세요").to_string());
+        stale.push(
+            i18n::tr(
+                "The check result has changed; please check again",
+                "검사 결과가 변경되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     if expected.source_status != live.source_status || expected.target_status != live.target_status
     {
-        stale.push(i18n::tr("The session's archive state has changed; please check again", "세션 보관 상태가 변경되었습니다. 다시 검사해 주세요").to_string());
+        stale.push(
+            i18n::tr(
+                "The session's archive state has changed; please check again",
+                "세션 보관 상태가 변경되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     if expected.archive_action != live.archive_action {
-        stale.push(i18n::tr("The available archive sync has changed; please check again", "가능한 보관 동기화가 변경되었습니다. 다시 검사해 주세요").to_string());
+        stale.push(
+            i18n::tr(
+                "The available archive sync has changed; please check again",
+                "가능한 보관 동기화가 변경되었습니다. 다시 검사해 주세요",
+            )
+            .to_string(),
+        );
     }
     stale
 }
@@ -1578,7 +1781,12 @@ pub fn save_operation(paths: &SessionPaths, operation: &Operation) -> Result<(),
     std::fs::create_dir_all(paths.operations_dir()).map_err(|error| error.to_string())?;
     let content = serde_json::to_string_pretty(operation).map_err(|error| error.to_string())?;
     session_backup::durable_write_str(&operation_file(paths, &operation.operation_id), &content)
-        .map_err(|error| i18n::pick(format!("Failed to write the operation log: {error}"), format!("작업 기록 저장에 실패했습니다: {error}")))
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to write the operation log: {error}"),
+                format!("작업 기록 저장에 실패했습니다: {error}"),
+            )
+        })
 }
 
 /// 扫描全部操作日志（不区分档位）；解析失败的文件作为问题上报。
@@ -1594,7 +1802,10 @@ pub fn scan_operations(paths: &SessionPaths) -> OperationScan {
         Err(error) if error.kind() == ErrorKind::NotFound => return scan,
         Err(error) => {
             scan.complete = false;
-            scan.problems.push(i18n::pick(format!("The operation log directory cannot be read: {error}"), format!("작업 로그 디렉터리를 읽을 수 없습니다: {error}")));
+            scan.problems.push(i18n::pick(
+                format!("The operation log directory cannot be read: {error}"),
+                format!("작업 로그 디렉터리를 읽을 수 없습니다: {error}"),
+            ));
             return scan;
         }
     };
@@ -1603,7 +1814,10 @@ pub fn scan_operations(paths: &SessionPaths) -> OperationScan {
             Ok(entry) => entry,
             Err(error) => {
                 scan.complete = false;
-                scan.problems.push(i18n::pick(format!("Failed to enumerate the operation log directory: {error}"), format!("작업 로그 디렉터리 조회에 실패했습니다: {error}")));
+                scan.problems.push(i18n::pick(
+                    format!("Failed to enumerate the operation log directory: {error}"),
+                    format!("작업 로그 디렉터리 조회에 실패했습니다: {error}"),
+                ));
                 continue;
             }
         };
@@ -2651,7 +2865,11 @@ mod tests {
             decision.verdict.available_modes(),
             vec![SyncMode::FastForward]
         );
-        assert!(decision.reason.contains("3 new records"), "{}", decision.reason);
+        assert!(
+            decision.reason.contains("3 new records"),
+            "{}",
+            decision.reason
+        );
     }
 
     /// 祖先快进不依赖基线：无基线 / 基线不可验证时，B 是 A 的严格有序前缀照样可快进。
@@ -2676,7 +2894,11 @@ mod tests {
             assert_eq!(decision.extra_a, 3);
             assert_eq!(decision.extra_b, 0);
             assert_eq!(decision.common, 5);
-            assert!(decision.reason.contains("3 new records"), "{}", decision.reason);
+            assert!(
+                decision.reason.contains("3 new records"),
+                "{}",
+                decision.reason
+            );
         }
     }
 
@@ -2697,7 +2919,11 @@ mod tests {
         assert_eq!(decision.extra_a, 3, "来源比目标多的 3 条才是本次要追加的");
         assert_eq!(decision.extra_b, 0);
         assert_eq!(decision.common, 6);
-        assert!(decision.reason.contains("3 new records"), "{}", decision.reason);
+        assert!(
+            decision.reason.contains("3 new records"),
+            "{}",
+            decision.reason
+        );
     }
 
     /// 目标变化样例：A = X、B = X + 5 条 → ahead，仅目标变化，不写目标。

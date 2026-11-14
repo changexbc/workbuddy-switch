@@ -19,8 +19,8 @@ use std::collections::BTreeSet;
 use serde_json::{json, Value};
 
 use crate::modules::account;
-use crate::modules::i18n;
 use crate::modules::auth_file;
+use crate::modules::i18n;
 use crate::modules::process::{close_workbuddy, launch_workbuddy};
 use crate::modules::session::{self, SessionPaths, SyncSelection};
 use crate::modules::session_link::{
@@ -120,10 +120,9 @@ fn unfinished_writes_detail(writes: &[Operation]) -> String {
     writes
         .iter()
         .map(|operation| {
-            let reason = operation
-                .last_error
-                .clone()
-                .unwrap_or_else(|| i18n::tr("Not finished yet", "아직 완료되지 않았습니다").to_string());
+            let reason = operation.last_error.clone().unwrap_or_else(|| {
+                i18n::tr("Not finished yet", "아직 완료되지 않았습니다").to_string()
+            });
             i18n::pick(
                 format!(
                     "{} (operation {}): {reason}",
@@ -175,14 +174,16 @@ pub fn switch_account(
         }
     };
 
-    progress(i18n::tr("Starting account switch…", "계정 전환을 시작합니다…"));
-    let acc =
-        account::find_account(account_id).ok_or_else(|| {
-            i18n::pick(
-                format!("Account not found: {account_id}"),
-                format!("계정을 찾을 수 없습니다: {account_id}"),
-            )
-        })?;
+    progress(i18n::tr(
+        "Starting account switch…",
+        "계정 전환을 시작합니다…",
+    ));
+    let acc = account::find_account(account_id).ok_or_else(|| {
+        i18n::pick(
+            format!("Account not found: {account_id}"),
+            format!("계정을 찾을 수 없습니다: {account_id}"),
+        )
+    })?;
     // 档位以账号自身为准：签名里的参数无法表达「用 A 档位操作 B 档位账号」。
     let variant = account::variant_of(&acc);
     let backup = auth_file::backup_auth_file(variant);
@@ -332,7 +333,10 @@ pub fn switch_account(
         copy_report = copy;
         sync_report = sync;
     }
-    progress(i18n::tr("Writing the authentication file…", "인증 파일을 쓰는 중…"));
+    progress(i18n::tr(
+        "Writing the authentication file…",
+        "인증 파일을 쓰는 중…",
+    ));
     auth_file::write_account_to_auth_file(&acc, variant)?;
     if restart {
         progress(i18n::tr("Starting WorkBuddy…", "WorkBuddy를 시작하는 중…"));

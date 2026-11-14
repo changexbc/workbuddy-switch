@@ -387,7 +387,10 @@ impl<R: Runtime> Drop for CheckinBusyGuard<R> {
 
 fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
+        set_tray_tooltip(
+            app,
+            i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"),
+        );
         return;
     }
     if CHECKIN_BUSY
@@ -421,7 +424,10 @@ fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
 /// 菜单回调和「一键签到」同在主线程，异步检查必须 spawn（见 `start_checkin_all`）。
 fn start_update_check<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
+        set_tray_tooltip(
+            app,
+            i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"),
+        );
         return;
     }
     let app = app.clone();
@@ -435,7 +441,10 @@ fn start_update_check<R: Runtime>(app: &AppHandle<R>) {
 /// 互斥与演示模式短路都在更新服务内（下载是长任务，托盘不持有它的生命周期）。
 fn start_update_download<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
+        set_tray_tooltip(
+            app,
+            i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"),
+        );
         return;
     }
     let _ = crate::update_service::start_download(app);
@@ -446,7 +455,10 @@ fn start_update_download<R: Runtime>(app: &AppHandle<R>) {
 /// 安装会解压整包 / 替换应用（macOS 未授权时弹系统授权框），必须离开主线程执行。
 fn start_update_restart<R: Runtime>(app: &AppHandle<R>) {
     if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"));
+        set_tray_tooltip(
+            app,
+            i18n::tr("README screenshot demo mode", "README 스크린샷 데모 모드"),
+        );
         return;
     }
     let app = app.clone();
@@ -590,8 +602,7 @@ fn update_menu_spec(snapshot: &UpdateSnapshot) -> (UpdateMenuAction, String, boo
                     format!("Update to v{latest}"),
                     format!("v{latest}(으)로 업데이트"),
                 ),
-                None => i18n::tr("Update to the new version", "새 버전으로 업데이트")
-                    .to_string(),
+                None => i18n::tr("Update to the new version", "새 버전으로 업데이트").to_string(),
             },
             true,
         ),
@@ -615,8 +626,11 @@ fn update_menu_spec(snapshot: &UpdateSnapshot) -> (UpdateMenuAction, String, boo
             if snapshot.latest.is_some() {
                 (
                     UpdateMenuAction::Download,
-                    i18n::tr("Update failed. Click to retry.", "업데이트 실패. 클릭하여 다시 시도.")
-                        .to_string(),
+                    i18n::tr(
+                        "Update failed. Click to retry.",
+                        "업데이트 실패. 클릭하여 다시 시도.",
+                    )
+                    .to_string(),
                     true,
                 )
             } else {
@@ -1280,11 +1294,19 @@ mod tests {
 
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::Idle, None, None)),
-            (UpdateMenuAction::Check, "Check for updates".to_string(), true)
+            (
+                UpdateMenuAction::Check,
+                "Check for updates".to_string(),
+                true
+            )
         );
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::UpToDate, None, None)),
-            (UpdateMenuAction::Check, "Check for updates".to_string(), true)
+            (
+                UpdateMenuAction::Check,
+                "Check for updates".to_string(),
+                true
+            )
         );
         assert_eq!(
             update_menu_spec(&snapshot(UpdatePhase::Checking, None, None)),

@@ -62,11 +62,13 @@ pub fn read_session_content(conv_dir: &Path, conversation_id: &str) -> ContentSt
     let index: Value = match serde_json::from_slice(&index_bytes) {
         Ok(value) => value,
         Err(_) => {
-            return ContentState::Unavailable(i18n::tr(
-                "The session index could not be parsed; the content may be incomplete",
-                "세션 인덱스를 해석할 수 없습니다. 내용이 불완전할 수 있습니다",
+            return ContentState::Unavailable(
+                i18n::tr(
+                    "The session index could not be parsed; the content may be incomplete",
+                    "세션 인덱스를 해석할 수 없습니다. 내용이 불완전할 수 있습니다",
+                )
+                .to_string(),
             )
-            .to_string())
         }
     };
     let Some(messages) = index.get("messages").and_then(Value::as_array) else {
@@ -108,7 +110,9 @@ pub fn read_session_content(conv_dir: &Path, conversation_id: &str) -> ContentSt
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return ContentState::Unavailable(i18n::pick(
-                    format!("The file for message {id} does not exist; the content may be incomplete"),
+                    format!(
+                        "The file for message {id} does not exist; the content may be incomplete"
+                    ),
                     format!("메시지 {id}의 파일이 없습니다. 내용이 불완전할 수 있습니다"),
                 ));
             }
@@ -127,7 +131,9 @@ pub fn read_session_content(conv_dir: &Path, conversation_id: &str) -> ContentSt
         };
         let Ok(value) = serde_json::from_str::<Value>(text) else {
             return ContentState::Unavailable(i18n::pick(
-                format!("The file for message {id} could not be parsed; the content may be incomplete"),
+                format!(
+                    "The file for message {id} could not be parsed; the content may be incomplete"
+                ),
                 format!("메시지 {id}의 파일을 해석할 수 없습니다. 내용이 불완전할 수 있습니다"),
             ));
         };

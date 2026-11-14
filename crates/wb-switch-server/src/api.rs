@@ -404,8 +404,10 @@ async fn api_codebuddy_cn_ide_session_links_preview(Json(body): Json<Value>) -> 
         );
     }
     let result = tokio::task::spawn_blocking(move || {
-        let target =
-            account::find_account(&target_account_id).ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview(&target)
     })
     .await;
@@ -518,8 +520,10 @@ async fn api_vscode_ext_session_links_preview(Json(body): Json<Value>) -> Respon
         );
     }
     let result = tokio::task::spawn_blocking(move || {
-        let target =
-            account::find_account(&target_account_id).ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         vscode_session_sync::links_preview(&target)
     })
     .await;
@@ -617,8 +621,10 @@ async fn api_codebuddy_intl_ide_session_links_preview(Json(body): Json<Value>) -
         );
     }
     let result = tokio::task::spawn_blocking(move || {
-        let target =
-            account::find_account(&target_account_id).ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview_intl(&target)
     })
     .await;
@@ -863,8 +869,11 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
         let mut running = SWITCH_RUNNING.lock().unwrap();
         if *running {
             return json_err(
-                i18n::tr("A switch is already in progress", "이미 전환 작업이 진행 중입니다")
-                    .to_string(),
+                i18n::tr(
+                    "A switch is already in progress",
+                    "이미 전환 작업이 진행 중입니다",
+                )
+                .to_string(),
                 StatusCode::CONFLICT,
             );
         }
@@ -1415,9 +1424,9 @@ async fn api_checkin_status(Query(query): Query<HashMap<String, String>>) -> Res
     if let Some(id) = query.get("accountId") {
         let Some(acc) = account::find_account(id) else {
             return json_err(
-            i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string(),
-            StatusCode::BAD_REQUEST,
-        );
+                i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string(),
+                StatusCode::BAD_REQUEST,
+            );
         };
         let status = checkin::get_checkin_status_for_display(&acc).await;
         return json_ok(checkin_status_item(&acc, status));

@@ -218,8 +218,10 @@ pub async fn codebuddy_ide_session_links_preview(
         return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview(&target)
     })
     .await
@@ -322,8 +324,10 @@ pub async fn vscode_session_links_preview(target_account_id: String) -> Result<V
         return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         vscode_session_sync::links_preview(&target)
     })
     .await
@@ -459,8 +463,10 @@ pub async fn codebuddy_intl_ide_session_links_preview(
         return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         codebuddy_ide_session_sync::links_preview_intl(&target)
     })
     .await
@@ -721,8 +727,10 @@ pub async fn copy_sessions(
         return Err(i18n::tr("Missing sessionIds", "sessionIds 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         // 档位取目标账号自身（copy_sessions_for_switch 内部判定）。
         session::copy_sessions_for_switch(&target, &session_ids)
     })
@@ -750,10 +758,14 @@ pub async fn copy_sessions_cross(
         return Err(i18n::tr("Missing sessionIds", "sessionIds 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let source = account::find_account(&source_account_id)
-            .ok_or(i18n::tr("Source account not found", "원본 계정을 찾을 수 없습니다"))?;
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let source = account::find_account(&source_account_id).ok_or(i18n::tr(
+            "Source account not found",
+            "원본 계정을 찾을 수 없습니다",
+        ))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         session::copy_sessions_cross(&source, &target, &session_ids)
     })
     .await
@@ -775,8 +787,10 @@ pub async fn session_links_preview(
         return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         let variant = variant
             .as_deref()
             .map(|raw| WbVariant::parse(Some(raw)))
@@ -802,10 +816,14 @@ pub async fn session_links_preview_cross(
         return Err(i18n::tr("Missing targetAccountId", "targetAccountId 없음").to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let source = account::find_account(&source_account_id)
-            .ok_or(i18n::tr("Source account not found", "원본 계정을 찾을 수 없습니다"))?;
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let source = account::find_account(&source_account_id).ok_or(i18n::tr(
+            "Source account not found",
+            "원본 계정을 찾을 수 없습니다",
+        ))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         session::session_links_preview_cross(&source, &target)
     })
     .await
@@ -831,10 +849,14 @@ pub async fn session_sync_cross(
     // 入参形状由 core 校验：缺字段/未知模式一律拒绝，这里只做透传。
     let selections = session::parse_sync_selections(Some(&sync_selections))?;
     tauri::async_runtime::spawn_blocking(move || {
-        let source = account::find_account(&source_account_id)
-            .ok_or(i18n::tr("Source account not found", "원본 계정을 찾을 수 없습니다"))?;
-        let target = account::find_account(&target_account_id)
-            .ok_or(i18n::tr("Target account not found", "대상 계정을 찾을 수 없습니다"))?;
+        let source = account::find_account(&source_account_id).ok_or(i18n::tr(
+            "Source account not found",
+            "원본 계정을 찾을 수 없습니다",
+        ))?;
+        let target = account::find_account(&target_account_id).ok_or(i18n::tr(
+            "Target account not found",
+            "대상 계정을 찾을 수 없습니다",
+        ))?;
         session::sync_sessions_cross(&source, &target, &selections)
     })
     .await
@@ -1567,14 +1589,12 @@ pub fn reveal_error_log(app: tauri::AppHandle) -> Result<(), String> {
             None => path,
         }
     };
-    app.opener()
-        .reveal_item_in_dir(target)
-        .map_err(|error| {
-            i18n::pick(
-                format!("Could not open the log location: {error}"),
-                format!("로그 위치를 열지 못했습니다: {error}"),
-            )
-        })
+    app.opener().reveal_item_in_dir(target).map_err(|error| {
+        i18n::pick(
+            format!("Could not open the log location: {error}"),
+            format!("로그 위치를 열지 못했습니다: {error}"),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------

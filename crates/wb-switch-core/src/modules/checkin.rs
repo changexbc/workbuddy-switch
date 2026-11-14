@@ -35,9 +35,9 @@ use crate::modules::config::{
     add_checkin_log, http_request, is_route_missing, load_checkin_config, load_checkin_logs,
     now_ms, parse_clock, RunFlagGuard, CHECKIN_API_PREFIX,
 };
+use crate::modules::i18n;
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 use crate::modules::variant::WbVariant;
-use crate::modules::i18n;
 
 static CHECKIN_RUNNING: AtomicBool = AtomicBool::new(false);
 static CHECKIN_ACCOUNTS_RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -915,7 +915,10 @@ mod tests {
         let resp = checkin_request_once("/whatever", &account, WbVariant::Cn).await;
         assert_eq!(resp["code"], -2);
         let msg = resp["message"].as_str().expect("message 应为字符串");
-        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
+        assert!(
+            msg.contains("encrypted WorkBuddy envelope"),
+            "错误文案应可读：{msg}"
+        );
     }
 
     #[tokio::test]

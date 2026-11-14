@@ -44,10 +44,10 @@ use std::path::{Path, PathBuf};
 
 use crate::modules::account::{self, get_str};
 use crate::modules::config::{atomic_write, backup_dir, utc_iso};
+use crate::modules::i18n;
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::vscode_ext;
 use crate::modules::vscode_session_sync;
-use crate::modules::i18n;
 
 /// 会话历史目录名。
 const HISTORY_DIR: &str = "history";
@@ -446,7 +446,11 @@ pub fn copy_vscode_sessions(target_uid: &str, items: &[CopyItem]) -> Result<Valu
         return Ok(json!({ "copied": [], "errors": [] }));
     }
     if !is_safe_uid(target_uid) {
-        return Err(i18n::tr("The target account uid is invalid; write refused", "대상 계정 uid가 올바르지 않아 기록을 거부했습니다").to_string());
+        return Err(i18n::tr(
+            "The target account uid is invalid; write refused",
+            "대상 계정 uid가 올바르지 않아 기록을 거부했습니다",
+        )
+        .to_string());
     }
     // 写入前必须先完全退出 VS Code，否则会被运行中的扩展覆盖。
     if vscode_ext::is_vscode_running() {
@@ -462,10 +466,19 @@ pub fn copy_vscode_sessions(target_uid: &str, items: &[CopyItem]) -> Result<Valu
                 .to_string()
         })?;
     if source_uid == target_uid {
-        return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
+        return Err(i18n::tr(
+            "The source and target accounts are the same; no need to copy sessions",
+            "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다",
+        )
+        .to_string());
     }
-    let root = ext_data_root()
-        .ok_or_else(|| i18n::tr("VS Code CodeBuddy extension data directory not found, so sessions cannot be copied", "VS Code CodeBuddy 확장 데이터 디렉터리를 찾지 못해 세션을 복사할 수 없습니다").to_string())?;
+    let root = ext_data_root().ok_or_else(|| {
+        i18n::tr(
+            "VS Code CodeBuddy extension data directory not found, so sessions cannot be copied",
+            "VS Code CodeBuddy 확장 데이터 디렉터리를 찾지 못해 세션을 복사할 수 없습니다",
+        )
+        .to_string()
+    })?;
     let backup_root = backup_dir().join(VSCODE_STORE.backup_kind).join(utc_iso());
     copy_sessions_in(&root, &backup_root, &source_uid, target_uid, items)
 }
@@ -503,13 +516,25 @@ pub(crate) fn copy_sessions_in_with(
     items: &[CopyItem],
 ) -> Result<Value, String> {
     if !is_safe_uid(source_uid) {
-        return Err(i18n::tr("The source account uid is invalid", "원본 계정 uid가 올바르지 않습니다").to_string());
+        return Err(i18n::tr(
+            "The source account uid is invalid",
+            "원본 계정 uid가 올바르지 않습니다",
+        )
+        .to_string());
     }
     if !is_safe_uid(target_uid) {
-        return Err(i18n::tr("The target account uid is invalid", "대상 계정 uid가 올바르지 않습니다").to_string());
+        return Err(i18n::tr(
+            "The target account uid is invalid",
+            "대상 계정 uid가 올바르지 않습니다",
+        )
+        .to_string());
     }
     if source_uid == target_uid {
-        return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
+        return Err(i18n::tr(
+            "The source and target accounts are the same; no need to copy sessions",
+            "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다",
+        )
+        .to_string());
     }
 
     let source_history = history_root_in(spec, root, source_uid);
@@ -519,8 +544,17 @@ pub(crate) fn copy_sessions_in_with(
     let mut states: BTreeMap<String, WorkspaceState> = BTreeMap::new();
     for workspace_hash in distinct_workspaces(items) {
         let ws_dir = target_history.join(&workspace_hash);
-        let state = WorkspaceState::load(&ws_dir, backup_root, &workspace_hash)
-            .map_err(|error| i18n::pick(format!("Could not back up the target workspace index ({workspace_hash}): {error}"), format!("대상 작업 공간 인덱스를 백업하지 못했습니다({workspace_hash}): {error}")))?;
+        let state =
+            WorkspaceState::load(&ws_dir, backup_root, &workspace_hash).map_err(|error| {
+                i18n::pick(
+                    format!(
+                        "Could not back up the target workspace index ({workspace_hash}): {error}"
+                    ),
+                    format!(
+                        "대상 작업 공간 인덱스를 백업하지 못했습니다({workspace_hash}): {error}"
+                    ),
+                )
+            })?;
         states.insert(workspace_hash, state);
     }
 
@@ -605,8 +639,12 @@ pub fn switch_vscode_ext_with_copy(
     if items.is_empty() && sync_selections.is_empty() {
         return vscode_ext::switch_account(account_id, restart);
     }
-    let acc =
-        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
+    let acc = account::find_account(account_id).ok_or_else(|| {
+        i18n::pick(
+            format!("Account not found: {account_id}"),
+            format!("계정을 찾을 수 없습니다: {account_id}"),
+        )
+    })?;
     let target_uid = get_str(&acc, "uid")
         .ok_or_else(|| i18n::tr("The account has no uid, so the VS Code CodeBuddy extension data directory cannot be located", "계정에 uid가 없어 VS Code CodeBuddy 확장 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
 
@@ -691,10 +729,16 @@ pub fn switch_vscode_ext_with_copy(
         Err(error) => {
             let mut done: Vec<String> = Vec::new();
             if copied > 0 {
-                done.push(i18n::pick(format!("Copied {copied} sessions to the target account"), format!("세션 {copied}개를 대상 계정으로 복사했습니다")));
+                done.push(i18n::pick(
+                    format!("Copied {copied} sessions to the target account"),
+                    format!("세션 {copied}개를 대상 계정으로 복사했습니다"),
+                ));
             }
             if synced > 0 {
-                done.push(i18n::pick(format!("Synced {synced} sessions"), format!("세션 {synced}개를 동기화했습니다")));
+                done.push(i18n::pick(
+                    format!("Synced {synced} sessions"),
+                    format!("세션 {synced}개를 동기화했습니다"),
+                ));
             }
             if done.is_empty() {
                 Err(error)
@@ -916,8 +960,13 @@ fn copy_one_conversation(
     conversation_id: &str,
     state: &mut WorkspaceState,
 ) -> Result<Value, String> {
-    let source_index = read_json(&source_dir.join("index.json"))
-        .ok_or_else(|| i18n::tr("The source session index.json is missing or damaged", "원본 세션 index.json이 없거나 손상되었습니다").to_string())?;
+    let source_index = read_json(&source_dir.join("index.json")).ok_or_else(|| {
+        i18n::tr(
+            "The source session index.json is missing or damaged",
+            "원본 세션 index.json이 없거나 손상되었습니다",
+        )
+        .to_string()
+    })?;
 
     let plan = match options.id_policy {
         CopyIdPolicy::AlwaysNew => Some(RemapPlan::build(&source_index, source_dir)),
@@ -941,7 +990,10 @@ fn copy_one_conversation(
     };
     if let Err(error) = write_result {
         remove_dir_all_if_exists(&tmp_dir);
-        return Err(i18n::pick(format!("Could not write the temporary session directory: {error}"), format!("임시 세션 디렉터리를 쓰지 못했습니다: {error}")));
+        return Err(i18n::pick(
+            format!("Could not write the temporary session directory: {error}"),
+            format!("임시 세션 디렉터리를 쓰지 못했습니다: {error}"),
+        ));
     }
 
     // 2) 原子提交：rename tmp → <newId>。
@@ -949,7 +1001,10 @@ fn copy_one_conversation(
     remove_dir_all_if_exists(&final_dir);
     if let Err(error) = std::fs::rename(&tmp_dir, &final_dir) {
         remove_dir_all_if_exists(&tmp_dir);
-        return Err(i18n::pick(format!("Could not commit the session directory: {error}"), format!("세션 디렉터리를 커밋하지 못했습니다: {error}")));
+        return Err(i18n::pick(
+            format!("Could not commit the session directory: {error}"),
+            format!("세션 디렉터리를 커밋하지 못했습니다: {error}"),
+        ));
     }
 
     // 3) 合并目标工作区索引；失败则回退目录与索引（仅本条）。
@@ -969,7 +1024,10 @@ fn copy_one_conversation(
             state.restore();
         }
         remove_dir_all_if_exists(&final_dir);
-        return Err(i18n::pick(format!("Could not merge the workspace index: {error}"), format!("작업 공간 인덱스를 병합하지 못했습니다: {error}")));
+        return Err(i18n::pick(
+            format!("Could not merge the workspace index: {error}"),
+            format!("작업 공간 인덱스를 병합하지 못했습니다: {error}"),
+        ));
     }
 
     let messages = match &plan {

@@ -380,7 +380,11 @@ pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 eprintln!("[更新] 下载失败：{message}");
                 set_phase(&app, fail(message.clone()));
                 reset_tooltip(&app);
-                notify(&app, i18n::tr("Update download failed", "업데이트 내려받기 실패"), &message);
+                notify(
+                    &app,
+                    i18n::tr("Update download failed", "업데이트 내려받기 실패"),
+                    &message,
+                );
             }
         }
     });
@@ -423,7 +427,11 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 );
                 eprintln!("[更新] 重启失败：{message}");
                 set_phase(app, fail(message.clone()));
-                notify(app, i18n::tr("Update installed", "업데이트 설치 완료"), &message);
+                notify(
+                    app,
+                    i18n::tr("Update installed", "업데이트 설치 완료"),
+                    &message,
+                );
                 Err(message)
             }
         },
@@ -434,7 +442,11 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             );
             eprintln!("[更新] {message}");
             set_phase(app, fail(message.clone()));
-            notify(app, i18n::tr("Update install failed", "업데이트 설치 실패"), &message);
+            notify(
+                app,
+                i18n::tr("Update install failed", "업데이트 설치 실패"),
+                &message,
+            );
             Err(message)
         }
         Err(error) => {
@@ -444,7 +456,11 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             );
             eprintln!("[更新] {message}");
             set_phase(app, fail(message.clone()));
-            notify(app, i18n::tr("Update install failed", "업데이트 설치 실패"), &message);
+            notify(
+                app,
+                i18n::tr("Update install failed", "업데이트 설치 실패"),
+                &message,
+            );
             Err(message)
         }
     }
@@ -474,29 +490,26 @@ async fn download_package<R: Runtime>(
 ) -> Result<Option<DownloadedPackage>, String> {
     let builder = app.updater_builder();
     let builder = match configured_proxy() {
-        Some(proxy) => builder.proxy(
-            tauri::Url::parse(&proxy).map_err(|error| {
-                i18n::pick(
-                    format!("The update proxy address is invalid: {error}"),
-                    format!("업데이트 프록시 주소가 올바르지 않습니다: {error}"),
-                )
-            })?,
-        ),
+        Some(proxy) => builder.proxy(tauri::Url::parse(&proxy).map_err(|error| {
+            i18n::pick(
+                format!("The update proxy address is invalid: {error}"),
+                format!("업데이트 프록시 주소가 올바르지 않습니다: {error}"),
+            )
+        })?),
         None => builder,
     };
-    let updater = builder
-        .build()
-        .map_err(|error| i18n::pick(
+    let updater = builder.build().map_err(|error| {
+        i18n::pick(
             format!("Failed to initialize the updater: {error}"),
             format!("업데이터 초기화 실패: {error}"),
-        ))?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| i18n::pick(
+        )
+    })?;
+    let update = updater.check().await.map_err(|error| {
+        i18n::pick(
             format!("Failed to check for an update: {error}"),
             format!("업데이트 확인 실패: {error}"),
-        ))?;
+        )
+    })?;
     let Some(update) = update else {
         return Ok(None);
     };
@@ -514,10 +527,12 @@ async fn download_package<R: Runtime>(
             || {},
         )
         .await
-        .map_err(|error| i18n::pick(
-            format!("Failed to download the update: {error}"),
-            format!("업데이트 내려받기 실패: {error}"),
-        ))?;
+        .map_err(|error| {
+            i18n::pick(
+                format!("Failed to download the update: {error}"),
+                format!("업데이트 내려받기 실패: {error}"),
+            )
+        })?;
     Ok(Some(DownloadedPackage {
         version,
         bytes,

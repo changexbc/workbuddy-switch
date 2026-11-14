@@ -18,6 +18,7 @@ use crate::modules::config::{
 use crate::modules::variant::{codebuddy_domain_for, WbVariant};
 // 复用 process 模块带并发管道读取的正确实现；本地轮询版会在子进程输出
 // 超过 64KB（如 `ps -axo pid=,args=`）时因管道写满而死锁到超时。
+use crate::modules::i18n;
 use crate::modules::process;
 use crate::modules::process::run_cmd_timeout as run_cmd;
 use crate::modules::vscode_cn_inject::{
@@ -25,7 +26,6 @@ use crate::modules::vscode_cn_inject::{
     read_codebuddy_ide_secret, CodeBuddyIdeFlavor, CODEBUDDY_INTL_TARGET,
 };
 use crate::modules::vscode_session::is_safe_uid;
-use crate::modules::i18n;
 
 fn intl_data_dir() -> Option<PathBuf> {
     codebuddy_ide_data_dir(CodeBuddyIdeFlavor::Intl)
@@ -840,7 +840,11 @@ fn close_codebuddy_ide_windows(timeout_secs: i64) -> Result<(), String> {
     if leftover.is_empty() {
         return Ok(());
     }
-    Err(i18n::tr("CodeBuddy processes could not be closed; please end the CodeBuddy processes manually", "CodeBuddy 프로세스를 종료하지 못했습니다. CodeBuddy 프로세스를 직접 종료해 주세요").to_string())
+    Err(i18n::tr(
+        "CodeBuddy processes could not be closed; please end the CodeBuddy processes manually",
+        "CodeBuddy 프로세스를 종료하지 못했습니다. CodeBuddy 프로세스를 직접 종료해 주세요",
+    )
+    .to_string())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -967,22 +971,35 @@ fn launch_codebuddy_ide_macos() -> Result<(), String> {
         Some(out) => {
             let reason = String::from_utf8_lossy(&out.stderr).trim().to_string();
             let reason = if reason.is_empty() {
-                i18n::pick(format!("open exited with code {}", out.status.code().unwrap_or(-1)), format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)))
+                i18n::pick(
+                    format!("open exited with code {}", out.status.code().unwrap_or(-1)),
+                    format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)),
+                )
             } else {
                 reason
             };
-            return Err(i18n::pick(format!("Could not start CodeBuddy: {reason} (path: {})",
-                app.display()
-            ), format!("CodeBuddy를 시작하지 못했습니다: {reason}(경로: {})",
-                app.display()
-            )));
+            return Err(i18n::pick(
+                format!(
+                    "Could not start CodeBuddy: {reason} (path: {})",
+                    app.display()
+                ),
+                format!(
+                    "CodeBuddy를 시작하지 못했습니다: {reason}(경로: {})",
+                    app.display()
+                ),
+            ));
         }
         None => {
-            return Err(i18n::pick(format!("Could not start CodeBuddy: open timed out (path: {})",
-                app.display()
-            ), format!("CodeBuddy를 시작하지 못했습니다: open 시간 초과(경로: {})",
-                app.display()
-            )));
+            return Err(i18n::pick(
+                format!(
+                    "Could not start CodeBuddy: open timed out (path: {})",
+                    app.display()
+                ),
+                format!(
+                    "CodeBuddy를 시작하지 못했습니다: open 시간 초과(경로: {})",
+                    app.display()
+                ),
+            ));
         }
     }
 
@@ -1011,7 +1028,15 @@ pub fn launch_codebuddy_ide() -> Result<(), String> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|e| i18n::pick(format!("Could not start CodeBuddy: {e} (path: {})", exe.display()), format!("CodeBuddy를 시작하지 못했습니다: {e}(경로: {})", exe.display())))?;
+            .map_err(|e| {
+                i18n::pick(
+                    format!("Could not start CodeBuddy: {e} (path: {})", exe.display()),
+                    format!(
+                        "CodeBuddy를 시작하지 못했습니다: {e}(경로: {})",
+                        exe.display()
+                    ),
+                )
+            })?;
         Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1024,7 +1049,15 @@ pub fn launch_codebuddy_ide() -> Result<(), String> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|e| i18n::pick(format!("Could not start CodeBuddy: {e} (path: {})", exe.display()), format!("CodeBuddy를 시작하지 못했습니다: {e}(경로: {})", exe.display())))?;
+            .map_err(|e| {
+                i18n::pick(
+                    format!("Could not start CodeBuddy: {e} (path: {})", exe.display()),
+                    format!(
+                        "CodeBuddy를 시작하지 못했습니다: {e}(경로: {})",
+                        exe.display()
+                    ),
+                )
+            })?;
         Ok(())
     }
 }
@@ -1088,18 +1121,37 @@ pub fn switch_account(account_id: &str, restart: bool) -> Result<Value, String> 
 /// 必须在关闭 IDE **之前**执行：账号不存在、档位不符、token 为空、数据目录缺失这类「无论
 /// 怎么关都注定失败」的目标，不该让用户的 IDE 被关掉。幂等且廉价，注入前会再次使用返回的数据目录。
 pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf), String> {
-    let acc =
-        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
+    let acc = account::find_account(account_id).ok_or_else(|| {
+        i18n::pick(
+            format!("Account not found: {account_id}"),
+            format!("계정을 찾을 수 없습니다: {account_id}"),
+        )
+    })?;
     if WbVariant::from_account(&acc) != WbVariant::Ai {
         return Err(i18n::tr("The International CodeBuddy IDE can only switch to International (WorkBuddy AI) accounts", "국제판 CodeBuddy IDE는 국제판(WorkBuddy AI) 계정으로만 전환할 수 있습니다").to_string());
     }
-    let token = get_str(&acc, "access_token")
-        .ok_or_else(|| i18n::tr("The account has no access_token, so CodeBuddy cannot be injected", "계정에 access_token이 없어 CodeBuddy에 주입할 수 없습니다").to_string())?;
+    let token = get_str(&acc, "access_token").ok_or_else(|| {
+        i18n::tr(
+            "The account has no access_token, so CodeBuddy cannot be injected",
+            "계정에 access_token이 없어 CodeBuddy에 주입할 수 없습니다",
+        )
+        .to_string()
+    })?;
     if token.is_empty() {
-        return Err(i18n::tr("The account access_token is empty", "계정 access_token이 비어 있습니다").to_string());
+        return Err(i18n::tr(
+            "The account access_token is empty",
+            "계정 access_token이 비어 있습니다",
+        )
+        .to_string());
     }
 
-    let data_dir = intl_data_dir().ok_or_else(|| i18n::tr("Could not locate the CodeBuddy data directory", "CodeBuddy 데이터 디렉터리를 찾지 못했습니다").to_string())?;
+    let data_dir = intl_data_dir().ok_or_else(|| {
+        i18n::tr(
+            "Could not locate the CodeBuddy data directory",
+            "CodeBuddy 데이터 디렉터리를 찾지 못했습니다",
+        )
+        .to_string()
+    })?;
     if !data_dir.exists() {
         return Err(i18n::pick(format!("CodeBuddy user data directory not found ({}). Open CodeBuddy and sign in once.",
             data_dir.display()
@@ -1163,7 +1215,11 @@ pub fn detect_current_account() -> Result<Value, String> {
         }));
     };
     let Some((uid, token)) = parse_token_from_secret(&secret) else {
-        return Err(i18n::tr("Could not parse the local CodeBuddy sign-in information", "로컬 CodeBuddy 로그인 정보를 해석하지 못했습니다").to_string());
+        return Err(i18n::tr(
+            "Could not parse the local CodeBuddy sign-in information",
+            "로컬 CodeBuddy 로그인 정보를 해석하지 못했습니다",
+        )
+        .to_string());
     };
     if let Some(acc) = match_account_for_token(uid.as_deref(), &token) {
         let id = get_str(&acc, "id").unwrap_or_default();

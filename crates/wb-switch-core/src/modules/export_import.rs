@@ -29,27 +29,30 @@ pub fn parse_accounts_json(text: &str) -> Result<Vec<Value>, String> {
     if text.trim().is_empty() {
         return Err(i18n::tr("The file is empty", "파일 내용이 비어 있습니다").to_string());
     }
-    let parsed: Value =
-        serde_json::from_str(text).map_err(|e| {
-            i18n::pick(
-                format!("The file is not valid JSON: {e}"),
-                format!("파일이 올바른 JSON이 아닙니다: {e}"),
-            )
-        })?;
-    let array = parsed
-        .as_array()
-        .ok_or_else(|| {
-            i18n::tr(
-                "The file content must be a JSON array (a list of accounts)",
-                "파일 내용은 JSON 배열(계정 목록)이어야 합니다",
-            )
-            .to_string()
-        })?;
+    let parsed: Value = serde_json::from_str(text).map_err(|e| {
+        i18n::pick(
+            format!("The file is not valid JSON: {e}"),
+            format!("파일이 올바른 JSON이 아닙니다: {e}"),
+        )
+    })?;
+    let array = parsed.as_array().ok_or_else(|| {
+        i18n::tr(
+            "The file content must be a JSON array (a list of accounts)",
+            "파일 내용은 JSON 배열(계정 목록)이어야 합니다",
+        )
+        .to_string()
+    })?;
     for (index, item) in array.iter().enumerate() {
         if !item.is_object() {
             return Err(i18n::pick(
-                format!("Item {} in the file is not a valid account object", index + 1),
-                format!("파일의 {}번째 항목이 올바른 계정 객체가 아닙니다", index + 1),
+                format!(
+                    "Item {} in the file is not a valid account object",
+                    index + 1
+                ),
+                format!(
+                    "파일의 {}번째 항목이 올바른 계정 객체가 아닙니다",
+                    index + 1
+                ),
             ));
         }
     }
@@ -202,9 +205,11 @@ pub fn select_export_records(accounts: &[Value], ids: &[String]) -> Result<Vec<V
         }
     }
     if exported.is_empty() {
-        return Err(
-            i18n::tr("No accounts found to export", "내보낼 계정을 찾지 못했습니다").to_string(),
-        );
+        return Err(i18n::tr(
+            "No accounts found to export",
+            "내보낼 계정을 찾지 못했습니다",
+        )
+        .to_string());
     }
     Ok(exported)
 }
@@ -223,10 +228,11 @@ fn validate_export_file_name(file_name: &str) -> Result<(), String> {
         || name.contains("..")
         || !name.ends_with(".json")
     {
-        return Err(
-            i18n::tr("The export file name is invalid", "내보낼 파일 이름이 올바르지 않습니다")
-                .to_string(),
-        );
+        return Err(i18n::tr(
+            "The export file name is invalid",
+            "내보낼 파일 이름이 올바르지 않습니다",
+        )
+        .to_string());
     }
     Ok(())
 }
@@ -265,13 +271,12 @@ pub fn write_records_to_file(
     validate_export_file_name(file_name)?;
     let content = serde_json::to_string_pretty(records).map_err(|e| e.to_string())?;
     let path = dir.join(file_name);
-    crate::modules::config::atomic_write(&path, &content)
-        .map_err(|e| {
-            i18n::pick(
-                format!("Could not write the export file: {e}"),
-                format!("내보낼 파일을 쓰지 못했습니다: {e}"),
-            )
-        })?;
+    crate::modules::config::atomic_write(&path, &content).map_err(|e| {
+        i18n::pick(
+            format!("Could not write the export file: {e}"),
+            format!("내보낼 파일을 쓰지 못했습니다: {e}"),
+        )
+    })?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -281,13 +286,12 @@ pub fn export_accounts_to_path(ids: &[String], path: &str) -> Result<String, Str
     let records = select_export_records(&account::load_accounts(), ids)?;
     let path_buf = PathBuf::from(path.trim());
     let content = serde_json::to_string_pretty(&records).map_err(|e| e.to_string())?;
-    crate::modules::config::atomic_write(&path_buf, &content)
-        .map_err(|e| {
-            i18n::pick(
-                format!("Could not write the export file: {e}"),
-                format!("내보낼 파일을 쓰지 못했습니다: {e}"),
-            )
-        })?;
+    crate::modules::config::atomic_write(&path_buf, &content).map_err(|e| {
+        i18n::pick(
+            format!("Could not write the export file: {e}"),
+            format!("내보낼 파일을 쓰지 못했습니다: {e}"),
+        )
+    })?;
     Ok(path_buf.to_string_lossy().into_owned())
 }
 

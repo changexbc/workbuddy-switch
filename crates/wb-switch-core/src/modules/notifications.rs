@@ -142,13 +142,12 @@ pub fn record_at(
         store.items.drain(0..drop_count);
     }
     let content = serde_json::to_string_pretty(&store).map_err(|error| error.to_string())?;
-    atomic_write(&store_file_at(root), &content)
-        .map_err(|error| {
-            i18n::pick(
-                format!("Could not write the notification archive: {error}"),
-                format!("알림 저장소를 쓰지 못했습니다: {error}"),
-            )
-        })
+    atomic_write(&store_file_at(root), &content).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the notification archive: {error}"),
+            format!("알림 저장소를 쓰지 못했습니다: {error}"),
+        )
+    })
 }
 
 /// 读取最近的通知（新的在前）。
@@ -162,13 +161,12 @@ pub fn list_at(root: &Path) -> Result<Vec<NotificationEntry>, String> {
 pub fn clear_at(root: &Path) -> Result<(), String> {
     let content =
         serde_json::to_string_pretty(&NotificationStore::default()).map_err(|e| e.to_string())?;
-    atomic_write(&store_file_at(root), &content)
-        .map_err(|error| {
-            i18n::pick(
-                format!("Could not write the notification archive: {error}"),
-                format!("알림 저장소를 쓰지 못했습니다: {error}"),
-            )
-        })
+    atomic_write(&store_file_at(root), &content).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the notification archive: {error}"),
+            format!("알림 저장소를 쓰지 못했습니다: {error}"),
+        )
+    })
 }
 
 /// 生产入口：记录到工具存储根。

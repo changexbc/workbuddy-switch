@@ -17,9 +17,9 @@ use crate::modules::config::{
     WORKBUDDY_API_ENDPOINT,
 };
 use crate::modules::credit_usage;
+use crate::modules::i18n;
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 use crate::modules::variant::WbVariant;
-use crate::modules::i18n;
 
 /// 旧资源接口路径后缀（按档位生成完整候选，见 `WbVariant::billing_paths`）。
 const USER_RESOURCE_SUFFIX: &str = "/get-user-resource";
@@ -1047,7 +1047,10 @@ mod tests {
         let resp = authenticated_post(&account, "https://example.invalid/api", json!({})).await;
         assert_eq!(resp["code"], -2);
         let msg = resp["message"].as_str().expect("message 应为字符串");
-        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
+        assert!(
+            msg.contains("encrypted WorkBuddy envelope"),
+            "错误文案应可读：{msg}"
+        );
     }
 
     /// 回归 issue #94 遗留：积分查询入口（新三路接口与旧接口回退的唯一入口）
@@ -1063,7 +1066,10 @@ mod tests {
         assert_eq!(resp["ok"], false);
         assert_eq!(resp["accountId"], "envelope-only");
         let msg = resp["error"].as_str().expect("error 应为字符串");
-        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
+        assert!(
+            msg.contains("encrypted WorkBuddy envelope"),
+            "错误文案应可读：{msg}"
+        );
     }
 
     #[test]
@@ -1862,7 +1868,10 @@ mod tests {
             enterprise_credit_result(&account, &json!({"code": 0, "data": {}}), 1_800_000_000_000);
         assert_eq!(malformed["ok"], false);
         let message = malformed["error"].as_str().expect("error 应为字符串");
-        assert!(message.contains("enterprise quota"), "错误文案应可读：{message}");
+        assert!(
+            message.contains("enterprise quota"),
+            "错误文案应可读：{message}"
+        );
     }
 
     #[test]

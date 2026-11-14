@@ -19,8 +19,8 @@ use std::sync::{Mutex, OnceLock};
 use crate::modules::account::{account_display_name, get_str, variant_of};
 use crate::modules::config::{atomic_write, official_usage_cache_file, store_dir};
 use crate::modules::credits::authenticated_post;
-use crate::modules::variant::WbVariant;
 use crate::modules::i18n;
+use crate::modules::variant::WbVariant;
 
 pub const OFFICIAL_USAGE_URL: &str =
     "https://www.workbuddy.cn/billing/meter/get-user-request-usage";
@@ -547,19 +547,18 @@ async fn fetch_account_usage(
                 rounds += 1;
                 if rounds >= OFFICIAL_USAGE_MAX_ROUNDS {
                     return Err(i18n::tr(
-            "Official usage pagination exceeded the safety limit",
-            "공식 사용량 페이지가 안전 한도를 초과했습니다",
-        )
-        .to_string());
+                        "Official usage pagination exceeded the safety limit",
+                        "공식 사용량 페이지가 안전 한도를 초과했습니다",
+                    )
+                    .to_string());
                 }
-                start_time =
-                    start_time_at(newest_ts).ok_or_else(|| {
-            i18n::tr(
-                "Official usage pagination time is invalid",
-                "공식 사용량 페이지 시간이 올바르지 않습니다",
-            )
-            .to_string()
-        })?;
+                start_time = start_time_at(newest_ts).ok_or_else(|| {
+                    i18n::tr(
+                        "Official usage pagination time is invalid",
+                        "공식 사용량 페이지 시간이 올바르지 않습니다",
+                    )
+                    .to_string()
+                })?;
                 previous_newest = Some(newest_ts);
             }
         }

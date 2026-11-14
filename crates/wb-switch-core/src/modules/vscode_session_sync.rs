@@ -331,18 +331,8 @@ fn register_one(
     let paths = context.paths;
     let source_uid = context.source_uid;
     let target_uid = context.target_uid;
-    let source_content = ready_content(
-        context,
-        source_uid,
-        source_id,
-        i18n::tr("source", "원본"),
-    )?;
-    let target_content = ready_content(
-        context,
-        target_uid,
-        target_id,
-        i18n::tr("copy", "사본"),
-    )?;
+    let source_content = ready_content(context, source_uid, source_id, i18n::tr("source", "원본"))?;
+    let target_content = ready_content(context, target_uid, target_id, i18n::tr("copy", "사본"))?;
     // 基线只能建立在「双方内容确实一致」之上：不一致时不登记，
     // 让该会话以「未关联」呈现，而不是留下一条错误的共同基线。
     if source_content.normalized.line_digests != target_content.normalized.line_digests {
