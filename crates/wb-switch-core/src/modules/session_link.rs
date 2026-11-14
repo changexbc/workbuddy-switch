@@ -2624,7 +2624,7 @@ mod tests {
             assert!(!decision.default_checked);
             assert!(decision.verdict.available_modes().is_empty());
             assert!(
-                decision.reason.contains("不需要同步"),
+                decision.reason.contains("no sync needed"),
                 "{}",
                 decision.reason
             );
@@ -2651,7 +2651,7 @@ mod tests {
             decision.verdict.available_modes(),
             vec![SyncMode::FastForward]
         );
-        assert!(decision.reason.contains("新增 3 条"), "{}", decision.reason);
+        assert!(decision.reason.contains("3 new records"), "{}", decision.reason);
     }
 
     /// 祖先快进不依赖基线：无基线 / 基线不可验证时，B 是 A 的严格有序前缀照样可快进。
@@ -2676,7 +2676,7 @@ mod tests {
             assert_eq!(decision.extra_a, 3);
             assert_eq!(decision.extra_b, 0);
             assert_eq!(decision.common, 5);
-            assert!(decision.reason.contains("新增 3 条"), "{}", decision.reason);
+            assert!(decision.reason.contains("3 new records"), "{}", decision.reason);
         }
     }
 
@@ -2697,7 +2697,7 @@ mod tests {
         assert_eq!(decision.extra_a, 3, "来源比目标多的 3 条才是本次要追加的");
         assert_eq!(decision.extra_b, 0);
         assert_eq!(decision.common, 6);
-        assert!(decision.reason.contains("新增 3 条"), "{}", decision.reason);
+        assert!(decision.reason.contains("3 new records"), "{}", decision.reason);
     }
 
     /// 目标变化样例：A = X、B = X + 5 条 → ahead，仅目标变化，不写目标。
@@ -2719,7 +2719,7 @@ mod tests {
             "ahead 不可勾选"
         );
         assert!(
-            decision.reason.contains("只有目标账号新增"),
+            decision.reason.contains("Only the target account has"),
             "{}",
             decision.reason
         );
@@ -2778,7 +2778,8 @@ mod tests {
         assert_eq!(decision.extra_b, 2);
         assert_eq!(decision.common, 7);
         assert!(
-            decision.reason.contains("已包含") && decision.reason.contains("2 条"),
+            decision.reason.contains("already contains all")
+                && decision.reason.contains("2 extra records"),
             "{}",
             decision.reason
         );
@@ -2801,7 +2802,8 @@ mod tests {
             assert_eq!(decision.extra_a, 0);
             assert_eq!(decision.extra_b, 4);
             assert!(
-                decision.reason.contains("已包含") && decision.reason.contains("4 条"),
+                decision.reason.contains("already contains all")
+                    && decision.reason.contains("4 extra records"),
                 "{}",
                 decision.reason
             );
@@ -2836,7 +2838,9 @@ mod tests {
         );
         assert!(!decision.verdict.allows(SyncMode::FastForward));
         assert!(
-            decision.reason.contains("替换目标账号的完整内容"),
+            decision
+                .reason
+                .contains("replaces the target account's entire content"),
             "{}",
             decision.reason
         );
@@ -2920,7 +2924,9 @@ mod tests {
             "unknown 不得被覆盖绕过"
         );
         assert!(
-            decision.reason.contains("找不到双方上次一致的内容"),
+            decision
+                .reason
+                .contains("Cannot find the content both sides last agreed on"),
             "{}",
             decision.reason
         );
@@ -2957,7 +2963,7 @@ mod tests {
         assert!(BaselineState::Missing
             .unusable_reason()
             .unwrap()
-            .contains("找不到双方上次一致的内容"));
+            .contains("Cannot find the content both sides last agreed on"));
 
         // 正文不可验证：缺失/截断/非法一律不得默认快进。
         let ready = BaselineState::Ready(baseline_from(&base));
@@ -3073,13 +3079,13 @@ mod tests {
         ];
         for decision in &decisions {
             assert!(
-                !decision.reason.contains("消息"),
+                !decision.reason.contains("messages"),
                 "不得把条数叫消息数：{}",
                 decision.reason
             );
         }
         for decision in &decisions[..5] {
-            assert!(decision.reason.contains("条"), "{}", decision.reason);
+            assert!(decision.reason.contains("records"), "{}", decision.reason);
         }
     }
 
@@ -3244,9 +3250,10 @@ mod tests {
         };
         assert!(verify_preview(&token, &binding).is_empty());
 
-        let cases: [(&str, PreviewBinding); 7] = [
+        let cases: [(&str, &str, PreviewBinding); 7] = [
             (
                 "当前应用",
+                "The current app has changed",
                 PreviewBinding {
                     variant: WbVariant::Ai,
                     ..binding.clone()
@@ -3254,6 +3261,7 @@ mod tests {
             ),
             (
                 "关联关系",
+                "The session link has changed",
                 PreviewBinding {
                     group_id: "g-2".to_string(),
                     ..binding.clone()
@@ -3261,6 +3269,7 @@ mod tests {
             ),
             (
                 "关联关系或同步记录",
+                "The session link or sync record has changed",
                 PreviewBinding {
                     group_fingerprint: "changed".to_string(),
                     ..binding.clone()
@@ -3268,6 +3277,7 @@ mod tests {
             ),
             (
                 "来源账号",
+                "The source account's content has changed",
                 PreviewBinding {
                     source: PreviewMemberBinding {
                         raw_digest: "changed".to_string(),
@@ -3278,6 +3288,7 @@ mod tests {
             ),
             (
                 "目标账号",
+                "The target account's content has changed",
                 PreviewBinding {
                     target: PreviewMemberBinding {
                         session_id: "sess-b2".to_string(),
@@ -3288,6 +3299,7 @@ mod tests {
             ),
             (
                 "上次同步的记录",
+                "The last sync record has changed",
                 PreviewBinding {
                     baseline_ref: Some("base-other".to_string()),
                     ..binding.clone()
@@ -3295,17 +3307,18 @@ mod tests {
             ),
             (
                 "检查结果",
+                "The check result has changed",
                 PreviewBinding {
                     verdict: SyncVerdict::Diverge,
                     ..binding.clone()
                 },
             ),
         ];
-        for (name, mutated) in cases {
+        for (name, needle, mutated) in cases {
             let stale = verify_preview(&token, &mutated);
             assert!(!stale.is_empty(), "{name} 不一致必须报过期");
             assert!(
-                stale.iter().any(|reason| reason.contains(name)),
+                stale.iter().any(|reason| reason.contains(needle)),
                 "{name} 的原因文案缺失：{stale:?}"
             );
         }
@@ -3317,7 +3330,9 @@ mod tests {
         };
         let stale = verify_preview(&token, &drifted);
         assert!(
-            stale.iter().any(|reason| reason.contains("上次同步的内容")),
+            stale
+                .iter()
+                .any(|reason| reason.contains("The last synced content has changed")),
             "{stale:?}"
         );
 
@@ -3362,7 +3377,7 @@ mod tests {
         );
         match load_pair_baseline(&paths, &group, "m-uid-a-sess-1", "m-uid-b-sess-b") {
             BaselineState::Unverifiable(reason) => {
-                assert!(reason.contains("记录格式版本"), "{reason}")
+                assert!(reason.contains("Record format version"), "{reason}")
             }
             other => panic!("期望 Unverifiable，实际 {other:?}"),
         }

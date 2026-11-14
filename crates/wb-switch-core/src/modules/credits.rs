@@ -1047,7 +1047,7 @@ mod tests {
         let resp = authenticated_post(&account, "https://example.invalid/api", json!({})).await;
         assert_eq!(resp["code"], -2);
         let msg = resp["message"].as_str().expect("message 应为字符串");
-        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
     }
 
     /// 回归 issue #94 遗留：积分查询入口（新三路接口与旧接口回退的唯一入口）
@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(resp["ok"], false);
         assert_eq!(resp["accountId"], "envelope-only");
         let msg = resp["error"].as_str().expect("error 应为字符串");
-        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
     }
 
     #[test]
@@ -1783,7 +1783,7 @@ mod tests {
         assert_eq!(result["expired"], false);
         let resources = result["resources"].as_array().expect("resources 应为数组");
         assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0]["packageName"], "企业配额");
+        assert_eq!(resources[0]["packageName"], "Enterprise quota");
         assert_eq!(resources[0]["total"], 2000.0);
         assert_eq!(resources[0]["remaining"], 1500.0);
         assert_eq!(resources[0]["used"], 500.0);
@@ -1818,7 +1818,7 @@ mod tests {
         assert_eq!(result["unlimited"], false);
         assert_eq!(result["totalRemaining"], 0.0);
         assert_eq!(result["resources"][0]["remaining"], 0.0);
-        assert_eq!(result["resources"][0]["packageName"], "企业配额");
+        assert_eq!(result["resources"][0]["packageName"], "Enterprise quota");
     }
 
     #[test]
@@ -1841,7 +1841,7 @@ mod tests {
             result["resources"].as_array().map(|rows| rows.len()),
             Some(1)
         );
-        assert_eq!(result["resources"][0]["packageName"], "企业配额");
+        assert_eq!(result["resources"][0]["packageName"], "Enterprise quota");
         assert_eq!(result["resources"][0]["remaining"], 0.0);
     }
 
@@ -1862,7 +1862,7 @@ mod tests {
             enterprise_credit_result(&account, &json!({"code": 0, "data": {}}), 1_800_000_000_000);
         assert_eq!(malformed["ok"], false);
         let message = malformed["error"].as_str().expect("error 应为字符串");
-        assert!(message.contains("企业配额"), "错误文案应可读：{message}");
+        assert!(message.contains("enterprise quota"), "错误文案应可读：{message}");
     }
 
     #[test]

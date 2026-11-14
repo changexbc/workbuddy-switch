@@ -1431,7 +1431,7 @@ mod tests {
             conversation_id: CONV_OLD.to_string(),
         }];
         let error = switch_vscode_ext_with_copy(&missing, true, &items, &[]).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
     }
 
     /// 时序（design §7）：只勾同步（不勾复制）时也走编排 wrapper，
@@ -1445,7 +1445,7 @@ mod tests {
             mode: crate::modules::session_link::SyncMode::FastForward,
         }];
         let error = switch_vscode_ext_with_copy(&missing, true, &[], &selections).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
     }
 
     fn seed_source(fixture: &Fixture) {
@@ -1891,7 +1891,7 @@ mod tests {
         }];
         let error =
             copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, SRC_UID, &items).unwrap_err();
-        assert!(error.contains("相同"));
+        assert!(error.contains("the same"));
     }
 
     #[test]

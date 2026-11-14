@@ -1195,9 +1195,9 @@ mod tests {
     fn close_timeout_error_lists_pids_and_manual_hint() {
         let message = close_timeout_error(&[4242, 4243]);
         assert!(message.contains("4242, 4243"), "{message}");
-        assert!(message.contains("请在 VS Code 中处理保存提示"), "{message}");
+        assert!(message.contains("Handle the save prompts in VS Code"), "{message}");
         // 等待期间被重新打开也会表现为「仍有进程」→ 文案要点出这条排查方向。
-        assert!(message.contains("重新打开过 VS Code"), "{message}");
+        assert!(message.contains("reopened VS Code"), "{message}");
     }
 
     fn instance_with_pids(pids: Vec<u32>) -> RunningInstance {
@@ -1245,7 +1245,7 @@ mod tests {
     fn switch_account_after_close_rejects_unknown_account() {
         let missing = format!("no-such-account-{}", uuid::Uuid::new_v4().simple());
         let error = switch_account_after_close(&missing, None).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
     }
 
     /// 失败兜底（D4）：编辑器是本次我们关的 → 任何 Err 路径都要尽力开回来；本来没关的 → 一次都不许调。
@@ -1294,17 +1294,17 @@ mod tests {
     #[test]
     fn switch_message_matches_design_states() {
         let restarted = switch_message("测试号", true, None);
-        assert!(restarted.contains("VS Code 已重新打开"), "{restarted}");
-        assert!(!restarted.contains("重载"), "{restarted}");
+        assert!(restarted.contains("VS Code has been reopened"), "{restarted}");
+        assert!(!restarted.contains("reload"), "{restarted}");
 
         let relaunch_failed = switch_message("测试号", false, Some("open 超时"));
         assert!(
-            relaunch_failed.contains("自动重新打开 VS Code 失败"),
+            relaunch_failed.contains("reopening VS Code automatically failed"),
             "{relaunch_failed}"
         );
 
         let not_running = switch_message("测试号", false, None);
-        assert!(not_running.contains("请打开 VS Code 生效"), "{not_running}");
+        assert!(not_running.contains("open VS Code for them to take effect"), "{not_running}");
         assert!(!not_running.contains("重载"), "{not_running}");
     }
 }

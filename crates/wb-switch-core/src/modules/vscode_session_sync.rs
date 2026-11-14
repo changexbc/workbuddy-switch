@@ -2574,7 +2574,10 @@ mod tests {
         .unwrap();
         assert_eq!(report["synced"].as_array().unwrap().len(), 0, "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("重建副本会话目录失败"), "{error}");
+        assert!(
+            error.contains("Could not rebuild the copy's session directory"),
+            "{error}"
+        );
         assert_eq!(
             dir_snapshot(&target_dir),
             before,
@@ -2614,9 +2617,12 @@ mod tests {
         .unwrap();
         assert_eq!(report["synced"].as_array().unwrap().len(), 0, "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("同步记录"), "{error}");
         assert!(
-            !error.contains("；且"),
+            error.contains("The sync record is temporarily unavailable"),
+            "{error}"
+        );
+        assert!(
+            !error.contains("; rollback also failed"),
             "回滚成功时用户可见文案必须与原始错误逐字一致：{error}"
         );
         assert_eq!(
@@ -2665,9 +2671,12 @@ mod tests {
         assert_eq!(report["synced"].as_array().unwrap().len(), 0, "{report}");
         assert_eq!(report["errors"].as_array().unwrap().len(), 1, "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("写入副本消息失败"), "{error}");
         assert!(
-            !error.contains("；且"),
+            error.contains("Could not write the copy's message file"),
+            "{error}"
+        );
+        assert!(
+            !error.contains("; rollback also failed"),
             "回滚成功时用户可见文案必须与原始错误逐字一致：{error}"
         );
         assert_eq!(
@@ -2736,7 +2745,7 @@ mod tests {
         assert_eq!(report["errors"].as_array().unwrap().len(), 1, "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
         assert!(
-            error.contains("同步记录"),
+            error.contains("The sync record is temporarily unavailable"),
             "失败必须来自提交基线（而非重建）：{error}"
         );
 
@@ -2959,7 +2968,7 @@ mod tests {
                 skipped["message"]
                     .as_str()
                     .unwrap()
-                    .contains("目标账号的内容已变化"),
+                    .contains("The target account's content has changed"),
                 "{skipped}"
             );
         }
@@ -3099,7 +3108,7 @@ mod tests {
 
         let error = restore_dir(&missing_backup, &target_dir).unwrap_err();
         assert!(
-            error.contains("未恢复"),
+            error.contains("The copy directory was not restored"),
             "文案必须明说副本目录未恢复：{error}"
         );
         assert!(
@@ -3117,7 +3126,10 @@ mod tests {
         assert_eq!(rollback_message(Ok(()), success), success);
         let composed = rollback_message(Err(error.clone()), success);
         assert!(composed.contains(success), "{composed}");
-        assert!(composed.contains("未恢复"), "{composed}");
+        assert!(
+            composed.contains("The copy directory was not restored"),
+            "{composed}"
+        );
         assert!(
             composed.contains(&missing_backup.to_string_lossy().to_string()),
             "{composed}"
@@ -3179,7 +3191,10 @@ mod tests {
         let created = vec![blocked.join("messages/never-written.json")];
 
         let error = rollback_index(&plan, &backup_dir, &created).unwrap_err();
-        assert!(error.contains("索引 index.json 未恢复"), "{error}");
+        assert!(
+            error.contains("Index index.json was not restored"),
+            "{error}"
+        );
         assert!(
             error.contains(&backup_dir.to_string_lossy().to_string()),
             "文案必须给出可手工恢复的备份路径：{error}"

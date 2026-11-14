@@ -561,7 +561,7 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("目标到期仅早 3 小时，未达切换阈值（24 小时）".to_string())
+            Decision::Skip("The target expires only 3 hours earlier, which is below the switch threshold (24 hours)".to_string())
         );
     }
 
@@ -597,7 +597,7 @@ mod tests {
                 false,
                 0.0
             ),
-            Decision::Skip("处于切换冷却期".to_string())
+            Decision::Skip("The switch is in its cooldown period".to_string())
         );
         // 冷却结束 → 切
         assert_eq!(
@@ -637,7 +637,7 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("没有可用账号（查询失败/已过期/无剩余积分）".to_string())
+            Decision::Skip("No usable account (query failed / expired / no remaining credits)".to_string())
         );
     }
 
@@ -653,7 +653,7 @@ mod tests {
         ];
         assert_eq!(
             dt(&candidates, Some("a")),
-            Decision::Skip("所有账号到期都还早（最紧迫的还剩 5 天），无需切换".to_string())
+            Decision::Skip("Every account expires far in the future (the soonest has 5 days left), so no switch is needed".to_string())
         );
     }
 
@@ -757,7 +757,7 @@ mod tests {
         // 真实原因不是门控时不该重跑决策链（重跑不免费，而且结论无关）。
         let mut replayed = false;
         assert_eq!(
-            deferred_prompt_target("处于切换冷却期", || {
+            deferred_prompt_target("The switch is in its cooldown period", || {
                 replayed = true;
                 Decision::Switch("b".to_string())
             }),
@@ -809,7 +809,7 @@ mod tests {
         // 目标剩余 10 < 阈值 30 → 不值得切
         assert_eq!(
             decide_target(&candidates, Some("a"), None, 0, GAP, URG, false, 30.0),
-            Decision::Skip("目标账号剩余积分不足（10，阈值 30），不值得切换".to_string())
+            Decision::Skip("The target account has too few credits left (10; threshold 30), so switching is not worthwhile".to_string())
         );
         // 阈值 5：目标剩余 10 达标 → 切
         assert_eq!(

@@ -391,6 +391,7 @@ function Overview({ source }: { source: TokenStatsSource }) {
       <Card
         className="min-w-0 gap-0 overflow-hidden rounded-2xl bg-card/70 py-0 shadow-none"
         aria-label={t("stats.token.overviewTitle")}
+        data-token-overview=""
       >
         <CardHeader className="gap-0 px-4 pt-3 pb-0 sm:px-5">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">

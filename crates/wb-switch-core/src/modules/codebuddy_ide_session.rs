@@ -883,7 +883,7 @@ mod tests {
         let errors = report.get("errors").and_then(Value::as_array).unwrap();
         assert_eq!(errors.len(), 1);
         let message = errors[0].get("error").and_then(Value::as_str).unwrap();
-        assert!(message.contains("写入临时会话目录失败"), "{message}");
+        assert!(message.contains("Could not write the temporary session directory"), "{message}");
     }
 
     /// 时序：目标校验必须在关闭 IDE **之前**失败——账号不存在时不触发任何进程操作。
@@ -896,7 +896,7 @@ mod tests {
             conversation_id: CONV_OLD.to_string(),
         }];
         let error = switch_codebuddy_cn_ide_with_copy(&missing, true, &items, &[]).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
     }
 
     /// 只勾同步（不勾复制）时也走编排 wrapper，且同样先校验账号再决定关闭。
@@ -910,7 +910,7 @@ mod tests {
         }];
         let error =
             switch_codebuddy_cn_ide_with_copy(&missing, true, &[], &selections).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
     }
 
     /// 国际版入口与国内版共用同一编排内核：账号不存在时同样在关闭 IDE **之前**失败
@@ -923,7 +923,7 @@ mod tests {
             conversation_id: CONV_OLD.to_string(),
         }];
         let error = switch_codebuddy_intl_ide_with_copy(&missing, true, &items, &[]).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
 
         let selections = [SyncSelection {
             group_id: "group-1".to_string(),
@@ -932,7 +932,7 @@ mod tests {
         }];
         let error =
             switch_codebuddy_intl_ide_with_copy(&missing, true, &[], &selections).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
     }
 
     /// 空参数（既不复制的也不同步）直通国际版 `switch_account`，不进入复制编排。
@@ -940,7 +940,7 @@ mod tests {
     fn intl_switch_without_selection_passes_through() {
         let missing = format!("no-such-account-{}", uuid::Uuid::new_v4().simple());
         let error = switch_codebuddy_intl_ide_with_copy(&missing, true, &[], &[]).unwrap_err();
-        assert!(error.contains("账号不存在"), "{error}");
+        assert!(error.contains("Account not found"), "{error}");
     }
 
     #[test]
@@ -960,7 +960,7 @@ mod tests {
                 &items,
             )
             .unwrap_err();
-            assert!(error.contains("非法"), "{uid}: {error}");
+            assert!(error.contains("invalid"), "{uid}: {error}");
         }
         let error = copy_codebuddy_ide_sessions_in(
             &fixture.root,
@@ -970,7 +970,7 @@ mod tests {
             &items,
         )
         .unwrap_err();
-        assert!(error.contains("相同"), "{error}");
+        assert!(error.contains("the same"), "{error}");
     }
 
     /// 多次复制同一会话：第一次沿用 id，之后每次都取新 id（加法，不覆盖既有副本）。

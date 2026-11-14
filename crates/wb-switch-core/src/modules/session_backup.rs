@@ -1070,7 +1070,7 @@ mod tests {
         .unwrap();
         let issues = maintain(&paths, WbVariant::Cn);
         assert_eq!(issues.len(), 1);
-        assert!(issues[0].reason.contains("生命周期标记"), "{issues:?}");
+        assert!(issues[0].reason.contains("lifecycle marker"), "{issues:?}");
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
             .unwrap()
             .is_dir());
@@ -1091,7 +1091,7 @@ mod tests {
 
         let outcome = cleanup_operation(&paths, WbVariant::Cn, &record);
         match outcome {
-            CleanupOutcome::Protected { reason } => assert!(reason.contains("符号链接")),
+            CleanupOutcome::Protected { reason } => assert!(reason.contains("symbolic link")),
             other => panic!("必须拒绝符号链接：{other:?}"),
         }
         assert!(outside.join("keep.txt").exists(), "链接目标不得被删除");
@@ -1108,7 +1108,10 @@ mod tests {
 
         let outcome = cleanup_operation(&paths, WbVariant::Cn, &record);
         match outcome {
-            CleanupOutcome::Pending { reason } => assert!(reason.contains("删除失败"), "{reason}"),
+            CleanupOutcome::Pending { reason } => assert!(
+                reason.contains("Could not delete the temporary directory"),
+                "{reason}"
+            ),
             other => panic!("只读目录必须报告待重试：{other:?}"),
         }
         assert!(referenced_operation_ids(&paths)
@@ -1147,7 +1150,9 @@ mod tests {
         std::fs::write(&file, b"{not json").unwrap();
 
         let issues = maintain(&paths, WbVariant::Cn);
-        assert!(issues.iter().any(|issue| issue.reason.contains("解析失败")));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.reason.contains("Failed to parse the maintenance record")));
         assert!(
             transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
                 .unwrap()
@@ -1226,7 +1231,9 @@ mod tests {
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.reason.contains("文件名与操作标识不一致")),
+                .any(|issue| issue
+                    .reason
+                    .contains("The maintenance record file name does not match the operation id")),
             "{issues:?}"
         );
         assert!(
@@ -1250,7 +1257,9 @@ mod tests {
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.reason.contains("档位与目录不一致")),
+                .any(|issue| issue
+                    .reason
+                    .contains("The maintenance record edition does not match the directory")),
             "{issues:?}"
         );
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
@@ -1270,7 +1279,7 @@ mod tests {
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.reason.contains("kind 不受支持")),
+                .any(|issue| issue.reason.contains("Unsupported maintenance record kind")),
             "{issues:?}"
         );
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
@@ -1291,7 +1300,7 @@ mod tests {
         .unwrap();
         let issues = maintain(&paths, WbVariant::Cn);
         assert_eq!(issues.len(), 1);
-        assert!(issues[0].reason.contains("已验证安全终止"), "{issues:?}");
+        assert!(issues[0].reason.contains("verified safe termination"), "{issues:?}");
         assert!(transaction_dir(&paths, WbVariant::Cn, &record.operation_id)
             .unwrap()
             .is_dir());
@@ -1356,7 +1365,7 @@ mod tests {
         let outcome = cleanup_operation(&paths, WbVariant::Cn, &record);
         match outcome {
             CleanupOutcome::Protected { reason } => {
-                assert!(reason.contains("符号链接"), "{reason}")
+                assert!(reason.contains("symbolic link"), "{reason}")
             }
             other => panic!("祖先符号链接必须拒绝：{other:?}"),
         }

@@ -915,7 +915,7 @@ mod tests {
         let resp = checkin_request_once("/whatever", &account, WbVariant::Cn).await;
         assert_eq!(resp["code"], -2);
         let msg = resp["message"].as_str().expect("message 应为字符串");
-        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
     }
 
     #[tokio::test]

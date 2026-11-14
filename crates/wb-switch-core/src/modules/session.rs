@@ -4822,11 +4822,11 @@ mod tests {
         let ai = SessionPaths::for_variant(WbVariant::Ai);
         assert_eq!(ai.workbuddy_db().parent(), Some(ai.data_root.as_path()));
         assert_ne!(cn.workbuddy_db(), ai.workbuddy_db());
-        // 国际版数据根与国内版不同构，默认文件名为 v4，且同样走动态发现。
-        assert!(ai
-            .edge_sync_db(WbVariant::Ai)
-            .to_string_lossy()
-            .ends_with("edge-sync-mapping-v4.db"));
+        // 国际版数据根与国内版不同构，映射库同样走动态发现：本机实测 v3 与 v4
+        // 都可能存在，写死版本会让这条断言随机器变化而失败。
+        let ai_edge = ai.edge_sync_db(WbVariant::Ai);
+        assert_eq!(ai_edge.parent(), Some(ai.data_root.as_path()));
+        assert!(ai_edge.to_string_lossy().contains("edge-sync-mapping-"));
         assert_ne!(
             cn.edge_sync_db(WbVariant::Cn),
             ai.edge_sync_db(WbVariant::Ai)
@@ -5119,7 +5119,7 @@ mod tests {
             |_| false,
         )
         .expect_err("缺登录态必须报错");
-        assert!(err.contains("未读取到本机登录态"), "{err}");
+        assert!(err.contains("Could not read the local login state"), "{err}");
 
         env.set_login("uid-b");
         let err = copy_sessions_for_switch_at(
@@ -5130,7 +5130,7 @@ mod tests {
             |_| false,
         )
         .expect_err("同一账号必须报错");
-        assert!(err.contains("当前账号与目标账号相同"), "{err}");
+        assert!(err.contains("The current account is the same as the target account"), "{err}");
         assert_eq!(env.rows_for("uid-b").len(), 0);
     }
 
@@ -5281,7 +5281,7 @@ mod tests {
             report["copied"][0]["cleanupError"]
                 .as_str()
                 .unwrap()
-                .contains("符号链接"),
+                .contains("symbolic link"),
             "{report}"
         );
         let temporary_files = report["temporaryFiles"].as_array().expect("temporaryFiles");
@@ -5292,7 +5292,7 @@ mod tests {
         assert!(
             temporary_files.iter().any(|item| item["reason"]
                 .as_str()
-                .is_some_and(|reason| reason.contains("符号链接"))),
+                .is_some_and(|reason| reason.contains("symbolic link"))),
             "{report}"
         );
         assert_eq!(session_backup::scan_lifecycle(&env.paths).records.len(), 1);
@@ -5685,7 +5685,7 @@ mod tests {
         let report = copy(&env, "uid-b", &["sess-1"]);
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("会话内容无法验证"), "{error}");
+        assert!(error.contains("Session content could not be verified"), "{error}");
         assert_eq!(env.rows_for("uid-b").len(), 0);
     }
 
@@ -5774,7 +5774,7 @@ mod tests {
         assert_eq!(failed["copied"].as_array().unwrap().len(), 0);
         let error = failed["errors"][0]["error"].as_str().unwrap();
         assert!(
-            error.contains("保存失败") || error.contains("同步记录"),
+            error.contains("保存失败") || error.contains("sync record"),
             "{error}"
         );
         assert_eq!(failed["needsRecovery"], true);
@@ -5815,7 +5815,7 @@ mod tests {
         }
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("复制后的内容保存失败"), "{error}");
+        assert!(error.contains("Failed to save the copied content"), "{error}");
         assert_eq!(env.rows_for("uid-b").len(), 0);
         assert_eq!(env.body_files().len(), 1);
     }
@@ -5830,7 +5830,7 @@ mod tests {
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         let error = report["errors"][0]["error"].as_str().unwrap();
         assert!(
-            error.contains("同步记录") && error.contains("已阻止复制"),
+            error.contains("sync record") && error.contains("copy blocked"),
             "{error}"
         );
         assert_eq!(env.rows_for("uid-b").len(), 0);
@@ -5855,7 +5855,7 @@ mod tests {
         let report = copy(&env, "uid-b", &["sess-1"]);
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("版本"), "{error}");
+        assert!(error.contains("version"), "{error}");
         assert_eq!(env.rows_for("uid-b").len(), 0);
     }
 
@@ -5872,7 +5872,7 @@ mod tests {
         assert_eq!(report["copied"].as_array().unwrap().len(), 0);
         assert_eq!(report["alreadyLinked"].as_array().unwrap().len(), 0);
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("保留现场"), "{error}");
+        assert!(error.contains("the current state was preserved"), "{error}");
         assert!(
             !env.paths.session_links_file().exists(),
             "不得重建空表覆盖现场"
@@ -5895,7 +5895,7 @@ mod tests {
             |_| false,
         )
         .expect_err("持锁期间必须拒绝");
-        assert!(err.contains("会话操作"), "{err}");
+        assert!(err.contains("Session operations"), "{err}");
         assert_eq!(env.body_files().len(), 1);
 
         drop(held);
@@ -6021,7 +6021,7 @@ mod tests {
         let issue = &report.needs_recovery[0];
         assert!(!issue.retryable);
         assert!(
-            issue.reason.contains("目标内容与操作记录不一致"),
+            issue.reason.contains("The target content does not match the operation log"),
             "{}",
             issue.reason
         );
@@ -6037,7 +6037,7 @@ mod tests {
         assert!(again["errors"][0]["error"]
             .as_str()
             .unwrap()
-            .contains("上一次复制尚未完成"));
+            .contains("The previous copy has not finished"));
         assert_eq!(env.body_files().len(), 2, "不得产生第二个副本");
     }
 
@@ -6127,7 +6127,7 @@ mod tests {
         assert_eq!(report.needs_recovery.len(), 1);
         assert!(!report.needs_recovery[0].retryable);
         assert!(
-            report.needs_recovery[0].reason.contains("同步记录"),
+            report.needs_recovery[0].reason.contains("sync record"),
             "{}",
             report.needs_recovery[0].reason
         );
@@ -6313,7 +6313,7 @@ mod tests {
         let env = ready_env("backup-fail");
         std::fs::remove_file(env.paths.workbuddy_db()).unwrap();
         let err = backup_workbuddy_db(&env.paths(), &env.paths.backup_root()).unwrap_err();
-        assert!(err.contains("会话数据不存在"), "{err}");
+        assert!(err.contains("Session data not found"), "{err}");
 
         // 正常备份返回主库路径且大小一致。
         env.create_db();
@@ -7266,7 +7266,7 @@ mod tests {
         assert_eq!(group["target"]["sessionId"], target_id);
         assert_eq!(group["target"]["state"], "active");
         assert!(group["previewToken"].as_str().is_some());
-        assert!(group["reason"].as_str().unwrap().contains("可以直接同步"));
+        assert!(group["reason"].as_str().unwrap().contains("you can sync directly"));
         // 预览是只读的：目标正文与关联版本都不变。
         assert_eq!(
             std::fs::read_to_string(env.body_path(&target_id)).unwrap(),
@@ -7300,7 +7300,7 @@ mod tests {
         assert!(group["reason"]
             .as_str()
             .unwrap()
-            .contains("只有目标账号新增"));
+            .contains("Only the target account has"));
 
         // 预览不写目标：正文与关联版本都不变。
         assert_eq!(
@@ -7378,7 +7378,7 @@ mod tests {
             group["reason"]
                 .as_str()
                 .unwrap()
-                .contains("对应的会话已失效"),
+                .contains("The corresponding session"),
             "{preview}"
         );
         // 契约：不可验证时 source/target 为 0、baseline 为 null（前端类型据此声明）。
@@ -7414,7 +7414,7 @@ mod tests {
             skipped["message"]
                 .as_str()
                 .unwrap()
-                .contains("来源账号的内容已变化"),
+                .contains("The source account's content has changed"),
             "{skipped}"
         );
         assert_eq!(
@@ -7440,7 +7440,7 @@ mod tests {
                 skipped["message"]
                     .as_str()
                     .unwrap()
-                    .contains("目标账号的内容已变化"),
+                    .contains("The target account's content has changed"),
                 "{skipped}"
             );
         }
@@ -7467,7 +7467,7 @@ mod tests {
         let skipped = &report["skipped"][0];
         assert_eq!(skipped["reasonCode"], REASON_PREVIEW_STALE);
         assert!(
-            skipped["message"].as_str().unwrap().contains("账号已变化"),
+            skipped["message"].as_str().unwrap().contains("The account changed"),
             "{skipped}"
         );
         assert_eq!(env.store().revision, revision_before);
@@ -7513,7 +7513,7 @@ mod tests {
             skipped["message"]
                 .as_str()
                 .unwrap()
-                .contains("会话的关联关系或同步记录已变化"),
+                .contains("The session link or sync record has changed"),
             "{skipped}"
         );
 
@@ -7548,7 +7548,7 @@ mod tests {
             skipped["message"]
                 .as_str()
                 .unwrap()
-                .contains("上次同步的内容已变化"),
+                .contains("The last synced content has changed"),
             "{skipped}"
         );
     }
@@ -7576,7 +7576,7 @@ mod tests {
                 errors[0]["error"]
                     .as_str()
                     .unwrap()
-                    .contains("检查结果不存在"),
+                    .contains("The check result does not exist"),
                 "{report}"
             );
         }
@@ -7592,7 +7592,7 @@ mod tests {
             report["errors"][0]["error"]
                 .as_str()
                 .unwrap()
-                .contains("不匹配"),
+                .contains("does not match the selected session"),
             "{report}"
         );
 
@@ -7601,7 +7601,7 @@ mod tests {
             &json!([{"groupId": group_id, "previewToken": token, "mode": "force"}])
         ))
         .unwrap_err()
-        .contains("未知的同步模式"));
+        .contains("Unknown sync mode"));
 
         // 全程没有任何写入。
         assert_eq!(env.body_files().len(), 2);
@@ -7677,7 +7677,7 @@ mod tests {
             let errors = report["errors"].as_array().unwrap();
             assert_eq!(errors.len(), 1, "{report}");
             assert!(
-                errors[0]["error"].as_str().unwrap().contains("不允许以"),
+                errors[0]["error"].as_str().unwrap().contains("cannot be synced in"),
                 "{report}"
             );
         }
@@ -7725,7 +7725,7 @@ mod tests {
         assert_eq!(item["availableModes"], json!(["fastForward"]), "{preview}");
         assert!(item["recordCount"]["baseline"].is_null(), "{preview}");
         assert!(
-            item["reason"].as_str().unwrap().contains("新增 3 条"),
+            item["reason"].as_str().unwrap().contains("3 new records"),
             "{preview}"
         );
         let token = item["previewToken"]
@@ -7879,7 +7879,7 @@ mod tests {
             report["errors"][0]["error"]
                 .as_str()
                 .unwrap()
-                .contains("同步记录"),
+                .contains("sync record"),
             "{report}"
         );
         assert_eq!(report["needsRecovery"], true, "关系表损坏必须要求恢复");
@@ -7934,12 +7934,12 @@ mod tests {
         assert!(
             session_links_preview_at(&env.paths(), WbVariant::Cn, &json!({"uid": " "}))
                 .unwrap_err()
-                .contains("缺少 uid")
+                .contains("has no uid")
         );
         assert!(
             session_links_preview_at(&env.paths(), WbVariant::Cn, &env.target("uid-a"))
                 .unwrap_err()
-                .contains("当前账号与目标账号相同")
+                .contains("The current account is the same as the target account")
         );
     }
 
@@ -7995,7 +7995,7 @@ mod tests {
             |_| false,
         )
         .unwrap_err();
-        assert!(err.contains("当前账号与目标账号相同"), "{err}");
+        assert!(err.contains("The current account is the same as the target account"), "{err}");
 
         // 失败的两条（缺 uid / 同账号）都不应再触碰目标正文。
         assert_eq!(
@@ -8013,7 +8013,7 @@ mod tests {
             .is_empty());
         assert!(parse_sync_selections(Some(&json!("x")))
             .unwrap_err()
-            .contains("必须是数组"));
+            .contains("must be an array"));
 
         let parsed = parse_sync_selections(Some(&json!([
             {"groupId": "g-1", "previewToken": "11111111-2222-3333-4444-555555555555", "mode": "overwrite"}
@@ -8440,7 +8440,7 @@ mod tests {
                 report["errors"][0]["error"]
                     .as_str()
                     .unwrap()
-                    .contains("不允许以"),
+                    .contains("cannot be synced in"),
                 "{report}"
             );
         }
@@ -8476,7 +8476,7 @@ mod tests {
         );
         assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("临时目录创建失败"), "{error}");
+        assert!(error.contains("Could not create the temporary directory"), "{error}");
 
         // 零写入：正文、数据库行、基线、关联版本原样保留。
         assert_eq!(body_bytes(&env, &target_id), target_before);
@@ -8516,7 +8516,7 @@ mod tests {
         }
         assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("同步内容保存失败"), "{error}");
+        assert!(error.contains("Failed to save the synced content"), "{error}");
         assert_eq!(report["needsRecovery"], true);
 
         // 正文与数据库都没变；备份已生成并留下未完成操作（阶段停在 Prepared）。
@@ -8578,7 +8578,7 @@ mod tests {
         );
         assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("目标会话记录更新失败"), "{error}");
+        assert!(error.contains("Failed to update the target session record"), "{error}");
         assert_eq!(report["needsRecovery"], true);
 
         // 正文已写入，但数据库未更新：绝不报成功；组表也未提交。
@@ -8676,7 +8676,7 @@ mod tests {
         assert!(report["synced"].as_array().unwrap().is_empty(), "{report}");
         assert_eq!(report["needsRecovery"], true);
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("同步记录"), "{error}");
+        assert!(error.contains("sync record"), "{error}");
 
         // 正文与数据库都已写入，但组表未提交 → 阶段停在 DbWritten。
         assert_eq!(
@@ -9164,7 +9164,7 @@ mod tests {
             report["errors"][0]["error"]
                 .as_str()
                 .unwrap()
-                .contains("不提供仅同步归档"),
+                .contains("does not offer archive-only sync"),
             "{report}"
         );
         let _ = target_id;
@@ -9466,14 +9466,14 @@ mod tests {
         drifted_status.target_status = Some("active".to_string());
         let stale = session_link::verify_preview(&stored, &drifted_status);
         assert!(
-            stale.iter().any(|reason| reason.contains("归档状态")),
+            stale.iter().any(|reason| reason.contains("archive state")),
             "{stale:?}"
         );
         let mut drifted_action = stored.binding.clone();
         drifted_action.archive_action = None;
         let stale = session_link::verify_preview(&stored, &drifted_action);
         assert!(
-            stale.iter().any(|reason| reason.contains("归档")),
+            stale.iter().any(|reason| reason.contains("archive")),
             "{stale:?}"
         );
         let _ = group_id;
@@ -9787,8 +9787,8 @@ mod tests {
             recovery.needs_recovery[0]
         );
         assert!(
-            recovery.needs_recovery[0].reason.contains("不一致")
-                || recovery.needs_recovery[0].reason.contains("无法验证"),
+            recovery.needs_recovery[0].reason.contains("matches neither")
+                || recovery.needs_recovery[0].reason.contains("could not be verified"),
             "{}",
             recovery.needs_recovery[0].reason
         );
@@ -9827,7 +9827,7 @@ mod tests {
         assert_eq!(recovery.needs_recovery.len(), 1);
         assert!(!recovery.needs_recovery[0].retryable);
         assert!(
-            recovery.needs_recovery[0].reason.contains("更新时间"),
+            recovery.needs_recovery[0].reason.contains("update time"),
             "{}",
             recovery.needs_recovery[0].reason
         );
@@ -9856,7 +9856,7 @@ mod tests {
         assert_eq!(recovery.needs_recovery.len(), 1);
         assert!(!recovery.needs_recovery[0].retryable);
         assert!(
-            recovery.needs_recovery[0].reason.contains("归属"),
+            recovery.needs_recovery[0].reason.contains("unexpected owner"),
             "{}",
             recovery.needs_recovery[0].reason
         );
@@ -10097,7 +10097,7 @@ mod tests {
         assert_eq!(report["needsRecovery"], true, "{report}");
         assert_eq!(report["errors"].as_array().unwrap().len(), 1, "{report}");
         let error = report["errors"][0]["error"].as_str().unwrap();
-        assert!(error.contains("上一次会话保存尚未完成"), "{error}");
+        assert!(error.contains("The previous session save has not finished"), "{error}");
         assert_eq!(body_bytes(&env, &target_id), target_before);
         assert_eq!(env.body_files().len(), 2);
         assert_eq!(
@@ -10157,7 +10157,7 @@ mod tests {
         assert_eq!(recovery.needs_recovery.len(), 1);
         assert!(!recovery.needs_recovery[0].retryable);
         assert!(
-            recovery.needs_recovery[0].reason.contains("备份"),
+            recovery.needs_recovery[0].reason.contains("backup"),
             "{}",
             recovery.needs_recovery[0].reason
         );

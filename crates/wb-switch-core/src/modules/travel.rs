@@ -1067,7 +1067,7 @@ mod tests {
         let resp = travel_request("/whatever", "POST", Some(json!({})), &account).await;
         assert_eq!(resp["code"], -2);
         let msg = resp["message"].as_str().expect("message 应为字符串");
-        assert!(msg.contains("信封"), "错误文案应可读：{msg}");
+        assert!(msg.contains("encrypted WorkBuddy envelope"), "错误文案应可读：{msg}");
     }
 
     #[test]
@@ -1302,7 +1302,7 @@ mod tests {
         assert_eq!(result["claimed"], true);
         assert_eq!(result["skip"], "daily-limit");
         assert_eq!(result["state"], "idle");
-        assert_eq!(result["message"], "今日已派");
+        assert_eq!(result["message"], "Already dispatched today");
         assert_eq!(result["locationName"], "咖啡馆");
         assert_eq!(result["rewardCredit"], 9);
         assert_eq!(display_label(true, &result), "finished");

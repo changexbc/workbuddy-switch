@@ -509,7 +509,7 @@ mod tests {
         let error = write_account_to_auth_file_at(&account, &path).unwrap_err();
 
         assert!(
-            error.contains("退出标记"),
+            error.contains("logout marker"),
             "错误应说明未清理退出标记：{error}"
         );
         assert!(marker.exists());
