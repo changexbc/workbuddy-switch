@@ -9,18 +9,10 @@ import {
 } from "react";
 
 import { getLocale, setLocalePreference, subscribeLocale, type Locale } from "./locale";
-import { CATALOGS, en, type MessageKey } from "./messages";
+import type { MessageKey } from "./messages";
+import { setActiveLocale, translateWith, type Translate, type TranslateVars } from "./translate";
 
-export type TranslateVars = Record<string, string | number>;
-
-export type Translate = (key: MessageKey, vars?: TranslateVars) => string;
-
-function interpolate(template: string, vars?: TranslateVars): string {
-  if (!vars) return template;
-  return template.replace(/\{(\w+)\}/g, (match, name) =>
-    Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match,
-  );
-}
+export type { Translate, TranslateVars };
 
 interface I18nValue {
   locale: Locale;
@@ -34,6 +26,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(getLocale);
 
   useEffect(() => {
+    setActiveLocale(locale);
     document.documentElement.lang = locale;
   }, [locale]);
 
@@ -45,7 +38,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const t = useCallback<Translate>(
-    (key, vars) => interpolate(CATALOGS[locale][key] ?? en[key], vars),
+    (key: MessageKey, vars?: TranslateVars) => translateWith(locale, key, vars),
     [locale],
   );
 

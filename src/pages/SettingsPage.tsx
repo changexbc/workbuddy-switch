@@ -1902,6 +1902,7 @@ function AppearanceCard() {
  * （新增端先灰度），打开后才出现对应入口。
  */
 function SupportedToolsCard() {
+  const t = useT();
   const enabled = useSupportedTools();
   const variant = useAccountsStore((s) => s.variant);
   /** 行内产品图标：与账号页页顶徽标同一套档位规则（国际版用国际版字块）。 */
@@ -1924,17 +1925,17 @@ function SupportedToolsCard() {
             label={
               <span className="flex items-center gap-2.5">
                 {marks[tool.id](20)}
-                <span>{tool.label}</span>
+                <span>{t(tool.labelKey)}</span>
               </span>
             }
-            description={tool.description}
+            description={t(tool.descriptionKey)}
             htmlFor={`tools-${tool.id}`}
           >
             <Switch
               id={`tools-${tool.id}`}
               checked={enabled[tool.id]}
               onCheckedChange={(on) => setToolEnabled(tool.id, on)}
-              aria-label={tool.label}
+              aria-label={t(tool.labelKey)}
             />
           </SettingsFieldRow>
         ))}

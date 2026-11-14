@@ -1,1 +1,16 @@
-export const libEn = {} as const;
+export const libEn = {
+  "lib.variant.domestic": "Domestic",
+  "lib.variant.international": "International",
+  "lib.variant.appInternational": "WorkBuddy International",
+  "lib.variant.codebuddyIdeInternational": "CodeBuddy IDE International",
+  "lib.tools.workbuddy.label": "WorkBuddy",
+  "lib.tools.workbuddy.description": "Account switching and session copy for the WorkBuddy desktop client",
+  "lib.tools.codebuddyIde.label": "CodeBuddy IDE",
+  "lib.tools.codebuddyIde.description": "Account switching for the CodeBuddy IDE desktop client, domestic and international editions",
+  "lib.tools.codebuddyCli.label": "CodeBuddy CLI",
+  "lib.tools.codebuddyCli.description": "Default account and auto rotation for CodeBuddy CLI",
+  "lib.tools.vscodeExt.label": "VS Code CodeBuddy extension",
+  "lib.tools.vscodeExt.description": "Account switching and session copy for the CodeBuddy extension inside VS Code",
+  "lib.tools.jetbrains.label": "JetBrains IDE plugin (IDEA / PyCharm)",
+  "lib.tools.jetbrains.description": "Account switching for the CodeBuddy plugin inside IntelliJ IDEA and PyCharm",
+} as const;
