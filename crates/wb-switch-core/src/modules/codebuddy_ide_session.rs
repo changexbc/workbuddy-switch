@@ -23,6 +23,7 @@ use crate::modules::codebuddy_ide_session_sync;
 use crate::modules::config::{backup_dir, utc_iso};
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::vscode_session::{self, CopyItem, CODEBUDDY_IDE_STORE, IDE_COPY};
+use crate::modules::i18n;
 
 /// 会话复制 / 同步的 IDE 档位。
 ///
@@ -162,11 +163,11 @@ fn empty_session_list(uid: Option<&str>, data_root: Option<&std::path::Path>) ->
 /// 两个都会在关闭 IDE **之前**校验，避免「注定失败却已关掉用户的 IDE」。
 pub(crate) fn copy_source(flavor: IdeFlavor) -> Result<(PathBuf, String), String> {
     let root = ide_data_root().ok_or_else(|| {
-        "未找到 CodeBuddy IDE 数据目录，无法复制会话。请先打开 CodeBuddy IDE 并登录一次。"
+        i18n::tr("CodeBuddy IDE data directory not found, so sessions cannot be copied. Open CodeBuddy IDE and sign in once first.", "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 복사할 수 없습니다. CodeBuddy IDE를 열고 한 번 로그인해 주세요.")
             .to_string()
     })?;
     let uid = flavor.active_uid().ok_or_else(|| {
-        "未检测到 CodeBuddy IDE 当前登录账号，无法定位源会话。请先在 CodeBuddy IDE 中登录后重试。"
+        i18n::tr("No signed-in account detected in CodeBuddy IDE, so the source sessions cannot be located. Sign in to CodeBuddy IDE and try again.", "CodeBuddy IDE에 로그인된 계정을 찾지 못해 원본 세션을 확인할 수 없습니다. CodeBuddy IDE에 로그인한 뒤 다시 시도해 주세요.")
             .to_string()
     })?;
     Ok((root, uid))
@@ -251,9 +252,9 @@ fn switch_ide_with_copy(
         return flavor.switch_account(account_id, restart);
     }
     let acc =
-        account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
+        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
     let target_uid = get_str(&acc, "uid")
-        .ok_or_else(|| "账号缺少 uid，无法定位 CodeBuddy IDE 会话目录".to_string())?;
+        .ok_or_else(|| i18n::tr("The account has no uid, so the CodeBuddy IDE session directory cannot be located", "계정에 uid가 없어 CodeBuddy IDE 세션 디렉터리를 찾을 수 없습니다").to_string())?;
 
     // 与对应档位的 `switch_account` 同序：先把「注定失败」的目标挡在关闭之前。
     let (_, data_dir) = flavor.validate_switch_target(account_id)?;
@@ -268,7 +269,7 @@ fn switch_ide_with_copy(
     let ide_running = flavor.is_running();
     if !restart && ide_running {
         return Err(
-            "检测到 CodeBuddy IDE 正在运行，请先完全退出后再操作，否则写入会被 IDE 覆盖。"
+            i18n::tr("CodeBuddy IDE is running. Quit it completely before continuing, otherwise the IDE will overwrite the written data.", "CodeBuddy IDE가 실행 중입니다. 완전히 종료한 뒤 작업해 주세요. 그렇지 않으면 기록한 내용을 IDE가 덮어씁니다.")
                 .to_string(),
         );
     }
@@ -278,17 +279,17 @@ fn switch_ide_with_copy(
     if !items.is_empty() {
         if ide_data_root().is_none() {
             return Err(
-                "未找到 CodeBuddy IDE 数据目录，无法复制会话。请先打开 CodeBuddy IDE 并登录一次。"
+                i18n::tr("CodeBuddy IDE data directory not found, so sessions cannot be copied. Open CodeBuddy IDE and sign in once first.", "CodeBuddy IDE 데이터 디렉터리를 찾지 못해 세션을 복사할 수 없습니다. CodeBuddy IDE를 열고 한 번 로그인해 주세요.")
                     .to_string(),
             );
         }
         match flavor.active_uid() {
             Some(uid) if uid == target_uid => {
-                return Err("源账号与目标账号相同，无需复制会话".to_string());
+                return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
             }
             None if !ide_running => {
                 return Err(
-                    "未检测到 CodeBuddy IDE 当前登录账号，无法定位源会话。请先在 CodeBuddy IDE 中登录后重试。"
+                    i18n::tr("No signed-in account detected in CodeBuddy IDE, so the source sessions cannot be located. Sign in to CodeBuddy IDE and try again.", "CodeBuddy IDE에 로그인된 계정을 찾지 못해 원본 세션을 확인할 수 없습니다. CodeBuddy IDE에 로그인한 뒤 다시 시도해 주세요.")
                         .to_string(),
                 );
             }
@@ -316,7 +317,7 @@ fn switch_ide_with_copy(
         };
         if source_uid == target_uid {
             relaunch_if_closed(flavor, closed);
-            return Err("源账号与目标账号相同，无需复制会话".to_string());
+            return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
         }
         match copy_codebuddy_ide_sessions(&root, &source_uid, &target_uid, items) {
             Ok(mut report) => {
@@ -377,18 +378,19 @@ fn switch_ide_with_copy(
         Err(error) => {
             let mut done: Vec<String> = Vec::new();
             if copied > 0 {
-                done.push(format!("已成功复制 {copied} 个会话到目标账号"));
+                done.push(i18n::pick(format!("Copied {copied} sessions to the target account"), format!("세션 {copied}개를 대상 계정으로 복사했습니다")));
             }
             if synced > 0 {
-                done.push(format!("已成功同步 {synced} 个会话"));
+                done.push(i18n::pick(format!("Synced {synced} sessions"), format!("세션 {synced}개를 동기화했습니다")));
             }
             let error = if done.is_empty() {
                 error
             } else {
-                format!(
-                    "{error}（注意：{}，但账号切换未完成，请重试切换）",
-                    done.join("、")
-                )
+                i18n::pick(format!("{error} (note: {}; the account switch did not complete, please retry the switch)",
+                    done.join(i18n::tr(", ", "、"))
+                ), format!("{error}(참고: {}. 계정 전환이 완료되지 않았습니다. 전환을 다시 시도해 주세요)",
+                    done.join(i18n::tr(", ", "、"))
+                ))
             };
             // 注入失败且 IDE 是本次我们关闭的：best-effort 开回来再报错，别让用户两头落空。
             if closed {

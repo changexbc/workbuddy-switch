@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { getLocale, setLocalePreference, subscribeLocale, type Locale } from "./locale";
+import { syncHostLocale } from "./host";
 import type { MessageKey } from "./messages";
 import { setActiveLocale, translateWith, type Translate, type TranslateVars } from "./translate";
 
@@ -28,6 +29,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setActiveLocale(locale);
     document.documentElement.lang = locale;
+    syncHostLocale(locale);
   }, [locale]);
 
   useEffect(() => subscribeLocale(() => setLocaleState(getLocale())), []);

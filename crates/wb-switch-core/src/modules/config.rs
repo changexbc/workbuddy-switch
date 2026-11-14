@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::modules::i18n;
 use crate::modules::variant::WbVariant;
 
 // ---------------------------------------------------------------------------
@@ -1009,12 +1010,22 @@ pub async fn http_request_with_proxy(
         Some(proxy) => match http_client_builder()
             .proxy(match reqwest::Proxy::all(proxy) {
                 Ok(proxy) => proxy,
-                Err(e) => return json!({"code": -1, "message": format!("代理地址无效: {e}")}),
+                Err(e) => {
+                    return json!({"code": -1, "message": i18n::pick(
+                        format!("Invalid proxy address: {e}"),
+                        format!("프록시 주소가 올바르지 않습니다: {e}"),
+                    )})
+                }
             })
             .build()
         {
             Ok(client) => client,
-            Err(e) => return json!({"code": -1, "message": format!("代理客户端创建失败: {e}")}),
+            Err(e) => {
+                return json!({"code": -1, "message": i18n::pick(
+                    format!("Could not create the proxy client: {e}"),
+                    format!("프록시 클라이언트를 만들지 못했습니다: {e}"),
+                )})
+            }
         },
         None => http_client().clone(),
     };
@@ -1058,9 +1069,16 @@ fn normalize_error_body(text: &str) -> String {
             .map(|(title, _)| title.trim())
             .unwrap_or_default();
         return if title.is_empty() {
-            "服务端返回 HTML 错误页（无标题）".to_string()
+            i18n::tr(
+                "The server returned an HTML error page (no title)",
+                "서버가 HTML 오류 페이지를 반환했습니다(제목 없음)",
+            )
+            .to_string()
         } else {
-            format!("服务端返回 HTML 错误页：{title}")
+            i18n::pick(
+                format!("The server returned an HTML error page: {title}"),
+                format!("서버가 HTML 오류 페이지를 반환했습니다: {title}"),
+            )
         };
     }
     text.chars().take(500).collect::<String>()
@@ -1084,14 +1102,32 @@ pub async fn http_request_raw(
         Some(proxy) => {
             let mut builder = http_client_builder().proxy(match reqwest::Proxy::all(proxy) {
                 Ok(proxy) => proxy,
-                Err(e) => return (0, HashMap::new(), format!("代理地址无效: {e}")),
+                Err(e) => {
+                    return (
+                        0,
+                        HashMap::new(),
+                        i18n::pick(
+                            format!("Invalid proxy address: {e}"),
+                            format!("프록시 주소가 올바르지 않습니다: {e}"),
+                        ),
+                    )
+                }
             });
             if !follow_redirects {
                 builder = builder.redirect(reqwest::redirect::Policy::none());
             }
             match builder.build() {
                 Ok(client) => client,
-                Err(e) => return (0, HashMap::new(), format!("代理客户端创建失败: {e}")),
+                Err(e) => {
+                    return (
+                        0,
+                        HashMap::new(),
+                        i18n::pick(
+                            format!("Could not create the proxy client: {e}"),
+                            format!("프록시 클라이언트를 만들지 못했습니다: {e}"),
+                        ),
+                    )
+                }
             }
         }
         None => {
@@ -1103,7 +1139,16 @@ pub async fn http_request_raw(
                     .build()
                 {
                     Ok(client) => client,
-                    Err(e) => return (0, HashMap::new(), format!("客户端创建失败: {e}")),
+                    Err(e) => {
+                        return (
+                            0,
+                            HashMap::new(),
+                            i18n::pick(
+                                format!("Could not create the client: {e}"),
+                                format!("클라이언트를 만들지 못했습니다: {e}"),
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -1147,12 +1192,12 @@ mod tests {
                     <hr><center>openresty</center>\n</body>\n</html>\n";
         assert_eq!(
             normalize_error_body(html),
-            "服务端返回 HTML 错误页：401 Authorization Required"
+            "The server returned an HTML error page: 401 Authorization Required"
         );
 
         assert_eq!(
             normalize_error_body("<!DOCTYPE html><html><body>boom</body></html>"),
-            "服务端返回 HTML 错误页（无标题）"
+            "The server returned an HTML error page (no title)"
         );
 
         // 非 HTML 错误体保持原有截断行为。

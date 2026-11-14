@@ -13,6 +13,8 @@
  * a real project or the visitor's storage.
  */
 
+import { translate } from "@/lib/i18n/translate";
+
 export const COMPANION_DEMO_CHANNEL = "agent-companion-demo";
 
 type CompanionDemoStatus = "running" | "wait" | "done" | "error";
@@ -89,7 +91,9 @@ const COMPANION_DEMO_CAST = [
     source: "codex",
     sessionId: "demo-rail-story",
     cwd: "/Users/demo/workspace/agent-companion",
-    title: "生成发布说明",
+    get title() {
+      return translate("lib.companionDemo.session.releaseNotes");
+    },
     project: "agent-companion",
     tokens: 48210,
   },
@@ -98,7 +102,9 @@ const COMPANION_DEMO_CAST = [
     source: "workbuddy",
     sessionId: "demo-release-notes",
     cwd: "/Users/demo/workspace/2026-09-25-10-12-04",
-    title: "汇总本周的发布说明",
+    get title() {
+      return translate("lib.companionDemo.session.weeklyNotes");
+    },
     project: "2026-09-25-10-12-04",
     tokens: 15230,
   },
@@ -107,27 +113,37 @@ const COMPANION_DEMO_CAST = [
 /** The session that asks for confirmation and later finishes. */
 const COMPANION_DEMO_STORY_ID = COMPANION_DEMO_CAST[0].id;
 
-const COMPANION_DEMO_STEPS: CompanionDemoStep[] = [
-  { id: "demo-step-read", ts: 0, label: "读取悬浮栏的会话模型" },
-  { id: "demo-step-write", ts: 0, label: "更新演示场景的数据" },
-];
+function demoSteps(): CompanionDemoStep[] {
+  return [
+    { id: "demo-step-read", ts: 0, label: translate("lib.companionDemo.step.readModel") },
+    { id: "demo-step-write", ts: 0, label: translate("lib.companionDemo.step.updateData") },
+  ];
+}
 
-const COMPANION_DEMO_REQUEST: CompanionDemoRequest = {
-  id: "demo-question-1",
-  tool: "codex",
-  text: "是否现在发布 0.2.0？",
-  questions: [
-    {
-      text: "是否现在发布 0.2.0？",
-      header: "发布确认",
-      options: [
-        { label: "现在发布", description: "生成安装包并发布" },
-        { label: "稍后发布", description: "先补充演示截图" },
-      ],
-    },
-  ],
-  ts: 0,
-};
+function demoRequest(): CompanionDemoRequest {
+  return {
+    id: "demo-question-1",
+    tool: "codex",
+    text: translate("lib.companionDemo.request.text"),
+    questions: [
+      {
+        text: translate("lib.companionDemo.request.text"),
+        header: translate("lib.companionDemo.request.header"),
+        options: [
+          {
+            label: translate("lib.companionDemo.request.publishNow"),
+            description: translate("lib.companionDemo.request.publishNowDescription"),
+          },
+          {
+            label: translate("lib.companionDemo.request.publishLater"),
+            description: translate("lib.companionDemo.request.publishLaterDescription"),
+          },
+        ],
+      },
+    ],
+    ts: 0,
+  };
+}
 
 interface CompanionDemoFrame {
   status: CompanionDemoStatus;
@@ -170,7 +186,7 @@ function framesForPhase(phase: CompanionDemoStatus, now: number): Record<string,
   if (phase === "running") return frames;
   const secondId = COMPANION_DEMO_CAST[1].id;
   if (phase === "wait") {
-    frames[COMPANION_DEMO_STORY_ID] = { status: "wait", pending: [{ ...COMPANION_DEMO_REQUEST, ts: now }] };
+    frames[COMPANION_DEMO_STORY_ID] = { status: "wait", pending: [{ ...demoRequest(), ts: now }] };
     return frames;
   }
   // `done` finishes the story session; `error` keeps it finished and fails the
@@ -198,7 +214,7 @@ function demoSession(
     startedAt,
     updatedAt: now,
     status: frame.status,
-    steps: COMPANION_DEMO_STEPS.map((step) => ({ ...step, ts: startedAt + 60_000 })),
+    steps: demoSteps().map((step) => ({ ...step, ts: startedAt + 60_000 })),
     pending: frame.pending ?? [],
     tokens: member.tokens,
     endedAt,
@@ -238,7 +254,7 @@ function demoEvents(roundId: string, now: number, frames: Record<string, Compani
 export function buildCompanionDemoSnapshot(phase: CompanionDemoStatus, roundId: string, now = Date.now()): CompanionDemoSnapshot {
   const frames = framesForPhase(phase, now);
   const sources: CompanionDemoSnapshot["sources"] = {};
-  for (const member of COMPANION_DEMO_CAST) sources[member.source] = { state: "ok", detail: "演示数据", checkedAt: now };
+  for (const member of COMPANION_DEMO_CAST) sources[member.source] = { state: "ok", detail: translate("lib.companionDemo.sourceDetail"), checkedAt: now };
   return {
     version: 1,
     ready: true,

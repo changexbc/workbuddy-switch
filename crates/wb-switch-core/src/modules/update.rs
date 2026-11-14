@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use crate::modules::config::{
     atomic_write, http_request_raw, http_request_with_proxy, now_secs, store_dir,
 };
+use crate::modules::i18n;
 
 /// 应用当前版本（来自 Cargo.toml package.version）。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -161,7 +162,11 @@ async fn fetch_manifest_version(
     let mut headers = HashMap::new();
     headers.insert("Accept".to_string(), "application/json".to_string());
     headers.insert("User-Agent".to_string(), "wb-switch".to_string());
-    let mut last_err = "更新清单解析失败".to_string();
+    let mut last_err = i18n::tr(
+        "Could not parse the update manifest",
+        "업데이트 목록을 해석하지 못했습니다",
+    )
+    .to_string();
     for url in updater_manifest_urls(owner, repo, std::env::consts::OS, std::env::consts::ARCH) {
         let resp = http_request_with_proxy(&url, "GET", None, Some(&headers), proxy).await;
         let version = resp.get("version").and_then(|v| v.as_str()).unwrap_or("");
@@ -171,7 +176,10 @@ async fn fetch_manifest_version(
         last_err = resp
             .get("message")
             .and_then(|v| v.as_str())
-            .unwrap_or("更新清单解析失败")
+            .unwrap_or(i18n::tr(
+                "Could not parse the update manifest",
+                "업데이트 목록을 해석하지 못했습니다",
+            ))
             .to_string();
     }
     Err(last_err)
@@ -194,7 +202,7 @@ async fn fetch_latest_tag(
 
     if status == 0 {
         let msg = if body.trim().is_empty() {
-            "网络请求失败".to_string()
+            i18n::tr("Network request failed", "네트워크 요청에 실패했습니다").to_string()
         } else {
             body
         };
@@ -202,7 +210,10 @@ async fn fetch_latest_tag(
     }
     if status == 404 {
         // 无正式 release 或仓库不存在。
-        return Err(("未找到可用的发布版本".to_string(), 404));
+        return Err((
+            i18n::tr("No available release found", "사용 가능한 릴리스가 없습니다").to_string(),
+            404,
+        ));
     }
     let location = resp_headers
         .iter()
@@ -212,14 +223,24 @@ async fn fetch_latest_tag(
         Some(location) => location,
         None => {
             return Err((
-                format!("无法获取发布页跳转地址（HTTP {status}）"),
+                i18n::pick(
+                    format!("Could not get the release page redirect address (HTTP {status})"),
+                    format!("릴리스 페이지 리디렉션 주소를 가져오지 못했습니다(HTTP {status})"),
+                ),
                 status as i64,
             ))
         }
     };
     let tag = location.rsplit('/').next().unwrap_or("").trim().to_string();
     if tag.is_empty() || !location.contains("/releases/tag/") {
-        return Err(("无法解析发布版本标签".to_string(), -1));
+        return Err((
+            i18n::tr(
+                "Could not parse the release version tag",
+                "릴리스 버전 태그를 해석하지 못했습니다",
+            )
+            .to_string(),
+            -1,
+        ));
     }
     Ok(tag)
 }
@@ -316,7 +337,7 @@ pub async fn update_check(proxy: Option<&str>, force: bool) -> Value {
         Err((msg, code)) => json!({
             "ok": false,
             "error": msg,
-            "message": format!("{msg}（code={code}）"),
+            "message": i18n::pick(format!("{msg} (code={code})"), format!("{msg}(code={code})")),
             "releaseUrl": release_url,
         }),
     }

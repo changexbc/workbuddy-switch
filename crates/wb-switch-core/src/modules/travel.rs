@@ -18,6 +18,7 @@ use crate::modules::config::{
     save_travel_cache, with_travel_cache_lock, RunFlagGuard, TRAVEL_API_PREFIX,
     WORKBUDDY_API_ENDPOINT,
 };
+use crate::modules::i18n;
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 
 static TRAVEL_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -403,7 +404,7 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
             config
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("读取旅行配置失败"),
+                .unwrap_or(i18n::tr("Could not read the travel configuration", "여행 설정을 읽지 못했습니다")),
         );
     }
     let locations = config
@@ -419,7 +420,7 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
             false,
             Some("no-location"),
             None,
-            "无旅行地点",
+            i18n::tr("No travel locations", "여행 장소가 없습니다"),
         );
     }
 
@@ -462,7 +463,7 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
                     true,
                     None,
                     Some("traveling"),
-                    "已在旅行中",
+                    i18n::tr("Already traveling", "이미 여행 중입니다"),
                 );
             }
             DepartClass::DailyLimit => {
@@ -473,7 +474,7 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
                     true,
                     Some("daily-limit"),
                     Some("idle"),
-                    "今日已派",
+                    i18n::tr("Already dispatched today", "오늘은 이미 파견했습니다"),
                 );
                 result["claimed"] = json!(true);
                 result["claimedAt"] = json!(now_ms());
@@ -487,7 +488,7 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
                     false,
                     Some("no-buddy"),
                     None,
-                    "无 Buddy",
+                    i18n::tr("No Buddy", "버디 없음"),
                 );
             }
             DepartClass::LocationUnavailable => {
@@ -515,10 +516,10 @@ pub async fn depart_travel_for_account(account: &Value) -> Value {
             false,
             Some("location-unavailable"),
             None,
-            "地点不可用",
+            i18n::tr("Location unavailable", "장소를 사용할 수 없습니다"),
         )
     } else {
-        depart_result(&acc, uid_ref, false, false, Some("error"), None, "派发失败")
+        depart_result(&acc, uid_ref, false, false, Some("error"), None, i18n::tr("Dispatch failed", "파견에 실패했습니다"))
     }
 }
 
@@ -577,7 +578,7 @@ fn apply_daily_limit_reached(result: &mut Value, status: &Value) {
     result["skip"] = json!("daily-limit");
     result["claimed"] = json!(true);
     result["state"] = json!("idle");
-    result["message"] = json!("今日已派");
+    result["message"] = json!(i18n::tr("Already dispatched today", "오늘은 이미 파견했습니다"));
     if result.get("claimedAt").and_then(Value::as_i64).unwrap_or(0) == 0 {
         result["claimedAt"] = json!(now_ms());
     }
@@ -697,7 +698,7 @@ async fn claim_travel_for_account(account: &Value, prior: &Value) -> Value {
         result["message"] = json!(status
             .get("error")
             .and_then(Value::as_str)
-            .unwrap_or("查询旅行状态失败"));
+            .unwrap_or(i18n::tr("Could not query the travel status", "여행 상태를 조회하지 못했습니다")));
         return result;
     }
 
@@ -755,7 +756,7 @@ async fn apply_claim_response(account: &Value, result: &mut Value, record_id: i6
         .unwrap_or("")
         .to_lowercase();
     if raw.contains("no unclaimed travel") || raw.contains("daily_limit") {
-        mark_claimed(result, None, Some("已领取（网页端）"));
+        mark_claimed(result, None, Some(i18n::tr("Claimed (web)", "수령 완료(웹)")));
     } else if raw.contains("not arrived yet") {
         result["claimed"] = json!(false);
         result["ok"] = json!(true);
@@ -784,7 +785,7 @@ async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Va
             status
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("查询旅行状态失败"),
+                .unwrap_or(i18n::tr("Could not query the travel status", "여행 상태를 조회하지 못했습니다")),
         );
     }
 
@@ -802,14 +803,14 @@ async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Va
                 true,
                 None,
                 Some("traveling"),
-                "已在旅行中",
+                i18n::tr("Already traveling", "이미 여행 중입니다"),
             );
             apply_status_record(&mut result, &status);
             result
         }
         TravelAction::Claim => {
             let stub = prior.cloned().unwrap_or_else(|| {
-                depart_result(&acc, uid_ref, true, true, None, Some("arrived"), "已到达")
+                depart_result(&acc, uid_ref, true, true, None, Some("arrived"), i18n::tr("Arrived", "도착했습니다"))
             });
             claim_travel_for_account(account, &stub).await
         }
@@ -822,7 +823,7 @@ async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Va
                     true,
                     Some("daily-limit"),
                     Some("idle"),
-                    "今日已派",
+                    i18n::tr("Already dispatched today", "오늘은 이미 파견했습니다"),
                 )
             });
             apply_daily_limit_reached(&mut result, &status);

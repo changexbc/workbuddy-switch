@@ -1,3 +1,4 @@
+import { translate } from "@/lib/i18n/translate";
 import type { DisplayField } from "@/lib/types";
 
 /**
@@ -30,7 +31,7 @@ export function displayName(account: DisplayableAccount): string {
       : account.displayField === "note"
         ? account.note
         : account.nickname;
-  return byField || account.nickname || account.uid || account.id || "未命名账号";
+  return byField || account.nickname || account.uid || account.id || translate("lib.account.unnamed");
 }
 
 /** 账号身份行：邮箱脱敏展示（本地段只留首字符），无邮箱时回退 UID / ID。 */

@@ -19,11 +19,12 @@ use std::collections::BTreeSet;
 use serde_json::{json, Value};
 
 use crate::modules::account;
+use crate::modules::i18n;
 use crate::modules::auth_file;
 use crate::modules::process::{close_workbuddy, launch_workbuddy};
 use crate::modules::session::{self, SessionPaths, SyncSelection};
 use crate::modules::session_link::{
-    self, Operation, RecoveryReport, LOCK_BUSY_MESSAGE_PREFIX, LOCK_UNAVAILABLE_MESSAGE_PREFIX,
+    self, lock_busy_message_prefix, lock_unavailable_message_prefix, Operation, RecoveryReport,
 };
 use crate::modules::variant::WbVariant;
 
@@ -31,10 +32,18 @@ use crate::modules::variant::WbVariant;
 pub type ProgressFn = Box<dyn Fn(&str) + Send + Sync>;
 
 /// `restart=false` 携带会话写入意图时的拒绝文案（复制/同步各自一条）。
-pub const COPY_WITHOUT_RESTART_MESSAGE: &str =
-    "本次切换未重启 WorkBuddy（restart=false），已拒绝会话复制请求；如需复制请勾选重启切换";
-pub const SYNC_WITHOUT_RESTART_MESSAGE: &str =
-    "本次切换未重启 WorkBuddy（restart=false），已拒绝会话同步请求；如需同步请勾选重启切换";
+pub fn copy_without_restart_message() -> &'static str {
+    i18n::tr(
+        "This switch did not restart WorkBuddy (restart=false), so the session copy request was rejected; to copy sessions, enable restart when switching",
+        "이번 전환은 WorkBuddy를 다시 시작하지 않아(restart=false) 세션 복사 요청을 거부했습니다. 세션을 복사하려면 다시 시작 옵션을 켜고 전환해 주세요",
+    )
+}
+pub fn sync_without_restart_message() -> &'static str {
+    i18n::tr(
+        "This switch did not restart WorkBuddy (restart=false), so the session sync request was rejected; to sync sessions, enable restart when switching",
+        "이번 전환은 WorkBuddy를 다시 시작하지 않아(restart=false) 세션 동기화 요청을 거부했습니다. 세션을 동기화하려면 다시 시작 옵션을 켜고 전환해 주세요",
+    )
+}
 
 /// 恢复报告里是否存在阻碍启动的问题：未恢复一致的中间产物必须先处理。
 ///
@@ -54,9 +63,16 @@ pub fn recovery_blocking_detail(report: &RecoveryReport) -> String {
         .needs_recovery
         .iter()
         .filter(|issue| !issue.retryable)
-        .map(|issue| format!("{}：{}", issue.operation_id, issue.reason))
+        .map(|issue| {
+            format!(
+                "{}{}{}",
+                issue.operation_id,
+                i18n::tr(": ", "："),
+                issue.reason
+            )
+        })
         .collect::<Vec<String>>()
-        .join("；")
+        .join(i18n::tr("; ", "；"))
 }
 
 /// 恢复报告的前端投影（与复制/同步报告同形，便于展示恢复信息）。
@@ -107,14 +123,20 @@ fn unfinished_writes_detail(writes: &[Operation]) -> String {
             let reason = operation
                 .last_error
                 .clone()
-                .unwrap_or_else(|| "尚未完成".to_string());
-            format!(
-                "{}（操作 {}）：{reason}",
-                operation.target.session_id, operation.operation_id
+                .unwrap_or_else(|| i18n::tr("Not finished yet", "아직 완료되지 않았습니다").to_string());
+            i18n::pick(
+                format!(
+                    "{} (operation {}): {reason}",
+                    operation.target.session_id, operation.operation_id
+                ),
+                format!(
+                    "{}(작업 {}): {reason}",
+                    operation.target.session_id, operation.operation_id
+                ),
             )
         })
         .collect::<Vec<String>>()
-        .join("；")
+        .join(i18n::tr("; ", "；"))
 }
 
 /// restart=false 时携带写入意图：显式拒绝对应的会话操作（不静默丢弃，design §4.1）。
@@ -122,12 +144,12 @@ fn reject_session_writes_without_restart(
     has_copy: bool,
     has_sync: bool,
 ) -> (Option<Value>, Option<Value>) {
-    let copy = has_copy.then(|| json!({ "error": COPY_WITHOUT_RESTART_MESSAGE }));
+    let copy = has_copy.then(|| json!({ "error": copy_without_restart_message() }));
     let sync = has_sync.then(|| {
         json!({
             "synced": [],
             "skipped": [],
-            "errors": [{ "error": SYNC_WITHOUT_RESTART_MESSAGE }],
+            "errors": [{ "error": sync_without_restart_message() }],
         })
     });
     (copy, sync)
@@ -153,9 +175,14 @@ pub fn switch_account(
         }
     };
 
-    progress("开始切换账号…");
+    progress(i18n::tr("Starting account switch…", "계정 전환을 시작합니다…"));
     let acc =
-        account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
+        account::find_account(account_id).ok_or_else(|| {
+            i18n::pick(
+                format!("Account not found: {account_id}"),
+                format!("계정을 찾을 수 없습니다: {account_id}"),
+            )
+        })?;
     // 档位以账号自身为准：签名里的参数无法表达「用 A 档位操作 B 档位账号」。
     let variant = account::variant_of(&acc);
     let backup = auth_file::backup_auth_file(variant);
@@ -165,15 +192,20 @@ pub fn switch_account(
     let mut sync_report: Option<Value> = None;
     let mut recovery_report: Option<Value> = None;
     if restart {
-        progress("正在关闭 WorkBuddy…");
+        progress(i18n::tr("Closing WorkBuddy…", "WorkBuddy를 종료하는 중…"));
         close_workbuddy(variant, 20)?;
         // 关进程后先恢复未完成的会话写入：恢复成功或复制侧可安全延后重试的失败
         // 不阻断切换；同步仍未完成、拿不到锁或中间产物异常则暂停启动（design §4 / §5）。
         let recovery = match session::recover_pending_session_operations(variant) {
             Ok(report) => report,
             Err(error) => {
-                return Err(format!(
-                    "无法恢复未完成的会话写入（{error}），已暂停切换与启动 WorkBuddy；请稍后重试"
+                return Err(i18n::pick(
+                    format!(
+                        "Could not recover an unfinished session write ({error}); switching and starting WorkBuddy are paused, please try again later"
+                    ),
+                    format!(
+                        "완료되지 않은 세션 쓰기를 복구하지 못했습니다({error}). 전환과 WorkBuddy 시작을 중지했습니다. 잠시 후 다시 시도해 주세요"
+                    ),
                 ));
             }
         };
@@ -183,8 +215,13 @@ pub fn switch_account(
         }
         if blocking {
             let detail = recovery_blocking_detail(&recovery);
-            return Err(format!(
-                "检测到无法安全恢复的会话写入（{detail}），已暂停切换与启动 WorkBuddy；请先处理该会话后再试"
+            return Err(i18n::pick(
+                format!(
+                    "Detected a session write that cannot be recovered safely ({detail}); switching and starting WorkBuddy are paused, please handle that session and try again"
+                ),
+                format!(
+                    "안전하게 복구할 수 없는 세션 쓰기를 발견했습니다({detail}). 전환과 WorkBuddy 시작을 중지했습니다. 해당 세션을 먼저 처리한 뒤 다시 시도해 주세요"
+                ),
             ));
         }
         // 本次是否请求了会话写入；同时记下写入前已存在的未完成记录，供写入后比对。
@@ -196,7 +233,10 @@ pub fn switch_account(
             BTreeSet::new()
         };
         if !copy_session_ids.is_empty() {
-            progress("正在复制会话到目标账号…");
+            progress(i18n::tr(
+                "Copying sessions to the target account…",
+                "대상 계정으로 세션을 복사하는 중…",
+            ));
             // 复制失败本身只记进报告、不阻断切换；但若本次留下了未完成的写入，
             // 会在复制与同步都跑完后统一暂停切换与启动（见下方 pending 差集检查）。
             copy_report = Some(
@@ -206,11 +246,16 @@ pub fn switch_account(
                     // 不能当成普通复制失败后继续写认证并启动 App。锁失败文案前缀
                     // 由 session_link 提供，不在这里嗅探整句错误文案。
                     Err(error)
-                        if error.starts_with(LOCK_BUSY_MESSAGE_PREFIX)
-                            || error.starts_with(LOCK_UNAVAILABLE_MESSAGE_PREFIX) =>
+                        if error.starts_with(lock_busy_message_prefix())
+                            || error.starts_with(lock_unavailable_message_prefix()) =>
                     {
-                        return Err(format!(
-                            "无法独占会话操作（{error}），已暂停切换与启动 WorkBuddy；请稍后重试"
+                        return Err(i18n::pick(
+                            format!(
+                                "Could not get exclusive access to session operations ({error}); switching and starting WorkBuddy are paused, please try again later"
+                            ),
+                            format!(
+                                "세션 작업을 단독으로 점유하지 못했습니다({error}). 전환과 WorkBuddy 시작을 중지했습니다. 잠시 후 다시 시도해 주세요"
+                            ),
                         ));
                     }
                     Err(error) => json!({"error": error}),
@@ -219,16 +264,24 @@ pub fn switch_account(
         }
         if !sync_selections.is_empty() {
             // 同步与复制顺序执行（同一把档位锁），不重复写入。
-            progress("正在同步会话到目标账号…");
+            progress(i18n::tr(
+                "Syncing sessions to the target account…",
+                "대상 계정으로 세션을 동기화하는 중…",
+            ));
             sync_report = Some(
                 match session::sync_sessions_for_switch(&acc, sync_selections) {
                     Ok(report) => report,
                     Err(error)
-                        if error.starts_with(LOCK_BUSY_MESSAGE_PREFIX)
-                            || error.starts_with(LOCK_UNAVAILABLE_MESSAGE_PREFIX) =>
+                        if error.starts_with(lock_busy_message_prefix())
+                            || error.starts_with(lock_unavailable_message_prefix()) =>
                     {
-                        return Err(format!(
-                            "无法独占会话操作（{error}），已暂停切换与启动 WorkBuddy；请稍后重试"
+                        return Err(i18n::pick(
+                            format!(
+                                "Could not get exclusive access to session operations ({error}); switching and starting WorkBuddy are paused, please try again later"
+                            ),
+                            format!(
+                                "세션 작업을 단독으로 점유하지 못했습니다({error}). 전환과 WorkBuddy 시작을 중지했습니다. 잠시 후 다시 시도해 주세요"
+                            ),
                         ));
                     }
                     // 同步失败不阻断切换：契约与成功路径同形，错误挂在 errors 里。
@@ -242,7 +295,10 @@ pub fn switch_account(
         }
         if share_sessions {
             // 旧的「全体转移」兼容路径（默认关闭），Rust 版暂未实现
-            session_report = Some(json!({"error": "share_sessions 兼容路径暂未在 Rust 版实现"}));
+            session_report = Some(json!({"error": i18n::tr(
+                "The share_sessions compatibility path is not implemented in the Rust build yet",
+                "share_sessions 호환 경로는 아직 Rust 버전에서 구현되지 않았습니다",
+            )}));
         }
         // 本次复制/同步新留下的未完成操作：不带着不一致的会话内容写认证并启动 App
         // （design §5 / R5）。未完成写入也不在这里被报告成成功——错误已在各自报告里，
@@ -254,9 +310,15 @@ pub fn switch_account(
                 session_link::pending_operations(&ops_paths, variant),
             );
             if !created.is_empty() {
-                return Err(format!(
-                    "本次会话写入未完成（{}），已暂停切换与启动 WorkBuddy；请重试，下次切号会先完成恢复",
-                    unfinished_writes_detail(&created)
+                return Err(i18n::pick(
+                    format!(
+                        "This session write did not complete ({}); switching and starting WorkBuddy are paused, please retry — the next switch will finish the recovery first",
+                        unfinished_writes_detail(&created)
+                    ),
+                    format!(
+                        "이번 세션 쓰기가 완료되지 않았습니다({}). 전환과 WorkBuddy 시작을 중지했습니다. 다시 시도해 주세요. 다음 전환 시 복구가 먼저 완료됩니다",
+                        unfinished_writes_detail(&created)
+                    ),
                 ));
             }
         }
@@ -270,13 +332,13 @@ pub fn switch_account(
         copy_report = copy;
         sync_report = sync;
     }
-    progress("正在写入认证文件…");
+    progress(i18n::tr("Writing the authentication file…", "인증 파일을 쓰는 중…"));
     auth_file::write_account_to_auth_file(&acc, variant)?;
     if restart {
-        progress("正在启动 WorkBuddy…");
+        progress(i18n::tr("Starting WorkBuddy…", "WorkBuddy를 시작하는 중…"));
         launch_workbuddy(variant, Some(&progress))?;
     }
-    progress("切换完成");
+    progress(i18n::tr("Switch complete", "전환이 완료되었습니다"));
 
     let mut result = json!({
         "ok": true,
@@ -496,7 +558,7 @@ mod tests {
         let (copy, sync) = reject_session_writes_without_restart(false, true);
         assert!(copy.is_none());
         let sync = sync.expect("携带同步意图必须给出拒绝报告");
-        assert_eq!(sync["errors"][0]["error"], SYNC_WITHOUT_RESTART_MESSAGE);
+        assert_eq!(sync["errors"][0]["error"], sync_without_restart_message());
         assert!(sync["errors"][0]["error"]
             .as_str()
             .unwrap()
@@ -506,10 +568,10 @@ mod tests {
 
         // 两种意图同时存在：各自拒绝，互不吞掉。
         let (copy, sync) = reject_session_writes_without_restart(true, true);
-        assert_eq!(copy.unwrap()["error"], COPY_WITHOUT_RESTART_MESSAGE);
+        assert_eq!(copy.unwrap()["error"], copy_without_restart_message());
         assert_eq!(
             sync.unwrap()["errors"][0]["error"],
-            SYNC_WITHOUT_RESTART_MESSAGE
+            sync_without_restart_message()
         );
 
         // 都没有写入意图：不产生任何报告（保持原有语义）。

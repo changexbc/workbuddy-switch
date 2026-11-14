@@ -52,7 +52,8 @@ import type {
   VscodeSessionRef,
   WbVariant,
 } from "./types";
-import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled } from "./demo-mode";
+import { demoModeEnabled, demoUnavailableMessage } from "./demo-mode";
+import { translate } from "./i18n/translate";
 import { screenshotDemoResponse } from "./screenshot-demo";
 
 /**
@@ -96,8 +97,8 @@ export function isDesktop(): boolean {
 
 /** Agent Companion 只由桌面宿主管理，不能经 WebUI 或演示模式访问。 */
 function requireCompanionDesktop(): void {
-  if (demoModeEnabled) throw new Error(DEMO_UNAVAILABLE_MESSAGE);
-  if (!isDesktop()) throw new Error("Agent Companion 仅在桌面版中可用");
+  if (demoModeEnabled) throw new Error(demoUnavailableMessage());
+  if (!isDesktop()) throw new Error(translate("lib.api.companionDesktopOnly"));
 }
 
 type Route = { method: "GET" | "POST"; path: string };
@@ -222,7 +223,7 @@ function currentOrigin(): string {
 
 async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const route = ROUTES[cmd];
-  if (!route) throw new Error(`webui 模式暂不支持该操作: ${cmd}`);
+  if (!route) throw new Error(translate("lib.api.unsupportedInWebui", { command: cmd }));
   let res: Response;
   try {
     // 相对路径以页面自身来源为基准（服务端口 / SSH 转发端口 / localhost 与
@@ -240,13 +241,13 @@ async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     const origin = currentOrigin();
     throw new Error(
       origin
-        ? `无法连接 workbuddy-switch 服务（${origin}），请先运行 \`workbuddy-switch\``
-        : `无法连接 workbuddy-switch 服务，请先运行 \`workbuddy-switch\``,
+        ? translate("lib.api.serviceUnreachableWithOrigin", { origin })
+        : translate("lib.api.serviceUnreachable"),
     );
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.message || data.error || `请求失败 (${res.status})`);
+    throw new Error(data.message || data.error || translate("lib.api.requestFailed", { status: res.status }));
   }
   return data as T;
 }
@@ -254,9 +255,9 @@ async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (demoModeEnabled) {
     if (cmd === "get_credit_statistics" && args?.refresh === true) {
-      throw new Error(DEMO_UNAVAILABLE_MESSAGE);
+      throw new Error(demoUnavailableMessage());
     }
-    if (!DEMO_READ_COMMANDS.has(cmd)) throw new Error(DEMO_UNAVAILABLE_MESSAGE);
+    if (!DEMO_READ_COMMANDS.has(cmd)) throw new Error(demoUnavailableMessage());
     return screenshotDemoResponse(cmd, args) as T;
   }
   if (!isWebui()) return invoke<T>(cmd, args);
@@ -669,7 +670,7 @@ export function syncSessionGroupPair(args: {
   /** 已获用户授权（确认框）时传 `true`：插件侧运行中允许关闭并重开 VS Code。 */
   restart?: boolean;
 }): Promise<SessionGroupActionReport> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   return call("sync_session_group_pair", args as unknown as Record<string, unknown>);
 }
 
@@ -681,12 +682,12 @@ export function syncSessionGroupUnify(args: {
   /** 已获用户授权（确认框）时传 `true`：插件侧运行中允许关闭并重开 VS Code。 */
   restart?: boolean;
 }): Promise<SessionGroupActionReport> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   return call("sync_session_group_unify", args as unknown as Record<string, unknown>);
 }
 
 export function syncSessionGroupSafeBatch(client: SessionGroupClient, groupId: string, variantScope?: WbVariant, restart?: boolean): Promise<SessionGroupActionReport> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   return call("sync_session_group_safe_batch", { client, groupId, ...(variantScope ? { variantScope } : {}), ...(restart ? { restart: true } : {}) });
 }
 
@@ -699,7 +700,7 @@ export function addSessionGroupMember(args: {
   /** 已获用户授权（确认框）时传 `true`：插件侧运行中允许关闭并重开 VS Code。 */
   restart?: boolean;
 }): Promise<{ status: "linked" | "alreadyLinked" | "copiedUnlinked" | "failed"; editorError?: string; restartedEditor?: boolean; /** 内容缺失 / 索引丢失而被跳过的会话。 */ skipped?: { id: string; error: string }[]; [key: string]: unknown }> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   return call("add_session_group_member", args as unknown as Record<string, unknown>);
 }
 
@@ -712,7 +713,7 @@ export function copyLinkedSessions(args: {
   /** 已获用户授权（确认框）时传 `true`：运行中允许关闭并重开 VS Code。 */
   restart?: boolean;
 }): Promise<{ status: "linked" | "alreadyLinked" | "copiedUnlinked" | "failed"; editorError?: string; restartedEditor?: boolean; [key: string]: unknown }> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   return call("copy_linked_sessions", args as unknown as Record<string, unknown>);
 }
 
@@ -732,7 +733,7 @@ export function unlinkSessionGroupMember(args: {
   memberId: string;
   variantScope?: WbVariant;
 }): Promise<{ status: "removed" | "groupRemoved"; client: SessionGroupClient; groupId: string; memberId: string; remaining: number }> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   return call("unlink_session_group_member", args as unknown as Record<string, unknown>);
 }
 
@@ -744,7 +745,7 @@ export function deleteSessionGroup(args: {
   groupId: string;
   variantScope?: WbVariant;
 }): Promise<{ status: "groupRemoved"; client: SessionGroupClient; groupId: string; removed: number }> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   return call("delete_session_group", args as unknown as Record<string, unknown>);
 }
 
@@ -752,7 +753,7 @@ export function deleteSessionGroup(args: {
 export function openPermissionSettings(
   target?: "app_management" | "all_files",
 ): Promise<void> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   if (isWebui()) return Promise.resolve();
   return call("open_permission_settings", { target: target ?? "app_management" });
 }
@@ -765,11 +766,11 @@ export function checkAuthPermission(variant?: WbVariant): Promise<{
   dir?: string;
   hint?: string;
 }> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   if (isWebui()) {
     return Promise.resolve({
       ok: true,
-      message: "webui 模式由服务进程（终端启动）的权限决定，无需额外授权",
+      message: translate("lib.api.webuiPermissionHint"),
       hint: "",
     });
   }
@@ -778,7 +779,7 @@ export function checkAuthPermission(variant?: WbVariant): Promise<{
 
 /** 在 Finder 中显示当前 App（桌面端专用；webui 无操作）。 */
 export function revealAppInFinder(): Promise<void> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   if (isWebui()) return Promise.resolve();
   return call("reveal_app_in_finder");
 }
@@ -1008,7 +1009,9 @@ export function relaunchApp(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** 浏览器 / 演示模式没有更新服务：与弹窗既有文案逐字一致。 */
-const UPDATE_UNSUPPORTED_MESSAGE = "浏览器 webui 模式不能直接安装桌面更新包";
+function updateUnsupportedMessage(): string {
+  return translate("lib.api.updateUnsupported");
+}
 
 /**
  * 更新状态快照（前端首屏初始化；之后由 `update-state` 事件推送）。
@@ -1042,15 +1045,15 @@ export function updateState(): Promise<UpdateSnapshot> {
 
 /** 启动更新包下载（异步，立即返回；进度走 `update-state` 事件与托盘）。 */
 export function updateDownload(): Promise<void> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
-  if (isWebui()) return Promise.reject(new Error(UPDATE_UNSUPPORTED_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
+  if (isWebui()) return Promise.reject(new Error(updateUnsupportedMessage()));
   return call<unknown>("update_download").then(() => undefined);
 }
 
 /** 安装已下载的更新包并重启（用户点「重启以完成升级」时调用）。 */
 export function updateRestart(): Promise<void> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
-  if (isWebui()) return Promise.reject(new Error(UPDATE_UNSUPPORTED_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
+  if (isWebui()) return Promise.reject(new Error(updateUnsupportedMessage()));
   return call<unknown>("update_restart").then(() => undefined);
 }
 
@@ -1067,7 +1070,7 @@ export function getLaunchAtLoginEnabled(): Promise<boolean> {
 
 /** 注册 / 移除系统开机自启，返回回读后的权威状态（桌面端）。 */
 export function setLaunchAtLoginEnabled(enabled: boolean): Promise<boolean> {
-  if (demoModeEnabled) return Promise.reject(new Error(DEMO_UNAVAILABLE_MESSAGE));
+  if (demoModeEnabled) return Promise.reject(new Error(demoUnavailableMessage()));
   if (!isDesktop()) return Promise.resolve(false);
   return call("set_launch_at_login_enabled", { enabled });
 }
@@ -1076,7 +1079,7 @@ export function setLaunchAtLoginEnabled(enabled: boolean): Promise<boolean> {
 export function asError(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error) return e.message;
-  return JSON.stringify(e ?? "未知错误");
+  return JSON.stringify(e ?? translate("lib.errors.unknownError"));
 }
 
 // ---------------------------------------------------------------------------

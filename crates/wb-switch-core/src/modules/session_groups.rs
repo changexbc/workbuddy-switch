@@ -17,7 +17,7 @@ use crate::modules::vscode_session::{
     CopyItem, SessionStoreSpec, CODEBUDDY_IDE_STORE, VSCODE_STORE,
 };
 use crate::modules::{
-    account, codebuddy_ide_session, codebuddy_ide_session_sync, config, process, session,
+    account, codebuddy_ide_session, codebuddy_ide_session_sync, config, i18n, process, session,
     session_link, variant::WbVariant, vscode_ext, vscode_session, vscode_session_sync,
 };
 
@@ -35,7 +35,7 @@ impl SessionClient {
             "workbuddy" => Ok(Self::Workbuddy),
             "codebuddyIde" => Ok(Self::CodebuddyIde),
             "vscodeExt" => Ok(Self::VscodeExt),
-            _ => Err("不支持的会话客户端".to_string()),
+            _ => Err(i18n::tr("Unsupported session client", "지원하지 않는 세션 클라이언트입니다").to_string()),
         }
     }
 
@@ -75,10 +75,10 @@ impl SessionClient {
         match (self, scope) {
             (Self::CodebuddyIde, Some(_)) | (Self::Workbuddy | Self::VscodeExt, None) => Ok(()),
             (Self::CodebuddyIde, None) => {
-                Err("CodeBuddy IDE 请求必须指定 cn 或 ai 档位".to_string())
+                Err(i18n::tr("CodeBuddy IDE requests must specify the cn or ai edition", "CodeBuddy IDE 요청에는 cn 또는 ai 버전을 지정해야 합니다").to_string())
             }
             (Self::Workbuddy | Self::VscodeExt, Some(_)) => {
-                Err("只有 CodeBuddy IDE 支持档位筛选".to_string())
+                Err(i18n::tr("Only CodeBuddy IDE supports edition filtering", "CodeBuddy IDE에서만 버전 필터를 지원합니다").to_string())
             }
         }
     }
@@ -89,7 +89,7 @@ pub fn parse_variant_scope(raw: Option<&str>) -> Result<Option<WbVariant>, Strin
         None | Some("") => Ok(None),
         Some("cn") => Ok(Some(WbVariant::Cn)),
         Some("ai") => Ok(Some(WbVariant::Ai)),
-        Some(_) => Err("variantScope 只支持 cn 或 ai".to_string()),
+        Some(_) => Err(i18n::tr("variantScope only supports cn or ai", "variantScope는 cn 또는 ai만 지원합니다").to_string()),
     }
 }
 
@@ -150,14 +150,14 @@ pub fn detail(
     let paths = client.store_paths();
     let store = match session_link::load_store(&paths) {
         StoreState::Ready(store) => store,
-        StoreState::Missing => return Err("会话关联组不存在".to_string()),
-        StoreState::Unavailable(reason) => return Err(format!("会话关联组暂不可用：{reason}")),
+        StoreState::Missing => return Err(i18n::tr("Session group does not exist", "세션 연결 그룹이 존재하지 않습니다").to_string()),
+        StoreState::Unavailable(reason) => return Err(i18n::pick(format!("Session group is temporarily unavailable: {reason}"), format!("세션 연결 그룹을 일시적으로 사용할 수 없습니다: {reason}"))),
     };
     let group = store
         .groups
         .iter()
         .find(|group| group.id == group_id && group_is_in_scope(client, scope, group))
-        .ok_or_else(|| "会话关联组不存在或不属于当前客户端".to_string())?;
+        .ok_or_else(|| i18n::tr("Session group does not exist or does not belong to the current client", "세션 연결 그룹이 존재하지 않거나 현재 클라이언트의 그룹이 아닙니다").to_string())?;
     let accounts = account::load_accounts_at(&account::accounts_file_in(&paths.store_root));
     let mut cache = HashMap::new();
     Ok(group_payload(
@@ -191,14 +191,14 @@ pub fn sync_pair(
 ) -> Result<Value, String> {
     let context = resolve_pair(client, scope, group_id, source_member_id, target_member_id)?;
     if preview_token.trim().is_empty() {
-        return Err("缺少会话同步预览凭据".to_string());
+        return Err(i18n::tr("Missing session sync preview credential", "세션 동기화 미리보기 자격 증명이 없습니다").to_string());
     }
     let selection = parse_selection(group_id, preview_token, mode)?;
     // 校验（resolve / 凭据 / 模式）全部通过后再关编辑器：为注定失败的请求打断用户是无谓的。
     let guard = prepare_editor_window(
         client,
         restart,
-        VSCODE_SYNC_RUNNING_HINT,
+        vscode_sync_running_hint(),
         &[context.target.uid.as_str()],
     )?;
     let result = run_pair_sync(client, scope, &context, &[selection], guard.is_some());
@@ -233,7 +233,7 @@ pub fn sync_unify_batch(
             sync_unify_batch_vscode(scope, group_id, source_member_id, targets, restart)
         }
         SessionClient::CodebuddyIde => {
-            Err("仅 WorkBuddy 与 CodeBuddy 插件会话支持整组统一".to_string())
+            Err(i18n::tr("Only WorkBuddy and CodeBuddy plugin sessions support group-wide unification", "WorkBuddy 및 CodeBuddy 플러그인 세션에서만 그룹 전체 통합을 지원합니다").to_string())
         }
     }
 }
@@ -247,13 +247,13 @@ fn prepare_unify_targets(
     targets: &[GroupUnifyTarget],
 ) -> Result<Vec<(PairContext, SyncSelection)>, String> {
     if targets.is_empty() {
-        return Err("没有需要同步的目标副本".to_string());
+        return Err(i18n::tr("There are no target copies to sync", "동기화할 대상 복사본이 없습니다").to_string());
     }
     let mut seen = HashSet::new();
     let mut prepared = Vec::with_capacity(targets.len());
     for target in targets {
         if !seen.insert(target.target_member_id.as_str()) {
-            return Err("目标副本重复，请重新检查会话".to_string());
+            return Err(i18n::tr("Duplicate target copies; please re-check the session", "대상 복사본이 중복되었습니다. 세션을 다시 확인해 주세요").to_string());
         }
         let pair = resolve_pair(
             client,
@@ -294,14 +294,26 @@ fn sync_unify_batch_workbuddy(
             let suffix = if reopen_errors.is_empty() {
                 String::new()
             } else {
-                format!(
-                    "；此前关闭的客户端重新打开失败：{}",
-                    reopen_errors.join("；")
+                i18n::pick(
+                    format!(
+                        "; previously closed client failed to reopen: {}",
+                        reopen_errors.join(i18n::tr("; ", "；"))
+                    ),
+                    format!(
+                        "；이전에 닫은 클라이언트를 다시 열지 못했습니다: {}",
+                        reopen_errors.join(i18n::tr("; ", "；"))
+                    ),
                 )
             };
-            return Err(format!(
-                "关闭 {}失败：{error}{suffix}",
-                workbuddy_variant_label(variant)
+            return Err(i18n::pick(
+                format!(
+                    "Failed to close {}: {error}{suffix}",
+                    workbuddy_variant_label(variant)
+                ),
+                format!(
+                    "{} 닫기 실패: {error}{suffix}",
+                    workbuddy_variant_label(variant)
+                ),
             ));
         }
         closed.push(variant);
@@ -327,7 +339,7 @@ fn sync_unify_batch_workbuddy(
 
     if combined["needsRecovery"] == true {
         combined["errors"].as_array_mut().unwrap().push(json!({
-            "error": "会话写入待恢复，已暂停重新打开客户端；请先处理恢复提示",
+            "error": i18n::tr("Session write pending recovery; client reopen is paused. Please handle the recovery prompt first", "세션 쓰기 복구가 필요하여 클라이언트 다시 열기를 중지했습니다. 먼저 복구 안내를 처리해 주세요"),
         }));
         return Ok(combined);
     }
@@ -337,13 +349,13 @@ fn sync_unify_batch_workbuddy(
             Ok(recovery) => {
                 combined["needsRecovery"] = json!(true);
                 combined["errors"].as_array_mut().unwrap().push(json!({
-                    "error": format!("{}仍有待恢复的会话写入（{}），已暂停重新打开客户端", workbuddy_variant_label(*variant), crate::modules::switch::recovery_blocking_detail(&recovery)),
+                    "error": i18n::pick(format!("{} still has session writes pending recovery ({}); client reopen is paused", workbuddy_variant_label(*variant), crate::modules::switch::recovery_blocking_detail(&recovery)), format!("{}에 복구가 필요한 세션 쓰기가 남아 있어({}) 클라이언트 다시 열기를 중지했습니다", workbuddy_variant_label(*variant), crate::modules::switch::recovery_blocking_detail(&recovery))),
                 }));
             }
             Err(error) => {
                 combined["needsRecovery"] = json!(true);
                 combined["errors"].as_array_mut().unwrap().push(json!({
-                    "error": format!("{}无法检查会话恢复状态（{error}），已暂停重新打开客户端", workbuddy_variant_label(*variant)),
+                    "error": i18n::pick(format!("Could not check session recovery status for {} ({error}); client reopen is paused", workbuddy_variant_label(*variant)), format!("{}의 세션 복구 상태를 확인할 수 없어({error}) 클라이언트 다시 열기를 중지했습니다", workbuddy_variant_label(*variant))),
                 }));
             }
         }
@@ -355,7 +367,7 @@ fn sync_unify_batch_workbuddy(
     for variant in closed {
         if let Err(error) = process::launch_workbuddy(variant, None) {
             combined["errors"].as_array_mut().unwrap().push(json!({
-                "error": format!("{}会话已处理，但客户端重新打开失败：{error}", workbuddy_variant_label(variant)),
+                "error": i18n::pick(format!("{} sessions were processed, but the client failed to reopen: {error}", workbuddy_variant_label(variant)), format!("{} 세션은 처리했지만 클라이언트를 다시 열지 못했습니다: {error}", workbuddy_variant_label(variant))),
             }));
         } else {
             reopened.push(variant.as_str());
@@ -380,7 +392,7 @@ fn sync_unify_batch_vscode(
         .iter()
         .map(|(pair, _)| pair.target.uid.as_str())
         .collect();
-    let guard = prepare_editor_window(client, restart, VSCODE_SYNC_RUNNING_HINT, &target_uids)?;
+    let guard = prepare_editor_window(client, restart, vscode_sync_running_hint(), &target_uids)?;
     let editor_prepared = guard.is_some();
     let mut combined = json!({ "client": client.as_str(), "groupId": group_id, "synced": [], "skipped": [], "errors": [], "needsRecovery": false, "temporaryFiles": [] });
     for (pair, selection) in prepared {
@@ -415,8 +427,8 @@ fn should_restart_running_target(
 
 fn workbuddy_variant_label(variant: WbVariant) -> &'static str {
     match variant {
-        WbVariant::Cn => "WorkBuddy 国内版",
-        WbVariant::Ai => "WorkBuddy 国际版",
+        WbVariant::Cn => i18n::tr("WorkBuddy Domestic", "WorkBuddy 국내판"),
+        WbVariant::Ai => i18n::tr("WorkBuddy International", "WorkBuddy 국제판"),
     }
 }
 
@@ -442,7 +454,7 @@ pub fn sync_safe_batch(
     let source_member_id = detail
         .get("safeSourceMemberId")
         .and_then(Value::as_str)
-        .ok_or_else(|| "该组无法确认安全同步来源".to_string())?
+        .ok_or_else(|| i18n::tr("Cannot determine a safe sync source for this group", "이 그룹의 안전한 동기화 원본을 확인할 수 없습니다").to_string())?
         .to_string();
     let targets = detail
         .get("members")
@@ -478,14 +490,14 @@ pub fn sync_safe_batch(
                 "groupId": group_id,
                 "targetMemberId": target_member_id,
                 "reasonCode": "recheckNotFastForward",
-                "message": "重新检查后该副本不再属于安全快进范围",
+                "message": i18n::tr("After re-checking, this copy is no longer in the safe fast-forward range", "다시 확인한 결과 이 복사본은 더 이상 안전한 빨리 감기 범위에 속하지 않습니다"),
             }));
             continue;
         }
         let token = preview
             .get("previewToken")
             .and_then(Value::as_str)
-            .ok_or_else(|| "重新预览未返回可执行凭据".to_string())?;
+            .ok_or_else(|| i18n::tr("Re-preview did not return an executable credential", "다시 미리보기에서 실행 가능한 자격 증명을 반환하지 않았습니다").to_string())?;
         let selection = parse_selection(group_id, token, "fastForward")?;
         prepared.push((pair, selection));
     }
@@ -493,7 +505,7 @@ pub fn sync_safe_batch(
         .iter()
         .map(|(pair, _)| pair.target.uid.as_str())
         .collect();
-    let guard = prepare_editor_window(client, restart, VSCODE_SYNC_RUNNING_HINT, &target_uids)?;
+    let guard = prepare_editor_window(client, restart, vscode_sync_running_hint(), &target_uids)?;
     let editor_prepared = guard.is_some();
     let result = (|| -> Result<Value, String> {
         for (pair, selection) in prepared {
@@ -550,32 +562,32 @@ pub fn add_member(
         .iter()
         .find(|account| account.get("id").and_then(Value::as_str) == Some(target_account_id))
         .cloned()
-        .ok_or_else(|| "目标账号不存在".to_string())?;
+        .ok_or_else(|| i18n::tr("Target account does not exist", "대상 계정이 존재하지 않습니다").to_string())?;
     let target_uid = account::get_str(&target, "uid")
         .map(|uid| uid.trim().to_string())
         .filter(|uid| !uid.is_empty())
-        .ok_or_else(|| "目标账号缺少 uid".to_string())?;
+        .ok_or_else(|| i18n::tr("Target account is missing uid", "대상 계정에 uid가 없습니다").to_string())?;
     validate_target_compatibility(client, scope, &target)?;
 
     let store = match session_link::load_store(&paths) {
         StoreState::Ready(store) => store,
-        StoreState::Missing => return Err("会话关联组不存在".to_string()),
-        StoreState::Unavailable(reason) => return Err(format!("会话关联组暂不可用：{reason}")),
+        StoreState::Missing => return Err(i18n::tr("Session group does not exist", "세션 연결 그룹이 존재하지 않습니다").to_string()),
+        StoreState::Unavailable(reason) => return Err(i18n::pick(format!("Session group is temporarily unavailable: {reason}"), format!("세션 연결 그룹을 일시적으로 사용할 수 없습니다: {reason}"))),
     };
     let group = store
         .groups
         .iter()
         .find(|group| group.id == group_id && group_is_in_scope(client, scope, group))
         .cloned()
-        .ok_or_else(|| "会话关联组不存在或不属于当前客户端".to_string())?;
+        .ok_or_else(|| i18n::tr("Session group does not exist or does not belong to the current client", "세션 연결 그룹이 존재하지 않거나 현재 클라이언트의 그룹이 아닙니다").to_string())?;
     let source = group
         .members
         .iter()
         .find(|member| member.member_id == source_member_id && member.state == MemberState::Active)
         .cloned()
-        .ok_or_else(|| "来源成员已失效，请刷新会话组后重试".to_string())?;
+        .ok_or_else(|| i18n::tr("Source member is no longer valid; please refresh the session group and retry", "원본 구성원이 더 이상 유효하지 않습니다. 세션 그룹을 새로 고친 후 다시 시도해 주세요").to_string())?;
     if source.uid == target_uid {
-        return Err("目标账号已是该会话组成员".to_string());
+        return Err(i18n::tr("Target account is already a member of this session group", "대상 계정은 이미 이 세션 그룹의 구성원입니다").to_string());
     }
     if group
         .members
@@ -590,7 +602,7 @@ pub fn add_member(
     match client {
         SessionClient::Workbuddy => {
             let source_acc = account_by_uid(&accounts, &source.uid)
-                .ok_or_else(|| "来源账号已不在本机账号库中".to_string())?;
+                .ok_or_else(|| i18n::tr("Source account is no longer in the local account library", "원본 계정이 더 이상 이 컴퓨터의 계정 목록에 없습니다").to_string())?;
             let report = session::copy_sessions_cross(
                 &source_acc,
                 &target,
@@ -617,9 +629,9 @@ pub fn add_member(
             // Recheck under the operation lock: the underlying IDE/plugin copy kernels are not idempotent.
             let current = match session_link::load_store(&paths) {
                 StoreState::Ready(store) => store,
-                StoreState::Missing => return Err("会话关联组不存在".to_string()),
+                StoreState::Missing => return Err(i18n::tr("Session group does not exist", "세션 연결 그룹이 존재하지 않습니다").to_string()),
                 StoreState::Unavailable(reason) => {
-                    return Err(format!("会话关联组暂不可用：{reason}"))
+                    return Err(i18n::pick(format!("Session group is temporarily unavailable: {reason}"), format!("세션 연결 그룹을 일시적으로 사용할 수 없습니다: {reason}")))
                 }
             };
             let current_group = current
@@ -628,7 +640,7 @@ pub fn add_member(
                 .find(|candidate| {
                     candidate.id == group_id && group_is_in_scope(client, scope, candidate)
                 })
-                .ok_or_else(|| "会话关联组已变化，请刷新后重试".to_string())?;
+                .ok_or_else(|| i18n::tr("The session group has changed; please refresh and retry", "세션 연결 그룹이 변경되었습니다. 새로 고친 후 다시 시도해 주세요").to_string())?;
             if current_group
                 .members
                 .iter()
@@ -642,25 +654,25 @@ pub fn add_member(
                 let flavor = ide_flavor(variant);
                 if flavor.is_running() {
                     return Err(
-                        "检测到 CodeBuddy IDE 正在运行，请先完全退出后再添加关联账号。".to_string(),
+                        i18n::tr("CodeBuddy IDE is running. Please fully quit it before adding a linked account.", "CodeBuddy IDE가 실행 중입니다. 완전히 종료한 후 연결 계정을 추가해 주세요.").to_string(),
                     );
                 }
             }
             let root = client
                 .data_root()
-                .ok_or_else(|| "未找到客户端会话数据目录".to_string())?;
+                .ok_or_else(|| i18n::tr("Client session data directory not found", "클라이언트 세션 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
             let spec = client
                 .store_spec()
-                .ok_or_else(|| "客户端数据仓不可用".to_string())?;
+                .ok_or_else(|| i18n::tr("Client data store is unavailable", "클라이언트 데이터 저장소를 사용할 수 없습니다").to_string())?;
             let (workspace_hash, _, content) = vscode_session_sync::session_location_and_content(
                 spec,
                 &root,
                 &source.uid,
                 &source.session_id,
             )
-            .ok_or_else(|| "来源会话索引已不存在，请刷新后重试".to_string())?;
+            .ok_or_else(|| i18n::tr("Source session index no longer exists; please refresh and retry", "원본 세션 색인이 더 이상 존재하지 않습니다. 새로 고친 후 다시 시도해 주세요").to_string())?;
             if !matches!(content, ContentState::Ready(_)) {
-                return Err("来源会话内容缺失或无法确认，不能复制".to_string());
+                return Err(i18n::tr("Source session content is missing or unverifiable; cannot copy", "원본 세션 내용이 없거나 확인할 수 없어 복사할 수 없습니다").to_string());
             }
             let item = CopyItem {
                 workspace_hash,
@@ -670,7 +682,7 @@ pub fn add_member(
             let guard = prepare_editor_window(
                 client,
                 restart,
-                VSCODE_ADD_MEMBER_RUNNING_HINT,
+                vscode_add_member_running_hint(),
                 &[target_uid.as_str()],
             )?;
             let result = (|| -> Result<Value, String> {
@@ -742,10 +754,10 @@ pub fn copy_linked_sessions(
     restart: bool,
 ) -> Result<Value, String> {
     if client != SessionClient::VscodeExt {
-        return Err("当前客户端暂不支持新增关联会话".to_string());
+        return Err(i18n::tr("The current client does not support adding linked sessions yet", "현재 클라이언트는 아직 연결 세션 추가를 지원하지 않습니다").to_string());
     }
     if session_ids.is_empty() {
-        return Err("缺少要复制的会话".to_string());
+        return Err(i18n::tr("Missing sessions to copy", "복사할 세션이 없습니다").to_string());
     }
     let paths = client.store_paths();
     let accounts = account::load_accounts_at(&account::accounts_file_in(&paths.store_root));
@@ -753,32 +765,32 @@ pub fn copy_linked_sessions(
         .iter()
         .find(|item| account::get_str(item, "id").as_deref() == Some(source_account_id))
         .cloned()
-        .ok_or_else(|| "来源账号不存在".to_string())?;
+        .ok_or_else(|| i18n::tr("Source account does not exist", "원본 계정이 존재하지 않습니다").to_string())?;
     let target = accounts
         .iter()
         .find(|item| account::get_str(item, "id").as_deref() == Some(target_account_id))
         .cloned()
-        .ok_or_else(|| "目标账号不存在".to_string())?;
+        .ok_or_else(|| i18n::tr("Target account does not exist", "대상 계정이 존재하지 않습니다").to_string())?;
     let source_uid = account::get_str(&source, "uid")
         .map(|uid| uid.trim().to_string())
         .filter(|uid| !uid.is_empty())
-        .ok_or_else(|| "来源账号缺少 uid".to_string())?;
+        .ok_or_else(|| i18n::tr("Source account is missing uid", "원본 계정에 uid가 없습니다").to_string())?;
     let target_uid = account::get_str(&target, "uid")
         .map(|uid| uid.trim().to_string())
         .filter(|uid| !uid.is_empty())
-        .ok_or_else(|| "目标账号缺少 uid".to_string())?;
+        .ok_or_else(|| i18n::tr("Target account is missing uid", "대상 계정에 uid가 없습니다").to_string())?;
     if !vscode_session::is_safe_uid(&target_uid) {
-        return Err("目标账号 uid 非法，拒绝写入".to_string());
+        return Err(i18n::tr("Target account uid is invalid; refusing to write", "대상 계정 uid가 올바르지 않아 쓰기를 거부합니다").to_string());
     }
     if source_uid == target_uid {
-        return Err("来源账号与目标账号相同，无需复制会话".to_string());
+        return Err(i18n::tr("Source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
     }
     let root = client
         .data_root()
-        .ok_or_else(|| "未找到 VS Code CodeBuddy 插件数据目录".to_string())?;
+        .ok_or_else(|| i18n::tr("VS Code CodeBuddy extension data directory not found", "VS Code CodeBuddy 확장 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
     let spec = client
         .store_spec()
-        .ok_or_else(|| "插件数据仓不可用".to_string())?;
+        .ok_or_else(|| i18n::tr("Extension data store is unavailable", "확장 데이터 저장소를 사용할 수 없습니다").to_string())?;
     let variant = account::variant_of(&target);
     // 逐条校验来源内容：无内容 / 索引缺失的跳过并如实报告；全部无效才拒绝
     // （不为注定失败的请求关编辑器）。
@@ -797,22 +809,22 @@ pub fn copy_linked_sessions(
             }),
             Some(_) => skipped.push(json!({
                 "id": session_id,
-                "error": "来源会话内容缺失或无法确认",
+                "error": i18n::tr("Source session content is missing or unverifiable", "원본 세션 내용이 없거나 확인할 수 없습니다"),
             })),
             None => skipped.push(json!({
                 "id": session_id,
-                "error": "来源会话索引已不存在",
+                "error": i18n::tr("Source session index no longer exists", "원본 세션 색인이 더 이상 존재하지 않습니다"),
             })),
         }
     }
     if items.is_empty() {
-        return Err("勾选的会话都没有可复制的内容".to_string());
+        return Err(i18n::tr("None of the selected sessions have content to copy", "선택한 세션 중 복사할 내용이 있는 세션이 없습니다").to_string());
     }
     let _operation_lock = session_link::try_acquire_client_ops_lock(&paths)?;
     let guard = prepare_editor_window(
         client,
         restart,
-        VSCODE_ADD_MEMBER_RUNNING_HINT,
+        vscode_add_member_running_hint(),
         &[target_uid.as_str()],
     )?;
     let result = (|| -> Result<Value, String> {
@@ -895,13 +907,13 @@ fn remove_member_in(
         .groups
         .iter_mut()
         .find(|group| group.id == group_id && group_is_in_scope(client, scope, group))
-        .ok_or_else(|| "会话关联组不存在或不属于当前客户端".to_string())?;
+        .ok_or_else(|| i18n::tr("Session group does not exist or does not belong to the current client", "세션 연결 그룹이 존재하지 않거나 현재 클라이언트의 그룹이 아닙니다").to_string())?;
     if !group
         .members
         .iter()
         .any(|member| member.member_id == member_id)
     {
-        return Err("成员不存在，请刷新后重试".to_string());
+        return Err(i18n::tr("Member does not exist; please refresh and retry", "구성원이 존재하지 않습니다. 새로 고친 후 다시 시도해 주세요").to_string());
     }
     group.members.retain(|member| member.member_id != member_id);
     group
@@ -947,7 +959,7 @@ fn delete_group_in(
         .iter()
         .find(|group| group.id == group_id && group_is_in_scope(client, scope, group))
         .map(|group| group.members.len())
-        .ok_or_else(|| "会话关联组不存在或不属于当前客户端".to_string())?;
+        .ok_or_else(|| i18n::tr("Session group does not exist or does not belong to the current client", "세션 연결 그룹이 존재하지 않거나 현재 클라이언트의 그룹이 아닙니다").to_string())?;
     store.groups.retain(|group| group.id != group_id);
     Ok(removed)
 }
@@ -972,35 +984,35 @@ fn resolve_pair(
     let paths = client.store_paths();
     let store = match session_link::load_store(&paths) {
         StoreState::Ready(store) => store,
-        StoreState::Missing => return Err("会话关联组不存在".to_string()),
-        StoreState::Unavailable(reason) => return Err(format!("会话关联组暂不可用：{reason}")),
+        StoreState::Missing => return Err(i18n::tr("Session group does not exist", "세션 연결 그룹이 존재하지 않습니다").to_string()),
+        StoreState::Unavailable(reason) => return Err(i18n::pick(format!("Session group is temporarily unavailable: {reason}"), format!("세션 연결 그룹을 일시적으로 사용할 수 없습니다: {reason}"))),
     };
     let group = store
         .groups
         .iter()
         .find(|group| group.id == group_id && group_is_in_scope(client, scope, group))
         .cloned()
-        .ok_or_else(|| "会话关联组不存在或不属于当前客户端".to_string())?;
+        .ok_or_else(|| i18n::tr("Session group does not exist or does not belong to the current client", "세션 연결 그룹이 존재하지 않거나 현재 클라이언트의 그룹이 아닙니다").to_string())?;
     let source = group
         .members
         .iter()
         .find(|member| member.member_id == source_member_id && member.state == MemberState::Active)
         .cloned()
-        .ok_or_else(|| "来源成员已失效，请刷新会话组".to_string())?;
+        .ok_or_else(|| i18n::tr("Source member is no longer valid; please refresh the session group", "원본 구성원이 더 이상 유효하지 않습니다. 세션 그룹을 새로 고쳐 주세요").to_string())?;
     let target = group
         .members
         .iter()
         .find(|member| member.member_id == target_member_id && member.state == MemberState::Active)
         .cloned()
-        .ok_or_else(|| "目标成员已失效，请刷新会话组".to_string())?;
+        .ok_or_else(|| i18n::tr("Target member is no longer valid; please refresh the session group", "대상 구성원이 더 이상 유효하지 않습니다. 세션 그룹을 새로 고쳐 주세요").to_string())?;
     if source.member_id == target.member_id || source.uid == target.uid {
-        return Err("来源和目标必须是不同账号成员".to_string());
+        return Err(i18n::tr("Source and target must be members of different accounts", "원본과 대상은 서로 다른 계정의 구성원이어야 합니다").to_string());
     }
     let accounts = account::load_accounts_at(&account::accounts_file_in(&paths.store_root));
     let source_account = account_by_uid(&accounts, &source.uid)
-        .ok_or_else(|| "来源账号已不在本机账号库中".to_string())?;
+        .ok_or_else(|| i18n::tr("Source account is no longer in the local account library", "원본 계정이 더 이상 이 컴퓨터의 계정 목록에 없습니다").to_string())?;
     let target_account = account_by_uid(&accounts, &target.uid)
-        .ok_or_else(|| "目标账号已不在本机账号库中".to_string())?;
+        .ok_or_else(|| i18n::tr("Target account is no longer in the local account library", "대상 계정이 더 이상 이 컴퓨터의 계정 목록에 없습니다").to_string())?;
     validate_target_compatibility(client, scope, &target_account)?;
     Ok(PairContext {
         group,
@@ -1022,10 +1034,10 @@ fn preview_resolved_pair(
             session::session_links_preview_cross(&pair.source_account, &pair.target_account)?
         }
         SessionClient::CodebuddyIde => {
-            let variant = scope.ok_or_else(|| "CodeBuddy IDE 缺少档位".to_string())?;
+            let variant = scope.ok_or_else(|| i18n::tr("CodeBuddy IDE is missing the edition", "CodeBuddy IDE에 버전 정보가 없습니다").to_string())?;
             let root = client
                 .data_root()
-                .ok_or_else(|| "未找到 CodeBuddy IDE 会话数据目录".to_string())?;
+                .ok_or_else(|| i18n::tr("CodeBuddy IDE session data directory not found", "CodeBuddy IDE 세션 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
             vscode_session_sync::links_preview_in_for_variant(
                 CODEBUDDY_IDE_STORE,
                 &root,
@@ -1038,7 +1050,7 @@ fn preview_resolved_pair(
         SessionClient::VscodeExt => {
             let root = client
                 .data_root()
-                .ok_or_else(|| "未找到 VS Code 插件会话数据目录".to_string())?;
+                .ok_or_else(|| i18n::tr("VS Code extension session data directory not found", "VS Code 확장 세션 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
             vscode_session_sync::links_preview_in(
                 VSCODE_STORE,
                 &root,
@@ -1057,7 +1069,7 @@ fn preview_resolved_pair(
             })
         })
         .cloned()
-        .ok_or_else(|| "该组当前没有可预览的来源与目标副本".to_string())?;
+        .ok_or_else(|| i18n::tr("This group currently has no source and target copies to preview", "이 그룹에는 현재 미리 볼 원본 및 대상 복사본이 없습니다").to_string())?;
     let mut modes = preview.get("availableModes").cloned().unwrap_or(json!([]));
     if preview.get("verdict").and_then(Value::as_str) == Some("ahead")
         && preview
@@ -1076,18 +1088,30 @@ fn preview_resolved_pair(
         "verdict": preview.get("verdict").cloned().unwrap_or(Value::Null),
         "availableModes": modes,
         "previewToken": preview.get("previewToken").cloned().unwrap_or(Value::Null),
-        "reason": preview.get("reason").cloned().unwrap_or(json!("无法确认")),
+        "reason": preview
+            .get("reason")
+            .cloned()
+            .unwrap_or(json!(i18n::tr("Unable to confirm", "확인할 수 없습니다"))),
         "recordCount": preview.get("recordCount").cloned().unwrap_or(Value::Null),
         "extraTargetCount": preview.get("extraB").cloned().unwrap_or(json!(0)),
     }))
 }
 
 /// 插件侧同步入口运行中的报错文案（`restart=false`，逐字保持既有文案）。
-const VSCODE_SYNC_RUNNING_HINT: &str = "检测到 VS Code 正在运行，请先完全退出后再同步会话。";
+fn vscode_sync_running_hint() -> &'static str {
+    i18n::tr(
+        "VS Code is running. Please fully quit it before syncing sessions.",
+        "VS Code가 실행 중입니다. 완전히 종료한 후 세션을 동기화해 주세요.",
+    )
+}
 
 /// 插件侧「添加关联账号」运行中的报错文案（`restart=false`，逐字保持既有文案）。
-const VSCODE_ADD_MEMBER_RUNNING_HINT: &str =
-    "检测到 VS Code 正在运行，请先完全退出后再添加关联账号。";
+fn vscode_add_member_running_hint() -> &'static str {
+    i18n::tr(
+        "VS Code is running. Please fully quit it before adding a linked account.",
+        "VS Code가 실행 중입니다. 완전히 종료한 후 연결 계정을 추가해 주세요.",
+    )
+}
 
 /// 关闭决策（纯函数）：`Ok(true)` = 需要关闭编辑器，`Ok(false)` = 未运行或不涉及、不关不拉。
 ///
@@ -1234,7 +1258,7 @@ fn settle_editor_window(
                     }
                 }
                 Err(error) => {
-                    let message = format!("会话已处理，但 VS Code 重新打开失败：{error}");
+                    let message = i18n::pick(format!("Session was processed, but VS Code failed to reopen: {error}"), format!("세션은 처리했지만 VS Code를 다시 열지 못했습니다: {error}"));
                     match report.get_mut("errors").and_then(Value::as_array_mut) {
                         Some(errors) => errors.push(json!({ "error": message })),
                         None => report["editorError"] = json!(message),
@@ -1260,14 +1284,14 @@ fn run_pair_sync(
             session::sync_sessions_cross(&pair.source_account, &pair.target_account, selections)?
         }
         SessionClient::CodebuddyIde => {
-            let variant = scope.ok_or_else(|| "CodeBuddy IDE 缺少档位".to_string())?;
+            let variant = scope.ok_or_else(|| i18n::tr("CodeBuddy IDE is missing the edition", "CodeBuddy IDE에 버전 정보가 없습니다").to_string())?;
             let _operation_lock = session_link::try_acquire_client_ops_lock(&paths)?;
             if ide_flavor(variant).is_running() {
-                return Err("检测到 CodeBuddy IDE 正在运行，请先完全退出后再同步会话。".to_string());
+                return Err(i18n::tr("CodeBuddy IDE is running. Please fully quit it before syncing sessions.", "CodeBuddy IDE가 실행 중입니다. 완전히 종료한 후 세션을 동기화해 주세요.").to_string());
             }
             let root = client
                 .data_root()
-                .ok_or_else(|| "未找到 CodeBuddy IDE 会话数据目录".to_string())?;
+                .ok_or_else(|| i18n::tr("CodeBuddy IDE session data directory not found", "CodeBuddy IDE 세션 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
             vscode_session_sync::sync_selected_in_for_variant(
                 CODEBUDDY_IDE_STORE,
                 &root,
@@ -1282,11 +1306,11 @@ fn run_pair_sync(
             let _operation_lock = session_link::try_acquire_client_ops_lock(&paths)?;
             // `editor_prepared` = 调用方已在生命周期窗口内处理过编辑器（已关闭或本来未运行）。
             if !editor_prepared && vscode_ext::is_vscode_running() {
-                return Err(VSCODE_SYNC_RUNNING_HINT.to_string());
+                return Err(vscode_sync_running_hint().to_string());
             }
             let root = client
                 .data_root()
-                .ok_or_else(|| "未找到 VS Code 插件会话数据目录".to_string())?;
+                .ok_or_else(|| i18n::tr("VS Code extension session data directory not found", "VS Code 확장 세션 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
             vscode_session_sync::sync_selected_in(
                 VSCODE_STORE,
                 &root,
@@ -1316,7 +1340,7 @@ fn parse_selection(
     mode: &str,
 ) -> Result<SyncSelection, String> {
     if !matches!(mode, "fastForward" | "overwrite" | "unifyOverwrite") {
-        return Err("不支持的会话同步模式".to_string());
+        return Err(i18n::tr("Unsupported session sync mode", "지원하지 않는 세션 동기화 모드입니다").to_string());
     }
     session::parse_sync_selections(Some(&json!([{
         "groupId": group_id,
@@ -1325,7 +1349,7 @@ fn parse_selection(
     }])))?
     .into_iter()
     .next()
-    .ok_or_else(|| "会话同步选择项为空".to_string())
+    .ok_or_else(|| i18n::tr("Session sync selection is empty", "세션 동기화 선택 항목이 비어 있습니다").to_string())
 }
 
 fn merge_sync_report(into: &mut Value, item: Value) {
@@ -1359,9 +1383,9 @@ fn validate_target_compatibility(
     match client {
         SessionClient::Workbuddy => Ok(()),
         SessionClient::CodebuddyIde => {
-            let expected = scope.ok_or_else(|| "CodeBuddy IDE 缺少档位".to_string())?;
+            let expected = scope.ok_or_else(|| i18n::tr("CodeBuddy IDE is missing the edition", "CodeBuddy IDE에 버전 정보가 없습니다").to_string())?;
             if account::variant_of(target) != expected {
-                return Err("目标账号与当前 CodeBuddy IDE 档位不兼容".to_string());
+                return Err(i18n::tr("The target account is not compatible with the current CodeBuddy IDE edition", "대상 계정이 현재 CodeBuddy IDE 버전과 호환되지 않습니다").to_string());
             }
             Ok(())
         }
@@ -1483,7 +1507,7 @@ fn group_payload(
         .iter()
         .find(|view| !view.title.trim().is_empty())
         .map(|view| view.title.clone())
-        .unwrap_or_else(|| "会话组".to_string());
+        .unwrap_or_else(|| i18n::tr("Session group", "세션 그룹").to_string());
     let project_label = views
         .iter()
         .find(|view| !view.project_label.is_empty())
@@ -1657,16 +1681,16 @@ fn aggregate_group_state(
         match view.member.state {
             MemberState::Stale => {
                 view.version_status = "stale";
-                view.reason = "该副本已标记为失效".to_string();
+                view.reason = i18n::tr("This copy has been marked as invalid", "이 복사본은 유효하지 않음으로 표시되었습니다").to_string();
             }
             MemberState::Superseded => {
                 view.version_status = "superseded";
-                view.reason = "该副本已被更新成员替代".to_string();
+                view.reason = i18n::tr("This copy has been superseded by a newer member", "이 복사본은 더 최신 구성원으로 대체되었습니다").to_string();
             }
             MemberState::Active => match &view.content {
                 ContentState::Missing => {
                     view.version_status = "missing";
-                    view.reason = "会话内容不存在，无法同步".to_string();
+                    view.reason = i18n::tr("Session content does not exist; cannot sync", "세션 내용이 존재하지 않아 동기화할 수 없습니다").to_string();
                     has_missing = true;
                 }
                 ContentState::Unavailable(reason) => {
@@ -1682,7 +1706,7 @@ fn aggregate_group_state(
                         {
                             view.version_status = "latest";
                             if index != source_index {
-                                view.reason = "内容与操作来源一致".to_string();
+                                view.reason = i18n::tr("Content matches the operation source", "내용이 작업 원본과 일치합니다").to_string();
                             }
                         } else if let Some((SyncVerdict::FastForward, reason)) =
                             matrix.get(&(source_index, index))
@@ -1692,7 +1716,7 @@ fn aggregate_group_state(
                             has_behind = true;
                         } else {
                             view.version_status = "unknown";
-                            view.reason = "重新检查后无法确认此成员状态".to_string();
+                            view.reason = i18n::tr("Could not confirm this member's state after re-checking", "다시 확인한 후에도 이 구성원의 상태를 확인할 수 없습니다").to_string();
                         }
                     } else {
                         let reasons = active
@@ -1715,7 +1739,7 @@ fn aggregate_group_state(
                             view.reason = reasons
                                 .first()
                                 .map(|(_, reason)| reason.clone())
-                                .unwrap_or_else(|| "缺少可比较的关联成员".to_string());
+                                .unwrap_or_else(|| i18n::tr("No comparable linked member", "비교할 수 있는 연결 구성원이 없습니다").to_string());
                         }
                     }
                 }
@@ -1766,7 +1790,7 @@ fn member_snapshot(
             let title = row
                 .and_then(|row| row.get("title"))
                 .and_then(Value::as_str)
-                .unwrap_or("会话标题暂不可用")
+                .unwrap_or(i18n::tr("Session title is temporarily unavailable", "세션 제목을 일시적으로 사용할 수 없습니다"))
                 .to_string();
             let cwd = row
                 .and_then(|row| row.get("cwd"))
@@ -1788,7 +1812,7 @@ fn member_snapshot(
                 if project.is_empty() {
                     String::new()
                 } else {
-                    format!("项目 {project}")
+                    i18n::pick(format!("Project {project}"), format!("프로젝트 {project}"))
                 },
                 updated_at,
                 content,
@@ -1814,7 +1838,7 @@ fn member_snapshot(
             let title = row
                 .and_then(|row| row.get("title"))
                 .and_then(Value::as_str)
-                .unwrap_or("会话标题暂不可用")
+                .unwrap_or(i18n::tr("Session title is temporarily unavailable", "세션 제목을 일시적으로 사용할 수 없습니다"))
                 .to_string();
             let hash = row
                 .and_then(|row| row.get("workspaceHash"))
@@ -1823,7 +1847,7 @@ fn member_snapshot(
             let project = if hash.is_empty() {
                 String::new()
             } else {
-                format!("工作区 {}", hash.chars().take(8).collect::<String>())
+                i18n::pick(format!("Workspace {}", hash.chars().take(8).collect::<String>()), format!("워크스페이스 {}", hash.chars().take(8).collect::<String>()))
             };
             let updated_at = row
                 .and_then(|row| row.get("updatedAt"))
@@ -1838,7 +1862,7 @@ fn member_snapshot(
                 )
                 .map(|(_, _, content)| content)
                 .unwrap_or(ContentState::Missing),
-                _ => ContentState::Unavailable("未找到客户端会话数据目录".to_string()),
+                _ => ContentState::Unavailable(i18n::tr("Client session data directory not found", "클라이언트 세션 데이터 디렉터리를 찾을 수 없습니다").to_string()),
             };
             (title, project, updated_at, content)
         }
@@ -1898,9 +1922,9 @@ fn content_preview(content: &ContentState) -> Vec<Value> {
                 .or_else(|| record.get("type"))
                 .and_then(Value::as_str)
             {
-                Some("user") => "用户",
-                Some("assistant") => "助手",
-                _ => "记录",
+                Some("user") => i18n::tr("User", "사용자"),
+                Some("assistant") => i18n::tr("Assistant", "어시스턴트"),
+                _ => i18n::tr("Record", "기록"),
             };
             Some(json!({ "speaker": speaker, "text": text.chars().take(240).collect::<String>() }))
         })
@@ -1934,11 +1958,23 @@ fn content_state_name(content: &ContentState) -> &'static str {
 
 fn summary_text(status: &str) -> &'static str {
     match status {
-        "latest" => "关联副本内容一致",
-        "behind" => "有副本落后，可安全同步",
-        "diverge" => "多个副本有不同更新，需要选择来源",
-        "missing" => "有副本内容缺失",
-        _ => "暂时无法确认副本状态",
+        "latest" => i18n::tr(
+            "Linked copies have identical content",
+            "연결된 복사본의 내용이 동일합니다",
+        ),
+        "behind" => i18n::tr(
+            "Some copies are behind and can be safely synced",
+            "일부 복사본이 뒤처져 있으며 안전하게 동기화할 수 있습니다",
+        ),
+        "diverge" => i18n::tr(
+            "Copies have different updates; choose a source",
+            "여러 복사본에 서로 다른 업데이트가 있습니다. 원본을 선택해야 합니다",
+        ),
+        "missing" => i18n::tr("Some copies have missing content", "일부 복사본의 내용이 없습니다"),
+        _ => i18n::tr(
+            "Cannot confirm copy status right now",
+            "현재 복사본 상태를 확인할 수 없습니다",
+        ),
     }
 }
 
@@ -1995,10 +2031,10 @@ mod tests {
                 Some("uid-a"),
                 &targets,
                 false,
-                VSCODE_SYNC_RUNNING_HINT
+                vscode_sync_running_hint()
             )
             .unwrap_err(),
-            "检测到 VS Code 正在运行，请先完全退出后再同步会话。"
+            "VS Code is running. Please fully quit it before syncing sessions."
         );
         assert_eq!(
             plan_editor_restart(
@@ -2006,17 +2042,17 @@ mod tests {
                 Some("uid-b"),
                 &targets,
                 false,
-                VSCODE_ADD_MEMBER_RUNNING_HINT
+                vscode_add_member_running_hint()
             )
             .unwrap_err(),
-            "检测到 VS Code 正在运行，请先完全退出后再添加关联账号。"
+            "VS Code is running. Please fully quit it before adding a linked account."
         );
         // 运行中且涉及 + 已授权：关闭。
         assert!(plan_editor_restart(true, Some("uid-a"), &targets, true, "hint").unwrap());
         // 读不到当前登录账号：保守按涉及处理（未授权 → 报错；已授权 → 关闭）。
         assert_eq!(
-            plan_editor_restart(true, None, &targets, false, VSCODE_SYNC_RUNNING_HINT).unwrap_err(),
-            "检测到 VS Code 正在运行，请先完全退出后再同步会话。"
+            plan_editor_restart(true, None, &targets, false, vscode_sync_running_hint()).unwrap_err(),
+            "VS Code is running. Please fully quit it before syncing sessions."
         );
         assert!(plan_editor_restart(true, None, &targets, true, "hint").unwrap());
     }
@@ -2057,7 +2093,7 @@ mod tests {
         let errors = report["errors"].as_array().unwrap();
         assert_eq!(errors.len(), 1);
         let message = errors[0]["error"].as_str().unwrap();
-        assert!(message.contains("VS Code 重新打开失败"), "{message}");
+        assert!(message.contains("VS Code failed to reopen"), "{message}");
         assert!(message.contains("open 超时"), "{message}");
 
         // 没有 errors 数组（add_member 形态）：失败信息挂顶层 editorError。
@@ -2072,7 +2108,7 @@ mod tests {
         assert!(report["editorError"]
             .as_str()
             .unwrap()
-            .contains("VS Code 重新打开失败"));
+            .contains("VS Code failed to reopen"));
     }
 
     #[test]
@@ -2121,12 +2157,12 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(error.contains("暂不支持新增关联会话"), "{error}");
+        assert!(error.contains("does not support adding linked sessions"), "{error}");
 
         // 空勾选：直接拒绝。
         let error = copy_linked_sessions(SessionClient::VscodeExt, "source", "target", &[], false)
             .unwrap_err();
-        assert!(error.contains("缺少要复制的会话"), "{error}");
+        assert!(error.contains("Missing sessions to copy"), "{error}");
 
         // 账号不存在：直接拒绝（不会走到编辑器生命周期窗口）。
         let error = copy_linked_sessions(
@@ -2137,7 +2173,7 @@ mod tests {
             true,
         )
         .unwrap_err();
-        assert!(error.contains("来源账号不存在"), "{error}");
+        assert!(error.contains("Source account does not exist"), "{error}");
     }
 
     #[test]
@@ -2488,13 +2524,19 @@ mod tests {
             super::remove_member_in(link_store, SessionClient::Workbuddy, None, "missing", "m-a")
         })
         .unwrap_err();
-        assert_eq!(missing_group, "会话关联组不存在或不属于当前客户端");
+        assert_eq!(
+            missing_group,
+            "Session group does not exist or does not belong to the current client"
+        );
 
         let missing_member = session_link::with_link_store_write(&store.paths, |link_store| {
             super::remove_member_in(link_store, SessionClient::Workbuddy, None, "g-1", "nope")
         })
         .unwrap_err();
-        assert_eq!(missing_member, "成员不存在，请刷新后重试");
+        assert_eq!(
+            missing_member,
+            "Member does not exist; please refresh and retry"
+        );
 
         // 失败的读改写不得落盘，更不得推进 revision。
         let saved = store.store();
@@ -2559,7 +2601,10 @@ mod tests {
 
         let error = delete_group_at(&store.paths, "missing").unwrap_err();
 
-        assert_eq!(error, "会话关联组不存在或不属于当前客户端");
+        assert_eq!(
+            error,
+            "Session group does not exist or does not belong to the current client"
+        );
         // 失败的读改写不得落盘，更不得推进 revision。
         let saved = store.store();
         assert_eq!(saved.revision, 1);
@@ -2571,24 +2616,24 @@ mod tests {
     fn delete_group_rejects_invalid_scope_combinations() {
         let vscode =
             delete_group(SessionClient::VscodeExt, Some(WbVariant::Ai), "g-1").unwrap_err();
-        assert!(vscode.contains("只有 CodeBuddy IDE"));
+        assert!(vscode.contains("Only CodeBuddy IDE"));
         let workbuddy =
             delete_group(SessionClient::Workbuddy, Some(WbVariant::Cn), "g-1").unwrap_err();
-        assert!(workbuddy.contains("只有 CodeBuddy IDE"));
+        assert!(workbuddy.contains("Only CodeBuddy IDE"));
         let ide = delete_group(SessionClient::CodebuddyIde, None, "g-1").unwrap_err();
-        assert!(ide.contains("必须指定 cn 或 ai"));
+        assert!(ide.contains("must specify the cn or ai edition"));
     }
 
     #[test]
     fn unlink_rejects_invalid_scope_combinations() {
         let vscode =
             remove_member(SessionClient::VscodeExt, Some(WbVariant::Ai), "g-1", "m-a").unwrap_err();
-        assert!(vscode.contains("只有 CodeBuddy IDE"));
+        assert!(vscode.contains("Only CodeBuddy IDE"));
         let workbuddy =
             remove_member(SessionClient::Workbuddy, Some(WbVariant::Cn), "g-1", "m-a").unwrap_err();
-        assert!(workbuddy.contains("只有 CodeBuddy IDE"));
+        assert!(workbuddy.contains("Only CodeBuddy IDE"));
         let ide = remove_member(SessionClient::CodebuddyIde, None, "g-1", "m-a").unwrap_err();
-        assert!(ide.contains("必须指定 cn 或 ai"));
+        assert!(ide.contains("must specify the cn or ai edition"));
     }
 
     #[test]

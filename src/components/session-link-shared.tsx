@@ -7,6 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useT, type Translate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n/messages";
 import { cn } from "@/lib/utils";
 import type {
   SessionLinkPreviewGroup,
@@ -36,13 +38,13 @@ export interface SessionLinksMeta {
   storeError: string;
 }
 
-/** 判定结果的中文标签（与 core 的 verdict 一一对应，只表达状态，动作交给摘要句）。 */
-export const VERDICT_LABEL: Record<SessionSyncVerdict, string> = {
-  fastForward: "可同步",
-  diverge: "双方都有更新",
-  ahead: "目标账号有更新",
-  identical: "内容一致",
-  unknown: "无法确认",
+/** 判定结果的标签键（与 core 的 verdict 一一对应，只表达状态，动作交给摘要句）。 */
+export const VERDICT_LABEL_KEY: Record<SessionSyncVerdict, MessageKey> = {
+  fastForward: "sessions.links.verdict.fastForward",
+  diverge: "sessions.links.verdict.diverge",
+  ahead: "sessions.links.verdict.ahead",
+  identical: "sessions.links.verdict.identical",
+  unknown: "sessions.links.verdict.unknown",
 };
 
 export const VERDICT_BADGE: Record<SessionSyncVerdict, "success" | "warning" | "outline" | "secondary"> = {
@@ -161,33 +163,41 @@ export function buildSelections(
 }
 
 /** 卡片摘要句：一句人话说清发生了什么；条数与原始原因收进「查看详情」。 */
-export function summarySentence(group: SessionLinkPreviewGroup, targetLabel: string): string {
+export function summarySentence(
+  t: Translate,
+  group: SessionLinkPreviewGroup,
+  targetLabel: string,
+): string {
   // 只归档项：正文判定会说「无需同步/本次不同步」，但本次确实要改状态，必须说清。
   if (archiveOnly(group) && primaryMode(group) === null) {
-    return "仅同步归档，保留正文";
+    return t("sessions.links.summary.archiveOnly");
   }
-  const base = bodySummarySentence(group, targetLabel);
+  const base = bodySummarySentence(t, group, targetLabel);
   // 正文同步附带归档时，在正文句之后补一句，避免用户以为只同步了正文。
-  return archiveOnly(group) ? `${base}，目标会话一并归档` : base;
+  return archiveOnly(group) ? `${base}${t("sessions.links.summary.archiveSuffix")}` : base;
 }
 
 /** 纯按正文判定给出的摘要句（不含归档补充）。 */
-function bodySummarySentence(group: SessionLinkPreviewGroup, targetLabel: string): string {
+function bodySummarySentence(
+  t: Translate,
+  group: SessionLinkPreviewGroup,
+  targetLabel: string,
+): string {
   switch (group.verdict) {
     case "fastForward":
-      return `将当前账号的新内容同步到「${targetLabel}」`;
+      return t("sessions.links.summary.fastForward", { target: targetLabel });
     case "diverge":
-      return "勾选将用当前账号内容覆盖目标全文。";
+      return t("sessions.links.summary.diverge");
     case "ahead":
-      return "保留目标内容，本次不同步";
+      return t("sessions.links.summary.ahead");
     case "identical":
-      return "无需同步";
+      return t("sessions.links.summary.identical");
     case "unknown":
-      return "暂时无法确认两边内容，本次不会同步";
+      return t("sessions.links.summary.unknown");
   }
 }
 
-export const RECORD_COUNT_HINT = "按会话内容的条数统计，不是对话轮数；条数相同也不代表内容顺序完全一致。";
+export const RECORD_COUNT_HINT_KEY: MessageKey = "sessions.links.recordCountHint";
 
 /** 会话行：勾选框 + 标题 + 一句摘要 + 判定徽标 + 折叠箭头（路径 / 条数 / 原因）。 */
 export function SessionLinkCard({
@@ -203,10 +213,11 @@ export function SessionLinkCard({
   disabled?: boolean;
   onToggle: (next: boolean) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const canSelect = isActionable(group);
   const overwrite = primaryMode(group) === "overwrite";
-  const title = group.title || "(无标题)";
+  const title = group.title || t("sessions.links.untitled");
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="px-3 py-2.5">
@@ -217,7 +228,7 @@ export function SessionLinkCard({
             checked={checked}
             disabled={disabled}
             onCheckedChange={(state) => onToggle(state === true)}
-            aria-label={`同步会话 ${title}`}
+            aria-label={t("sessions.links.selectAria", { title })}
           />
         ) : (
           <span className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -228,24 +239,24 @@ export function SessionLinkCard({
               {title}
             </span>
             <Badge variant={VERDICT_BADGE[group.verdict]} className="shrink-0 text-[10px]">
-              {VERDICT_LABEL[group.verdict]}
+              {t(VERDICT_LABEL_KEY[group.verdict])}
             </Badge>
             <CollapsibleTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
                 className="size-6 shrink-0 text-muted-foreground"
-                aria-label="查看详情"
+                aria-label={t("sessions.links.viewDetails")}
               >
                 <ChevronRight className={cn("size-4 transition-transform", open && "rotate-90")} />
               </Button>
             </CollapsibleTrigger>
           </div>
-          <p className="text-xs text-muted-foreground">{summarySentence(group, targetLabel)}</p>
+          <p className="text-xs text-muted-foreground">{summarySentence(t, group, targetLabel)}</p>
           {overwrite && (
             <p className="flex items-start gap-1 text-xs text-amber-700 dark:text-amber-400">
               <CircleAlert className="mt-px size-3.5 shrink-0" />
-              <span>{`目标独有 ${group.extraB} 条记录将被替换，无法通过本工具撤销。`}</span>
+              <span>{t("sessions.links.overwriteWarning", { count: group.extraB })}</span>
             </p>
           )}
         </div>
@@ -260,13 +271,17 @@ export function SessionLinkCard({
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="block w-fit cursor-help" tabIndex={0}>
-              {`内容条数：当前账号 ${group.recordCount.source} 条 · 目标账号 ${group.recordCount.target} 条`}
-              {group.recordCount.baseline !== null && ` · 上次一致 ${group.recordCount.baseline} 条`}
-              {group.extraB > 0 && ` · 目标账号独有 ${group.extraB} 条`}
+              {t("sessions.links.recordCountBase", {
+                source: group.recordCount.source,
+                target: group.recordCount.target,
+              })}
+              {group.recordCount.baseline !== null
+                && t("sessions.links.recordCountBaseline", { count: group.recordCount.baseline })}
+              {group.extraB > 0 && t("sessions.links.recordCountExtra", { count: group.extraB })}
             </span>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-xs">
-            {RECORD_COUNT_HINT}
+            {t(RECORD_COUNT_HINT_KEY)}
           </TooltipContent>
         </Tooltip>
         <span className="block">{group.reason}</span>

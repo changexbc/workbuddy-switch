@@ -20,6 +20,7 @@ use crate::modules::account::{account_display_name, get_str, variant_of};
 use crate::modules::config::{atomic_write, official_usage_cache_file, store_dir};
 use crate::modules::credits::authenticated_post;
 use crate::modules::variant::WbVariant;
+use crate::modules::i18n;
 
 pub const OFFICIAL_USAGE_URL: &str =
     "https://www.workbuddy.cn/billing/meter/get-user-request-usage";
@@ -296,11 +297,29 @@ fn error_message(response: &Value) -> String {
         .filter(|message| !message.is_empty())
         .map(|message| message.chars().take(160).collect::<String>());
     match response_code(response) {
-        Some(-1) => "官方请求失败（网络或服务不可达）".to_string(),
+        Some(-1) => i18n::tr(
+            "Official request failed (network or service unreachable)",
+            "공식 요청에 실패했습니다(네트워크 또는 서비스에 연결할 수 없음)",
+        )
+        .to_string(),
         Some(code) => upstream_message
-            .map(|message| format!("官方请求失败（code={code}）：{message}"))
-            .unwrap_or_else(|| format!("官方请求失败（code={code}）")),
-        None => "官方响应格式无效".to_string(),
+            .map(|message| {
+                i18n::pick(
+                    format!("Official request failed (code={code}): {message}"),
+                    format!("공식 요청에 실패했습니다(code={code}): {message}"),
+                )
+            })
+            .unwrap_or_else(|| {
+                i18n::pick(
+                    format!("Official request failed (code={code})"),
+                    format!("공식 요청에 실패했습니다(code={code})"),
+                )
+            }),
+        None => i18n::tr(
+            "The official response format is invalid",
+            "공식 응답 형식이 올바르지 않습니다",
+        )
+        .to_string(),
     }
 }
 
@@ -395,10 +414,18 @@ fn parse_page(response: &Value) -> Result<OfficialPage, String> {
         return Err(error_message(response));
     }
     let Some(data) = response.get("data").and_then(Value::as_object) else {
-        return Err("官方响应格式无效".to_string());
+        return Err(i18n::tr(
+            "The official response format is invalid",
+            "공식 응답 형식이 올바르지 않습니다",
+        )
+        .to_string());
     };
     let Some(raw_rows) = data.get("data").and_then(Value::as_array) else {
-        return Err("官方响应格式无效".to_string());
+        return Err(i18n::tr(
+            "The official response format is invalid",
+            "공식 응답 형식이 올바르지 않습니다",
+        )
+        .to_string());
     };
     // `data.total` 会被服务端一起截断（31 天窗口固定回报 3000），不能当总数用。
     Ok(OfficialPage {
@@ -519,10 +546,20 @@ async fn fetch_account_usage(
             SweepDecision::Continue(newest_ts) => {
                 rounds += 1;
                 if rounds >= OFFICIAL_USAGE_MAX_ROUNDS {
-                    return Err("官方用量分页超过安全上限".to_string());
+                    return Err(i18n::tr(
+            "Official usage pagination exceeded the safety limit",
+            "공식 사용량 페이지가 안전 한도를 초과했습니다",
+        )
+        .to_string());
                 }
                 start_time =
-                    start_time_at(newest_ts).ok_or_else(|| "官方用量分页时间无效".to_string())?;
+                    start_time_at(newest_ts).ok_or_else(|| {
+            i18n::tr(
+                "Official usage pagination time is invalid",
+                "공식 사용량 페이지 시간이 올바르지 않습니다",
+            )
+            .to_string()
+        })?;
                 previous_newest = Some(newest_ts);
             }
         }
@@ -563,7 +600,7 @@ fn aggregate_rows(
 fn model_name(model: &str) -> String {
     let model = model.trim();
     if model.is_empty() || model == "—" {
-        "未知模型".to_string()
+        i18n::tr("Unknown model", "알 수 없는 모델").to_string()
     } else {
         model.to_string()
     }
@@ -969,15 +1006,15 @@ mod tests {
     fn rejects_error_and_missing_data_shapes() {
         assert!(matches!(
             parse_page(&json!({"code": 500, "msg": "bad"})),
-            Err(error) if error == "官方请求失败（code=500）：bad"
+            Err(error) if error == "Official request failed (code=500): bad"
         ));
         assert!(matches!(
             parse_page(&json!({"code": 0, "data": {"total": 0}})),
-            Err(error) if error == "官方响应格式无效"
+            Err(error) if error == "The official response format is invalid"
         ));
         assert_eq!(
             error_message(&json!({"code": -1, "message": "secret token"})),
-            "官方请求失败（网络或服务不可达）"
+            "Official request failed (network or service unreachable)"
         );
     }
 

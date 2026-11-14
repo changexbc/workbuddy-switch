@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::modules::config::{accounts_file, atomic_write, now_ms};
 use crate::modules::variant::WbVariant;
+use crate::modules::i18n;
 
 /// 判断字段是否为 WorkBuddy 5.6 加密信封对象（`{$wbEncrypted, envelope}`）。
 ///
@@ -64,7 +65,7 @@ fn delete_account_from_path(path: &Path, account_id: &str) -> Result<(), String>
     let before = accounts.len();
     accounts.retain(|account| account.get("id").and_then(Value::as_str) != Some(account_id));
     if accounts.len() == before {
-        return Err("账号不存在".to_string());
+        return Err(i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string());
     }
     save_accounts_to_path(path, &accounts).map_err(|error| error.to_string())
 }
@@ -356,7 +357,7 @@ pub fn update_account_display_in(
     let index = accounts
         .iter()
         .position(|a| get_str(a, "id").as_deref() == Some(account_id))
-        .ok_or_else(|| "账号不存在".to_string())?;
+        .ok_or_else(|| i18n::tr("Account not found", "계정을 찾을 수 없습니다").to_string())?;
 
     let note_update = match patch.get("note") {
         None => None,
@@ -366,19 +367,30 @@ pub fn update_account_display_in(
             if trimmed.is_empty() {
                 Some(Value::Null)
             } else if trimmed.chars().count() > NOTE_MAX_CHARS {
-                return Err(format!("备注不能超过 {NOTE_MAX_CHARS} 个字符"));
+                return Err(i18n::pick(
+                    format!("The note cannot exceed {NOTE_MAX_CHARS} characters"),
+                    format!("메모는 {NOTE_MAX_CHARS}자를 넘을 수 없습니다"),
+                ));
             } else {
                 Some(Value::String(trimmed.to_string()))
             }
         }
-        Some(_) => return Err("备注格式无效".to_string()),
+        Some(_) => {
+            return Err(
+                i18n::tr("The note format is invalid", "메모 형식이 올바르지 않습니다").to_string(),
+            )
+        }
     };
     let field_update = match patch.get("displayField") {
         None => None,
         Some(value) => {
             let field = value.as_str().unwrap_or("");
             if !matches!(field, "nickname" | "phone" | "note") {
-                return Err("显示字段无效".to_string());
+                return Err(i18n::tr(
+                    "The display field is invalid",
+                    "표시 필드가 올바르지 않습니다",
+                )
+                .to_string());
             }
             Some(Value::String(field.to_string()))
         }
@@ -386,7 +398,9 @@ pub fn update_account_display_in(
 
     let obj = accounts[index]
         .as_object_mut()
-        .ok_or_else(|| "账号记录损坏".to_string())?;
+        .ok_or_else(|| {
+            i18n::tr("The account record is damaged", "계정 기록이 손상되었습니다").to_string()
+        })?;
     if let Some(note) = note_update {
         obj.insert("note".to_string(), note);
     }
@@ -510,7 +524,10 @@ pub fn delete_account(account_id: &str) -> Result<(), String> {
 /// 导入本机当前账号（从该档位的登录态文件读取）。
 pub fn import_local(variant: WbVariant) -> Result<Value, String> {
     let acc = crate::modules::auth_file::import_from_auth_file(variant)
-        .ok_or("未读取到本地 WorkBuddy 登录信息")?;
+        .ok_or(i18n::tr(
+            "Could not read the local WorkBuddy sign-in information",
+            "로컬 WorkBuddy 로그인 정보를 읽지 못했습니다",
+        ))?;
     let saved = save_collected_account(acc).map_err(|e| e.to_string())?;
     Ok(account_meta(&saved))
 }

@@ -33,8 +33,9 @@ import { TimePicker } from "@/components/ui/time-picker";
 import { displayName } from "@/lib/account-display";
 import * as api from "@/lib/api";
 import { canPersistErrorLog } from "@/lib/error-report";
-import { useLocale, useSetLocale, useT } from "@/lib/i18n";
+import { useLocale, useSetLocale, useT, type Translate } from "@/lib/i18n";
 import { isLocale, LOCALE_OPTIONS } from "@/lib/i18n/locale";
+import type { MessageKey } from "@/lib/i18n/messages";
 import { setSessionsNavEnabled, useSessionsNavEnabled } from "@/lib/nav-prefs";
 import { setDefaultArchiveSyncEnabled, useDefaultArchiveSyncEnabled } from "@/lib/sync-prefs";
 import { getThemePreference, setThemePreference, type ThemePreference } from "@/lib/theme";
@@ -229,10 +230,11 @@ function NumberSettingRow({
   onCommit,
   className,
 }: NumberSettingRowProps) {
+  const t = useT();
   return (
     <SettingsFieldRow
       className={className}
-      label={spec.label}
+      label={t(spec.label)}
       description={description}
       htmlFor={id}
       operational
@@ -268,14 +270,17 @@ function formatTime(ts: number): string {
   }
 }
 
-function logLabel(result: string): { text: string; tone: "success" | "warning" | "error" } {
+function logLabel(
+  t: Translate,
+  result: string,
+): { text: string; tone: "success" | "warning" | "error" } {
   switch (result) {
     case "success":
-      return { text: "签到成功", tone: "success" };
+      return { text: t("settings.checkin.logSuccess"), tone: "success" };
     case "already":
-      return { text: "已签到", tone: "warning" };
+      return { text: t("settings.checkin.logAlready"), tone: "warning" };
     default:
-      return { text: "失败", tone: "error" };
+      return { text: t("settings.checkin.logFailed"), tone: "error" };
   }
 }
 
@@ -295,19 +300,19 @@ function clockMinutes(value: string): number | null {
  * 半填 / 非法组合只改本地显示、不写盘：后端把这种窗口当「不限制」处理，写盘会让下一轮
  * 对全部账号发起窗口外签到，所以文案要说明「未保存」。
  */
-function checkinWindowIssue(start: string, end: string): string | null {
+function checkinWindowIssue(t: Translate, start: string, end: string): string | null {
   if (!start && !end) return null;
-  if (!start || !end) return "开始与结束时间需同时选择，当前选择未保存";
+  if (!start || !end) return t("settings.checkin.windowIssuePartial");
   const startMinutes = clockMinutes(start);
   const endMinutes = clockMinutes(end);
-  if (startMinutes === null || endMinutes === null) return "时间格式应为 HH:MM，当前选择未保存";
-  if (startMinutes >= endMinutes) return "结束时间需晚于开始时间（不支持跨午夜），当前选择未保存";
+  if (startMinutes === null || endMinutes === null) return t("settings.checkin.windowIssueFormat");
+  if (startMinutes >= endMinutes) return t("settings.checkin.windowIssueOrder");
   return null;
 }
 
 /** 数字参数：展示名 + 收敛边界（与输入框 min/max 同源）。 */
 interface NumberFieldSpec {
-  label: string;
+  label: MessageKey;
   min: number;
   max?: number;
 }
@@ -324,10 +329,11 @@ function resolveNumberInput(raw: string, field: NumberFieldSpec): number | null 
 }
 
 /** 空值 / 非数字的回退提示。 */
-function numberInputHint(field: NumberFieldSpec): string {
+function numberInputHint(t: Translate, field: NumberFieldSpec): string {
+  const label = t(field.label);
   return field.max === undefined
-    ? `${field.label}需为不小于 ${field.min} 的数字，已恢复为原值`
-    : `${field.label}需为 ${field.min}–${field.max} 之间的数字，已恢复为原值`;
+    ? t("settings.shared.numberHintMin", { label, min: field.min })
+    : t("settings.shared.numberHintRange", { label, min: field.min, max: field.max });
 }
 
 /** 待提交的一次落盘：编辑字段 + 成功后提示（连续编辑合并时提示取最新一次）。 */
@@ -338,25 +344,26 @@ interface SaveCommit<T> {
 
 /** 签到数字参数（后端不做范围校验，前端按这里的边界收敛后提交）。 */
 const CHECKIN_NUMBER_FIELDS = {
-  keepalive_days: { label: "保活阈值", min: 0, max: 90 },
-  lazy_refresh_hours: { label: "惰性刷新", min: 1, max: 72 },
+  keepalive_days: { label: "settings.checkin.keepaliveDays", min: 0, max: 90 },
+  lazy_refresh_hours: { label: "settings.checkin.lazyRefreshHours", min: 1, max: 72 },
 } as const satisfies Record<string, NumberFieldSpec>;
 
 type CheckinNumberKey = keyof typeof CHECKIN_NUMBER_FIELDS;
 
 /** 轮换数字参数。 */
 const ROTATE_NUMBER_FIELDS = {
-  check_interval_minutes: { label: "检查间隔", min: 1, max: 1440 },
-  cooldown_minutes: { label: "切换冷却", min: 1, max: 1440 },
-  min_gap_hours: { label: "到期差异阈值", min: 0, max: 720 },
-  min_urgency_hours: { label: "到期紧迫阈值", min: 0, max: 720 },
-  min_remaining_credits: { label: "最小剩余积分", min: 0 },
+  check_interval_minutes: { label: "settings.rotation.checkInterval", min: 1, max: 1440 },
+  cooldown_minutes: { label: "settings.rotation.cooldown", min: 1, max: 1440 },
+  min_gap_hours: { label: "settings.rotation.minGap", min: 0, max: 720 },
+  min_urgency_hours: { label: "settings.rotation.minUrgency", min: 0, max: 720 },
+  min_remaining_credits: { label: "settings.rotation.minRemainingCredits", min: 0 },
 } as const satisfies Record<string, NumberFieldSpec>;
 
 type RotateNumberKey = keyof typeof ROTATE_NUMBER_FIELDS;
 
 /** 自动签到配置 + 一键签到 + 日志（含自动旅行行）。 */
 function AutoCheckinCard() {
+  const t = useT();
   /** 自动旅行与自动签到同卡，按档位决定是否渲染该行（国际版无成长中心）。 */
   const variant = useAccountsStore((s) => s.variant);
   const accounts = useAccountsStore((s) => s.accounts);
@@ -409,7 +416,7 @@ function AutoCheckinCard() {
       savedRef.current = loaded;
       adoptSaved(loaded);
     } catch (e) {
-      toast.error("自动签到配置加载失败", { description: api.asError(e) });
+      toast.error(t("settings.checkin.loadFailed"), { description: api.asError(e) });
     }
   }
 
@@ -422,7 +429,7 @@ function AutoCheckinCard() {
   /** 落盘值回填显示：保留半填 / 非法时间段草稿，那是刻意不落盘的本地状态。 */
   function adoptSaved(next: CheckinConfig) {
     const draft = draftRef.current;
-    if (draft && checkinWindowIssue(draft.checkin_start, draft.checkin_end) !== null) {
+    if (draft && checkinWindowIssue(t, draft.checkin_start, draft.checkin_end) !== null) {
       updateCfg({ ...next, checkin_start: draft.checkin_start, checkin_end: draft.checkin_end });
       return;
     }
@@ -461,7 +468,7 @@ function AutoCheckinCard() {
       }
     } catch (e) {
       adoptSaved(saved);
-      toast.error("自动签到设置保存失败", { description: api.asError(e) });
+      toast.error(t("settings.checkin.saveFailed"), { description: api.asError(e) });
     } finally {
       if (!pendingRef.current) setSaving(false);
     }
@@ -472,7 +479,10 @@ function AutoCheckinCard() {
     const current = draftRef.current;
     if (!current) return;
     updateCfg({ ...current, enabled });
-    enqueueCheckinSave({ enabled }, { title: enabled ? "自动签到已开启" : "自动签到已关闭" });
+    enqueueCheckinSave(
+      { enabled },
+      { title: enabled ? t("settings.checkin.enabledToast") : t("settings.checkin.disabledToast") },
+    );
   }
 
   /** 数字参数：失焦 / 回车提交；空值回退原值，越界收敛，与落盘值相同则不发请求。 */
@@ -487,13 +497,13 @@ function AutoCheckinCard() {
     next[key] = value ?? saved[key];
     updateCfg(next);
     if (value === null) {
-      toast.error(numberInputHint(field));
+      toast.error(numberInputHint(t, field));
       return;
     }
     if (value === saved[key]) return;
     const edits: Partial<CheckinConfig> = {};
     edits[key] = value;
-    enqueueCheckinSave(edits, { title: `${field.label}已保存` });
+    enqueueCheckinSave(edits, { title: t("settings.shared.valueSaved", { label: t(field.label) }) });
   }
 
   /**
@@ -507,13 +517,19 @@ function AutoCheckinCard() {
     const next = { ...current };
     next[key] = value;
     updateCfg(next);
-    if (checkinWindowIssue(next.checkin_start, next.checkin_end) !== null) return;
+    if (checkinWindowIssue(t, next.checkin_start, next.checkin_end) !== null) return;
     if (next.checkin_start === saved.checkin_start && next.checkin_end === saved.checkin_end) return;
     enqueueCheckinSave(
       { checkin_start: next.checkin_start, checkin_end: next.checkin_end },
       next.checkin_start
-        ? { title: "签到时间段已保存", description: `${next.checkin_start} 至 ${next.checkin_end}` }
-        : { title: "已清除签到时间段限制" },
+        ? {
+            title: t("settings.checkin.windowSaved"),
+            description: t("settings.checkin.windowSavedDescription", {
+              start: next.checkin_start,
+              end: next.checkin_end,
+            }),
+          }
+        : { title: t("settings.checkin.windowCleared") },
     );
   }
 
@@ -526,7 +542,7 @@ function AutoCheckinCard() {
     if (!saved.checkin_start && !saved.checkin_end) return;
     enqueueCheckinSave(
       { checkin_start: "", checkin_end: "" },
-      { title: "已清除签到时间段限制" },
+      { title: t("settings.checkin.windowCleared") },
     );
   }
 
@@ -548,7 +564,7 @@ function AutoCheckinCard() {
     try {
       const res = await api.checkinAll();
       if (res.status === "skipped" && res.reason === "already_running") {
-        toast.error("签到任务正在进行，请稍后再试");
+        toast.error(t("settings.checkin.busy"));
         return;
       }
       const ok = res.accounts.filter((a) => a.result === "success").length;
@@ -559,9 +575,12 @@ function AutoCheckinCard() {
       ).length;
       const detail = res.accounts
         .filter((a) => a.result === "error")
-        .map((a) => `${a.email}（${a.error}）`)
-        .join("；");
-      const text = `签到完成：成功 ${ok}，已签 ${already}，失败 ${err}，已忽略 ${skipped} 个关闭自动签到的账号${detail ? `。${detail}` : ""}`;
+        .map((a) => t("settings.checkin.resultDetailItem", { email: a.email, error: a.error ?? "" }))
+        .join("; ");
+      const summary = t("settings.checkin.resultSummary", { ok, already, err, skipped });
+      const text = detail
+        ? t("settings.checkin.resultSummaryWithDetail", { summary, detail })
+        : summary;
       const allFailed = res.accounts.length > 0 && err === res.accounts.length;
       const allSkippedOrUnavailable =
         res.accounts.length === 0 || (ok === 0 && already === 0 && err === 0);
@@ -571,7 +590,7 @@ function AutoCheckinCard() {
       void loadConfig();
       if (logsOpen) void loadLogs();
     } catch (e) {
-      toast.error("签到失败", { description: api.asError(e) });
+      toast.error(t("settings.checkin.failed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -610,12 +629,12 @@ function AutoCheckinCard() {
   /** 逐账号开关只列出支持签到的档位（国际版签到接口未开放）。 */
   const checkinAccounts = accounts.filter((account) => variantSupportsCheckin(accountVariant(account)));
   const excludedIds = new Set(cfg?.excluded_account_ids ?? []);
-  const windowIssue = cfg ? checkinWindowIssue(cfg.checkin_start, cfg.checkin_end) : null;
+  const windowIssue = cfg ? checkinWindowIssue(t, cfg.checkin_start, cfg.checkin_end) : null;
 
   return (
     <SettingsGroup
       id="settings-auto-checkin"
-      title="自动签到"
+      title={t("settings.checkin.title")}
     >
       <CardContent className="space-y-0 p-0">
         <Accordion type="multiple" value={openSections} onValueChange={setOpenSections}>
@@ -623,20 +642,21 @@ function AutoCheckinCard() {
             <>
               <AccordionSettingsRow
                 value="params"
-                label="启用自动签到"
-                description="为允许自动签到的账号核验状态并补签；可在下方按账号关闭"
+                label={t("settings.checkin.enable")}
+                description={t("settings.checkin.enableDescription")}
                 actions={
                   <>
                     <DemoAction>
                       <Switch
-                        aria-label="启用自动签到"
+                        aria-label={t("settings.checkin.enable")}
                         checked={cfg.enabled}
                         onCheckedChange={onToggleEnabled}
                       />
                     </DemoAction>
                     <DemoAction>
                       <Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy || saving}>
-                        {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}全部立即签到
+                        {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}
+                        {t("settings.checkin.checkAll")}
                       </Button>
                     </DemoAction>
                   </>
@@ -645,11 +665,11 @@ function AutoCheckinCard() {
                 <div className={INSET_PANEL}>
                   <SettingsFieldRow
                     className={PANEL_ROW}
-                    label="签到时间段"
+                    label={t("settings.checkin.window")}
                     description={
                       <>
-                        留空为不限制。设置后每天在窗口内随机时刻自动签到。
-                        <span className="mt-0.5 block">需 App 在窗口附近运行才能按时执行。</span>
+                        {t("settings.checkin.windowDescription")}
+                        <span className="mt-0.5 block">{t("settings.checkin.windowDescriptionNote")}</span>
                       </>
                     }
                   >
@@ -659,18 +679,20 @@ function AutoCheckinCard() {
                           <TimePicker
                             className="min-w-0 flex-1 sm:flex-none"
                             value={cfg.checkin_start}
-                            hourLabel="签到开始时间（小时）"
-                            minuteLabel="签到开始时间（分钟）"
+                            hourLabel={t("settings.checkin.startHourLabel")}
+                            minuteLabel={t("settings.checkin.startMinuteLabel")}
                             onChange={(v) => onWindowChange("checkin_start", v)}
                           />
                         </DemoAction>
-                        <span className="shrink-0 text-xs text-muted-foreground">至</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {t("settings.checkin.windowSeparator")}
+                        </span>
                         <DemoAction className="min-w-0 flex-1 sm:flex-none">
                           <TimePicker
                             className="min-w-0 flex-1 sm:flex-none"
                             value={cfg.checkin_end}
-                            hourLabel="签到结束时间（小时）"
-                            minuteLabel="签到结束时间（分钟）"
+                            hourLabel={t("settings.checkin.endHourLabel")}
+                            minuteLabel={t("settings.checkin.endMinuteLabel")}
                             onChange={(v) => onWindowChange("checkin_end", v)}
                           />
                         </DemoAction>
@@ -682,7 +704,7 @@ function AutoCheckinCard() {
                               className="shrink-0"
                               onClick={clearWindow}
                             >
-                              清除
+                              {t("settings.checkin.clearWindow")}
                             </Button>
                           </DemoAction>
                         )}
@@ -697,7 +719,7 @@ function AutoCheckinCard() {
                     className={PANEL_ROW}
                     id="ac-keep"
                     spec={CHECKIN_NUMBER_FIELDS.keepalive_days}
-                    description="天；0 表示每天无条件刷新"
+                    description={t("settings.checkin.keepaliveDaysDescription")}
                     value={numDraft.keepalive_days ?? String(cfg.keepalive_days)}
                     onChange={(text) => onNumberChange("keepalive_days", text)}
                     onCommit={(raw) => onNumberCommit("keepalive_days", raw)}
@@ -706,7 +728,7 @@ function AutoCheckinCard() {
                     className={cn(PANEL_ROW, "border-b-0")}
                     id="ac-lazy"
                     spec={CHECKIN_NUMBER_FIELDS.lazy_refresh_hours}
-                    description="小时"
+                    description={t("settings.checkin.lazyRefreshHoursDescription")}
                     value={numDraft.lazy_refresh_hours ?? String(cfg.lazy_refresh_hours)}
                     onChange={(text) => onNumberChange("lazy_refresh_hours", text)}
                     onCommit={(raw) => onNumberCommit("lazy_refresh_hours", raw)}
@@ -717,12 +739,12 @@ function AutoCheckinCard() {
               {/* 逐账号开关：切换即落盘，与参数编辑共用同一条提交链。 */}
               <AccordionSettingsRow
                 value="excluded"
-                label="不参与自动签到的账号"
-                description="关闭后，后台轮次、刷新积分与全部立即签到都会跳过该账号；仍可在账号卡片进行单账号手动签到。"
+                label={t("settings.checkin.excluded")}
+                description={t("settings.checkin.excludedDescription")}
               >
                 <div className={INSET_PANEL}>
                   {checkinAccounts.length === 0 ? (
-                    <p className="py-2 text-xs text-muted-foreground">暂无可签到的账号</p>
+                    <p className="py-2 text-xs text-muted-foreground">{t("settings.checkin.noAccounts")}</p>
                   ) : (
                     checkinAccounts.map((account) => {
                       const name = displayName(account);
@@ -738,7 +760,7 @@ function AutoCheckinCard() {
                             <Switch
                               checked={!excludedIds.has(account.id)}
                               onCheckedChange={(allowed) => onAutoCheckinChange(account, allowed)}
-                              aria-label={`${name}参与自动签到`}
+                              aria-label={t("settings.checkin.accountToggle", { name })}
                             />
                           </DemoAction>
                         </div>
@@ -749,7 +771,9 @@ function AutoCheckinCard() {
               </AccordionSettingsRow>
             </>
           ) : (
-            <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
+            <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">
+              {t("settings.shared.configLoading")}
+            </p>
           )}
 
           {/* 成长中心（派猫猫旅行）仅国内版开放：国际版不渲染该行，也不请求其配置。
@@ -758,21 +782,21 @@ function AutoCheckinCard() {
 
           <AccordionSettingsRow
             value="logs"
-            label="签到日志"
-            description="保留最近 30 天；本机明文保存，可能含账号昵称。"
+            label={t("settings.checkin.logs")}
+            description={t("settings.checkin.logsDescription")}
             divider={false}
           >
             <div className={INSET_PANEL}>
               {logsError ? (
                 <p className="py-2 text-xs text-destructive">{logsError}</p>
               ) : !logs ? (
-                <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
+                <p className="py-2 text-xs text-muted-foreground">{t("settings.shared.reading")}</p>
               ) : logs.length === 0 ? (
-                <p className="py-2 text-xs text-muted-foreground">暂无签到记录</p>
+                <p className="py-2 text-xs text-muted-foreground">{t("settings.checkin.logsEmpty")}</p>
               ) : (
                 <div className="max-h-64 overflow-y-auto pr-1">
                   {[...logs].reverse().map((l, i) => {
-                    const tone = logLabel(l.result);
+                    const tone = logLabel(t, l.result);
                     return (
                       <div
                         key={i}
@@ -780,7 +804,11 @@ function AutoCheckinCard() {
                       >
                         <div className="min-w-0 flex-1 truncate">
                           <span className="font-medium">{l.email}</span>
-                          {l.error && <span className="text-destructive">（{l.error}）</span>}
+                          {l.error && (
+                            <span className="text-destructive">
+                              {t("settings.checkin.logError", { error: l.error })}
+                            </span>
+                          )}
                         </div>
                         <div className="ml-2 flex shrink-0 items-center gap-2">
                           <span
@@ -816,6 +844,7 @@ function AutoCheckinCard() {
  * 失败回滚并提示。
  */
 function AutoTravelRow() {
+  const t = useT();
   const [cfg, setCfg] = useState<TravelConfig | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -827,7 +856,7 @@ function AutoTravelRow() {
         if (!cancelled) setCfg(config);
       })
       .catch((e) => {
-        if (!cancelled) toast.error("自动旅行配置加载失败", { description: api.asError(e) });
+        if (!cancelled) toast.error(t("settings.travel.loadFailed"), { description: api.asError(e) });
       });
     return () => {
       cancelled = true;
@@ -842,13 +871,15 @@ function AutoTravelRow() {
     try {
       setCfg(await api.saveAutoTravelConfig({ ...cfg, enabled }));
       if (enabled) {
-        toast.success("自动旅行已开启", { description: "正在按官方状态派发或领取" });
+        toast.success(t("settings.travel.enabledToast"), {
+          description: t("settings.travel.enabledToastDescription"),
+        });
       } else {
-        toast.success("自动旅行已关闭");
+        toast.success(t("settings.travel.disabledToast"));
       }
     } catch (e) {
       setCfg(previous);
-      toast.error("自动旅行设置保存失败", { description: api.asError(e) });
+      toast.error(t("settings.travel.saveFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -856,8 +887,8 @@ function AutoTravelRow() {
 
   return (
     <SettingsFieldRow
-      label="启用自动旅行"
-      description="开启后按官方状态自动派发或领取旅行奖励；切换后立即生效"
+      label={t("settings.travel.enable")}
+      description={t("settings.travel.enableDescription")}
       htmlFor="at-enabled"
       operational
     >
@@ -866,7 +897,7 @@ function AutoTravelRow() {
         checked={cfg?.enabled ?? false}
         disabled={busy || !cfg}
         onCheckedChange={(v) => void onToggle(v)}
-        aria-label="启用自动旅行"
+        aria-label={t("settings.travel.enable")}
       />
     </SettingsFieldRow>
   );
@@ -874,6 +905,7 @@ function AutoTravelRow() {
 
 /** 自动轮换配置（CodeBuddy CLI）+ 手动检查 + 日志。 */
 function AutoRotateCard() {
+  const t = useT();
   const [cfg, setCfg] = useState<AutoRotateConfig | null>(null);
   const [status, setStatus] = useState<RotateStatus | null>(null);
   /** 显示草稿的同步镜像：事件回调与异步回读都要读最新值，state 只负责渲染。 */
@@ -914,7 +946,7 @@ function AutoRotateCard() {
       updateCfg(c);
       setStatus(s);
     } catch (e) {
-      toast.error("自动轮换配置加载失败", { description: api.asError(e) });
+      toast.error(t("settings.rotation.loadFailed"), { description: api.asError(e) });
     }
   }
 
@@ -962,7 +994,7 @@ function AutoRotateCard() {
       }
     } catch (e) {
       updateCfg(saved);
-      toast.error("自动轮换设置保存失败", { description: api.asError(e) });
+      toast.error(t("settings.rotation.saveFailed"), { description: api.asError(e) });
     }
   }
 
@@ -971,7 +1003,10 @@ function AutoRotateCard() {
     const current = draftRef.current;
     if (!current) return;
     updateCfg({ ...current, enabled });
-    enqueueRotateSave({ enabled }, { title: enabled ? "自动轮换已开启" : "自动轮换已关闭" });
+    enqueueRotateSave(
+      { enabled },
+      { title: enabled ? t("settings.rotation.enabledToast") : t("settings.rotation.disabledToast") },
+    );
   }
 
   /** 数字参数：失焦 / 回车提交；空值回退原值，越界收敛，与落盘值相同则不发请求。 */
@@ -986,13 +1021,13 @@ function AutoRotateCard() {
     next[key] = value ?? saved[key];
     updateCfg(next);
     if (value === null) {
-      toast.error(numberInputHint(field));
+      toast.error(numberInputHint(t, field));
       return;
     }
     if (value === saved[key]) return;
     const edits: Partial<AutoRotateConfig> = {};
     edits[key] = value;
-    enqueueRotateSave(edits, { title: `${field.label}已保存` });
+    enqueueRotateSave(edits, { title: t("settings.shared.valueSaved", { label: t(field.label) }) });
   }
 
   /** 数字输入框：输入期间只改本地草稿文本，失焦 / 回车才提交。 */

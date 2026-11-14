@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import * as api from "@/lib/api";
+import { translate } from "@/lib/i18n/translate";
 
 type CompanionState = {
   enabled: boolean | null;
@@ -66,7 +67,7 @@ export async function reloadCompanionEnabled() {
 }
 
 export async function changeCompanionEnabled(enabled: boolean): Promise<boolean> {
-  if (state.busy || state.enabled === null) throw new Error("悬浮窗状态尚未就绪");
+  if (state.busy || state.enabled === null) throw new Error(translate("lib.companion.notReady"));
   publish({ ...state, busy: true, error: null });
   try {
     const confirmed = await api.setCompanionEnabled(enabled);

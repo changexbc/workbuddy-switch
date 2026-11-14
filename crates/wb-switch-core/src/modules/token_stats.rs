@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+use crate::modules::i18n;
 use crate::modules::variant::WbVariant;
 
 /// 明细中最多返回的请求条数（响应窗口）。
@@ -283,7 +284,7 @@ fn model(value: &Value) -> String {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|model| !model.is_empty())
-        .unwrap_or("未知模型")
+        .unwrap_or(i18n::tr("Unknown model", "알 수 없는 모델"))
         .to_string()
 }
 
@@ -339,7 +340,7 @@ fn project_name(root: &Path, file: &Path) -> String {
         // Product directories commonly encode the complete absolute path.
         // Returning that would leak a user name and parent directories.
         Some(name) if !name.starts_with("Users-") && !name.starts_with("home-") => name.to_string(),
-        _ => "未知项目".to_string(),
+        _ => i18n::tr("Unknown project", "알 수 없는 프로젝트").to_string(),
     }
 }
 
@@ -582,7 +583,7 @@ fn source_from_roots(roots: &[PathBuf], name: &str, cutoff: Option<i64>, detail:
             .file_stem()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or("未知会话")
+            .unwrap_or(i18n::tr("Unknown session", "알 수 없는 세션"))
             .to_string();
         let fallback_project = project_name(root, path);
         let Ok(file) = std::fs::File::open(path) else {
@@ -797,7 +798,7 @@ fn ide_project_by_session() -> HashMap<String, String> {
             .and_then(|name| name.to_str())
             .map(str::trim)
             .filter(|name| !name.is_empty() && name.len() <= 120)
-            .unwrap_or("未知项目")
+            .unwrap_or(i18n::tr("Unknown project", "알 수 없는 프로젝트"))
             .to_string();
         let Ok(conversations) = std::fs::read_dir(path.join("conversations")) else {
             continue;
@@ -819,16 +820,16 @@ fn ide_workspace_meta(conv_index: &Path, conv_id: &str) -> (Option<String>, Stri
         .and_then(|parent| parent.parent())
         .map(|parent| parent.join("index.json"))
     else {
-        return (None, "未知模型".to_string());
+        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
     };
     let Ok(text) = std::fs::read_to_string(ws_index) else {
-        return (None, "未知模型".to_string());
+        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
     };
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return (None, "未知模型".to_string());
+        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
     };
     let Some(conversations) = value.get("conversations").and_then(Value::as_array) else {
-        return (None, "未知模型".to_string());
+        return (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string());
     };
     for conversation in conversations {
         if conversation.get("id").and_then(Value::as_str) != Some(conv_id) {
@@ -839,10 +840,10 @@ fn ide_workspace_meta(conv_index: &Path, conv_id: &str) -> (Option<String>, Stri
         let model = non_empty_text(conversation.get("selectedModelId"))
             .or_else(|| non_empty_text(conversation.get("modelId")))
             .or_else(|| non_empty_text(conversation.get("model")))
-            .unwrap_or_else(|| "未知模型".to_string());
+            .unwrap_or_else(|| i18n::tr("Unknown model", "알 수 없는 모델").to_string());
         return (title, model);
     }
-    (None, "未知模型".to_string())
+    (None, i18n::tr("Unknown model", "알 수 없는 모델").to_string())
 }
 
 fn ide_request_usage(request: &Value) -> Option<Usage> {
@@ -912,7 +913,7 @@ fn ide_session_id(path: &Path) -> String {
         .and_then(|parent| parent.file_name())
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
-        .unwrap_or("未知会话")
+        .unwrap_or(i18n::tr("Unknown session", "알 수 없는 세션"))
         .to_string()
 }
 
@@ -1036,7 +1037,7 @@ fn ide_source(
         let project = project_by_session
             .get(&lead_session_id)
             .cloned()
-            .unwrap_or_else(|| "未知项目".to_string());
+            .unwrap_or_else(|| i18n::tr("Unknown project", "알 수 없는 프로젝트").to_string());
         let members: &[usize] = match fingerprint {
             Some(fingerprint) => groups
                 .get(fingerprint)

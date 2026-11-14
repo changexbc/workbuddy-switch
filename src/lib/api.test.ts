@@ -75,7 +75,7 @@ describe("webui httpCall URL 构造", () => {
 
     await expect(getStatus()).rejects.toHaveProperty(
       "message",
-      `无法连接 workbuddy-switch 服务（${PAGE_ORIGIN}），请先运行 \`workbuddy-switch\``,
+      `Cannot reach the workbuddy-switch service (${PAGE_ORIGIN}). Start it with \`workbuddy-switch\` first.`,
     );
   });
 
@@ -85,7 +85,7 @@ describe("webui httpCall URL 构造", () => {
 
     await expect(getStatus()).rejects.toHaveProperty(
       "message",
-      "无法连接 workbuddy-switch 服务，请先运行 `workbuddy-switch`",
+      "Cannot reach the workbuddy-switch service. Start it with `workbuddy-switch` first.",
     );
   });
 });

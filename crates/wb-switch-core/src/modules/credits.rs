@@ -19,6 +19,7 @@ use crate::modules::config::{
 use crate::modules::credit_usage;
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 use crate::modules::variant::WbVariant;
+use crate::modules::i18n;
 
 /// 旧资源接口路径后缀（按档位生成完整候选，见 `WbVariant::billing_paths`）。
 const USER_RESOURCE_SUFFIX: &str = "/get-user-resource";
@@ -308,7 +309,12 @@ fn response_error(response: &Value) -> String {
         .and_then(|value| value.as_str())
         .filter(|message| !message.trim().is_empty())
         .map(|message| message.chars().take(160).collect::<String>())
-        .unwrap_or_else(|| format!("积分查询失败（code={code}）"))
+        .unwrap_or_else(|| {
+            i18n::pick(
+                format!("Credit query failed (code={code})"),
+                format!("크레딧 조회에 실패했습니다(code={code})"),
+            )
+        })
 }
 
 fn response_code(response: &Value) -> Option<i64> {
@@ -505,7 +511,7 @@ pub fn api_base_for(account: &Value) -> &'static str {
 /// 也会让上层误判为可重试（见 design D4 与 credits 既有契约）。
 async fn post_with_fallback(account: &Value, paths: &[String], body: Value) -> Value {
     let base = api_base_for(account);
-    let mut last = json!({"code": -1, "message": "无可用接口路径"});
+    let mut last = json!({"code": -1, "message": i18n::tr("No usable API path", "사용 가능한 API 경로가 없습니다")});
     for (index, path) in paths.iter().enumerate() {
         let url = format!("{base}{path}");
         let response = post_with_account(account, &url, body.clone()).await;
@@ -793,7 +799,14 @@ pub async fn get_credit_expiry(account: &Value) -> Value {
             Some(enterprise_id) => fetch_enterprise_credit(account, &enterprise_id, now).await,
             // 补不到 ID 时给出可读错误，不得回落个人版接口把企业账号显示成「暂无可用积分」。
             None => {
-                credit_error_result(account, "企业账号缺少企业 ID，无法查询企业配额".to_string())
+                credit_error_result(
+            account,
+            i18n::tr(
+                "The enterprise account has no enterprise ID, so the enterprise quota cannot be queried",
+                "기업 계정에 기업 ID가 없어 기업 할당량을 조회할 수 없습니다",
+            )
+            .to_string(),
+        )
             }
         };
     }
@@ -932,7 +945,14 @@ fn enterprise_credit_result(account: &Value, response: &Value, now: i64) -> Valu
         return credit_error_result(account, response_error(response));
     }
     let Some(usage) = parse_enterprise_usage(response) else {
-        return credit_error_result(account, "企业配额数据无法解析".to_string());
+        return credit_error_result(
+            account,
+            i18n::tr(
+                "The enterprise quota data cannot be parsed",
+                "기업 할당량 데이터를 해석할 수 없습니다",
+            )
+            .to_string(),
+        );
     };
     if usage.limit_num == -1.0 {
         // 不限量：数字字段置 null、资源列表为空；前端按 `unlimited` 分支展示，
@@ -957,7 +977,7 @@ fn enterprise_credit_result(account: &Value, response: &Value, now: i64) -> Valu
     let remaining = (usage.limit_num - usage.used).max(0.0);
     let resource = json!({
         "packageCode": Value::Null,
-        "packageName": "企业配额",
+        "packageName": i18n::tr("Enterprise quota", "기업 할당량"),
         "total": usage.limit_num,
         "remaining": remaining,
         "used": usage.used,

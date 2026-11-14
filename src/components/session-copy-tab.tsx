@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useT } from "@/lib/i18n";
 import type { VscodeSession } from "@/lib/types";
 
 /**
@@ -45,11 +46,12 @@ export function SessionCopyTab({
   collapsed,
   onToggleCollapsed,
 }: SessionCopyTabProps) {
+  const t = useT();
   return (
     <>
       <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium">复制会话到目标账号</div>
+          <div className="text-sm font-medium">{t("sessions.copyTab.copyToTarget")}</div>
           {loading ? (
             // 单行高度对齐真实提示文案（实测常见态折一行，16px），加载完成后不跳高度。
             <Skeleton className="h-4 w-3/4" aria-hidden="true" />
@@ -67,7 +69,7 @@ export function SessionCopyTab({
           checked={enabled}
           onCheckedChange={onEnabledChange}
           disabled={loading || !hasCopyable}
-          aria-label="复制会话到目标账号"
+          aria-label={t("sessions.copyTab.copyToTarget")}
         />
       </div>
 
@@ -82,10 +84,11 @@ export function SessionCopyTab({
                 <Skeleton className="h-9 w-full" />
               </div>
             ) : (
-              groups.map((group) => {
+              groups.map((group, groupIndex) => {
                 const open_ = !collapsed.has(group.key);
                 const ids = group.sessions.map((s) => s.id);
                 const state = selectionState(ids, selected);
+                const label = t("sessions.copyTab.workspaceLabel", { index: groupIndex + 1 });
                 return (
                   <div key={group.key} className="mb-0.5">
                     <div className="sticky top-0 z-10 flex items-center gap-1.5 rounded-md bg-background px-1.5 py-1">
@@ -93,17 +96,19 @@ export function SessionCopyTab({
                         allOn={state.allOn}
                         someOn={state.someOn}
                         onChange={() => onToggleGroup(ids)}
-                        ariaLabel={`选择${group.label}`}
+                        ariaLabel={t("sessions.copyTab.selectGroupAria", { label })}
                       />
                       <button
                         type="button"
                         className="flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-accent/50"
                         onClick={() => onToggleCollapsed(group.key)}
                         aria-expanded={open_}
-                        aria-label={`${open_ ? "折叠" : "展开"}${group.label}`}
+                        aria-label={open_
+                          ? t("sessions.copyTab.collapseAria", { label })
+                          : t("sessions.copyTab.expandAria", { label })}
                       >
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                          {group.label}
+                          {label}
                           <span className="ml-1 font-normal text-muted-foreground">
                             #{group.hash.slice(0, 8)} · {group.sessions.length}
                           </span>
@@ -137,7 +142,6 @@ export function SessionCopyTab({
 
 export interface WorkspaceGroup {
   key: string;
-  label: string;
   hash: string;
   sessions: VscodeSession[];
 }
@@ -153,10 +157,9 @@ export function buildGroups(sessions: VscodeSession[]): WorkspaceGroup[] {
   }
   const entries = [...byHash.entries()];
   entries.sort((left, right) => maxUpdatedAt(right[1]) - maxUpdatedAt(left[1]));
-  return entries.map(([hash, list], index) => ({
+  return entries.map(([hash, list]) => ({
     key: hash,
     hash,
-    label: `工作区 #${index + 1}`,
     sessions: [...list].sort((left, right) => right.updatedAt - left.updatedAt),
   }));
 }
@@ -200,12 +203,13 @@ function SessionRow({
   checked: boolean;
   onToggle: () => void;
 }) {
+  const t = useT();
   return (
     <label className="flex cursor-pointer items-center gap-2.5 rounded-md py-1.5 pl-7 pr-2 hover:bg-accent/50">
       <Checkbox
         checked={checked}
         onCheckedChange={onToggle}
-        aria-label={`选择会话 ${session.title}`}
+        aria-label={t("sessions.copyTab.selectSessionAria", { title: session.title })}
       />
       <span className="min-w-0 flex-1 truncate text-sm" title={session.title}>
         {session.title}
@@ -216,7 +220,7 @@ function SessionRow({
         </span>
       )}
       <Badge variant="outline" className="shrink-0 text-[10px]">
-        有正文
+        {t("sessions.copyTab.hasBody")}
       </Badge>
     </label>
   );

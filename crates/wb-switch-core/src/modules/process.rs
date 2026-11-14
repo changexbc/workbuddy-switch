@@ -17,6 +17,7 @@ use crate::modules::auth_file;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::modules::config;
 use crate::modules::variant::WbVariant;
+use crate::modules::i18n;
 
 /// 创建子进程命令。Windows 上加 CREATE_NO_WINDOW，避免每次执行 tasklist/powershell
 /// 等控制台命令时闪出 cmd 黑窗口（GUI 应用卡顿/跳动的主因）。
@@ -937,10 +938,17 @@ fn close_workbuddy_macos(variant: WbVariant, timeout_secs: i64) -> Result<(), St
         return Ok(());
     }
     let pids: Vec<String> = leftover.iter().map(|pid| pid.to_string()).collect();
-    Err(format!(
-        "WorkBuddy 进程无法完全关闭（残留进程: {}）。请手动执行: kill -9 {}",
-        pids.join(", "),
-        pids.join(" ")
+    Err(i18n::pick(
+        format!(
+            "WorkBuddy processes could not be fully closed (remaining processes: {}). Please run manually: kill -9 {}",
+            pids.join(", "),
+            pids.join(" ")
+        ),
+        format!(
+            "WorkBuddy 프로세스를 완전히 종료하지 못했습니다(남은 프로세스: {}). 직접 실행해 주세요: kill -9 {}",
+            pids.join(", "),
+            pids.join(" ")
+        ),
     ))
 }
 
@@ -974,11 +982,17 @@ fn validate_macos_startup(
             match seen_at {
                 None => {
                     seen_at = Some(now);
-                    say("WorkBuddy 窗口已出现，正在确认稳定运行…");
+                    say(i18n::tr(
+                        "The WorkBuddy window has appeared; confirming it stays running…",
+                        "WorkBuddy 창이 나타났습니다. 안정적으로 실행되는지 확인하는 중…",
+                    ));
                 }
                 Some(start) => {
                     if now.duration_since(start) >= sustain {
-                        say("WorkBuddy 已确认运行。");
+                        say(i18n::tr(
+                            "WorkBuddy is confirmed running.",
+                            "WorkBuddy가 실행 중임을 확인했습니다.",
+                        ));
                         return Ok(());
                     }
                     // 心跳：出现后每 ~2s 推一次（首拍从 ~2s 起，不推 0s），
@@ -990,21 +1004,37 @@ fn validate_macos_startup(
                             .unwrap_or(true);
                     if due {
                         last_beat = Some(now);
-                        say(&format!("已稳定运行 {}s / 10s…", since_seen.as_secs()));
+                        say(&i18n::pick(
+                            format!(
+                                "Running steadily for {}s / 10s…",
+                                since_seen.as_secs()
+                            ),
+                            format!(
+                                "{}초 / 10초 동안 안정적으로 실행 중…",
+                                since_seen.as_secs()
+                            ),
+                        ));
                     }
                 }
             }
         } else if seen_at.is_some() {
-            return Err(
-                "WorkBuddy 启动后立即退出，疑似残留单例锁。请手动打开一次 WorkBuddy 后再试。"
-                    .to_string(),
-            );
+            return Err(i18n::tr(
+                "WorkBuddy exited right after launch, likely due to a leftover single-instance lock. Open WorkBuddy manually once and try again.",
+                "WorkBuddy가 시작 직후 종료되었습니다. 남은 단일 인스턴스 잠금이 원인일 수 있습니다. WorkBuddy를 직접 한 번 실행한 뒤 다시 시도해 주세요.",
+            )
+            .to_string());
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    Err(format!(
-        "WorkBuddy 启动超时，未能确认运行（路径: {}）。请手动打开排查。",
-        app.display()
+    Err(i18n::pick(
+        format!(
+            "Timed out waiting for WorkBuddy to start and could not confirm it is running (path: {}). Open it manually to investigate.",
+            app.display()
+        ),
+        format!(
+            "WorkBuddy 시작이 시간 초과되어 실행 여부를 확인하지 못했습니다(경로: {}). 직접 실행해 확인해 주세요.",
+            app.display()
+        ),
     ))
 }
 
@@ -1024,9 +1054,15 @@ fn launch_workbuddy_macos(
     };
     let app = macos_workbuddy_app_path(variant);
     if !is_app_bundle(&app) {
-        return Err(format!(
-            "未找到 WorkBuddy 应用（尝试路径: {}）。请先手动打开一次 WorkBuddy 后重试。",
-            app.display()
+        return Err(i18n::pick(
+            format!(
+                "WorkBuddy app not found (tried path: {}). Open WorkBuddy manually once and try again.",
+                app.display()
+            ),
+            format!(
+                "WorkBuddy 앱을 찾지 못했습니다(시도한 경로: {}). WorkBuddy를 직접 한 번 실행한 뒤 다시 시도해 주세요.",
+                app.display()
+            ),
         ));
     }
 
@@ -1034,13 +1070,16 @@ fn launch_workbuddy_macos(
     let bundle_patterns = macos_bundle_patterns(Some(&app), variant);
     let bundle_pids = macos_pids_by_patterns(&bundle_patterns);
     if !bundle_pids.is_empty() {
-        say("正在清理残留进程…");
+        say(i18n::tr(
+            "Cleaning up leftover processes…",
+            "남은 프로세스를 정리하는 중…",
+        ));
         kill_macos_pids(&bundle_pids);
         let _ = wait_macos_patterns_empty(&bundle_patterns, Duration::from_secs(5));
     }
 
     // open -n -a <app>：同步执行并检查退出码
-    say("正在启动 WorkBuddy…");
+    say(i18n::tr("Starting WorkBuddy…", "WorkBuddy를 시작하는 중…"));
     let app_lossy = app.to_string_lossy();
     let open = run_cmd_timeout("open", &["-n", "-a", app_lossy.as_ref()], 10);
     match open {
@@ -1048,19 +1087,34 @@ fn launch_workbuddy_macos(
         Some(out) => {
             let reason = String::from_utf8_lossy(&out.stderr).trim().to_string();
             let reason = if reason.is_empty() {
-                format!("open 退出码 {}", out.status.code().unwrap_or(-1))
+                i18n::pick(
+                    format!("open exited with code {}", out.status.code().unwrap_or(-1)),
+                    format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)),
+                )
             } else {
                 reason
             };
-            return Err(format!(
-                "启动 WorkBuddy 失败: {reason}（路径: {}）",
-                app.display()
+            return Err(i18n::pick(
+                format!(
+                    "Could not start WorkBuddy: {reason} (path: {})",
+                    app.display()
+                ),
+                format!(
+                    "WorkBuddy를 시작하지 못했습니다: {reason}(경로: {})",
+                    app.display()
+                ),
             ));
         }
         None => {
-            return Err(format!(
-                "启动 WorkBuddy 失败: open 超时（路径: {}）",
-                app.display()
+            return Err(i18n::pick(
+                format!(
+                    "Could not start WorkBuddy: open timed out (path: {})",
+                    app.display()
+                ),
+                format!(
+                    "WorkBuddy를 시작하지 못했습니다: open 시간 초과(경로: {})",
+                    app.display()
+                ),
             ));
         }
     }
@@ -1128,7 +1182,11 @@ pub fn close_workbuddy(variant: WbVariant, timeout_secs: i64) -> Result<(), Stri
         if wait_process_gone(variant, timeout_secs as f64) {
             return Ok(());
         }
-        Err("WorkBuddy 进程无法关闭，请手动结束 workbuddy 进程".to_string())
+        Err(i18n::tr(
+            "WorkBuddy processes could not be closed; please end the workbuddy process manually",
+            "WorkBuddy 프로세스를 종료하지 못했습니다. workbuddy 프로세스를 직접 종료해 주세요",
+        )
+        .to_string())
     }
 }
 
@@ -1164,7 +1222,11 @@ fn close_workbuddy_windows(variant: WbVariant, timeout_secs: i64) -> Result<(), 
     if leftover.is_empty() {
         return Ok(());
     }
-    Err("WorkBuddy 进程无法关闭，请手动结束 WorkBuddy/CodeBuddy 进程".to_string())
+    Err(i18n::tr(
+        "WorkBuddy processes could not be closed; please end the WorkBuddy/CodeBuddy processes manually",
+        "WorkBuddy 프로세스를 종료하지 못했습니다. WorkBuddy/CodeBuddy 프로세스를 직접 종료해 주세요",
+    )
+    .to_string())
 }
 
 /// 启动 WorkBuddy。失败返回可读错误。对照 `launch_workbuddy`。
@@ -1193,9 +1255,15 @@ pub fn launch_workbuddy(variant: WbVariant, progress: Option<&dyn Fn(&str)>) -> 
                 app.join(default_exe)
             };
             if !exe.exists() {
-                return Err(format!(
-                    "未找到 WorkBuddy 程序（尝试路径: {}）。请在 Windows 上打开 WorkBuddy 后重试。",
-                    exe.display()
+                return Err(i18n::pick(
+                    format!(
+                        "WorkBuddy program not found (tried path: {}). Open WorkBuddy on Windows and try again.",
+                        exe.display()
+                    ),
+                    format!(
+                        "WorkBuddy 프로그램을 찾지 못했습니다(시도한 경로: {}). Windows에서 WorkBuddy를 실행한 뒤 다시 시도해 주세요.",
+                        exe.display()
+                    ),
                 ));
             }
             persist_workbuddy_exe(&exe, variant);
@@ -1203,7 +1271,15 @@ pub fn launch_workbuddy(variant: WbVariant, progress: Option<&dyn Fn(&str)>) -> 
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|e| format!("启动 WorkBuddy 失败: {e}（路径: {}）", exe.display()))?;
+                .map_err(|e| {
+                    i18n::pick(
+                        format!("Could not start WorkBuddy: {e} (path: {})", exe.display()),
+                        format!(
+                            "WorkBuddy를 시작하지 못했습니다: {e}(경로: {})",
+                            exe.display()
+                        ),
+                    )
+                })?;
             Ok(())
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { ChevronDown, ChevronRight, Folder } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { useT, type Translate } from "@/lib/i18n";
 import type { Session } from "@/lib/types";
 
 /**
@@ -65,6 +66,7 @@ export function SessionPickRow({
   /** 行尾附加内容（会话管理页展示副本状态）；缺省不渲染。 */
   trailing?: ReactNode;
 }) {
+  const t = useT();
   return (
     <label
       className={`flex cursor-pointer items-center gap-2.5 rounded-md py-1.5 pr-2 hover:bg-accent/50 ${indentClass}`}
@@ -80,7 +82,7 @@ export function SessionPickRow({
       </span>
       {session.hasHistory && (
         <Badge variant="outline" className="shrink-0 text-[10px]">
-          有内容
+          {t("sessions.tree.hasContent")}
         </Badge>
       )}
       {trailing}
@@ -89,15 +91,15 @@ export function SessionPickRow({
 }
 
 /** WorkBuddy 侧栏文件夹名：cwd 最后一段。 */
-export function sessionFolderLabel(cwd: string): string {
+export function sessionFolderLabel(cwd: string, t: Translate): string {
   const normalized = cwd.trim().replace(/[\\/]+$/, "");
-  if (!normalized) return "未分组";
+  if (!normalized) return t("sessions.tree.ungrouped");
   const parts = normalized.split(/[\\/]/);
   return parts[parts.length - 1] || normalized;
 }
 
 /** 按工作目录分组，文件夹顺序跟会话一样按最近活动排。 */
-export function groupSessionsByFolder(sessions: Session[]): FolderGroup[] {
+export function groupSessionsByFolder(sessions: Session[], t: Translate): FolderGroup[] {
   const groups = new Map<string, Session[]>();
   const order: string[] = [];
   for (const session of sessions) {
@@ -112,24 +114,24 @@ export function groupSessionsByFolder(sessions: Session[]): FolderGroup[] {
   }
   return order.map((key) => ({
     key,
-    label: key === "__none__" ? "未分组" : sessionFolderLabel(key),
+    label: key === "__none__" ? t("sessions.tree.ungrouped") : sessionFolderLabel(key, t),
     sessions: groups.get(key) ?? [],
   }));
 }
 
 /** 对齐 WorkBuddy 侧栏：任务（playground）平铺，空间按文件夹分组。 */
-export function buildSessionTree(sessions: Session[]): KindGroup[] {
+export function buildSessionTree(sessions: Session[], t: Translate): KindGroup[] {
   const tasks = sessions.filter((s) => s.isPlayground);
   const spaces = sessions.filter((s) => !s.isPlayground);
   const groups: KindGroup[] = [];
   if (tasks.length > 0) {
-    groups.push({ key: "task", label: "任务", count: tasks.length, sessions: tasks });
+    groups.push({ key: "task", label: t("sessions.tree.tasks"), count: tasks.length, sessions: tasks });
   }
   if (spaces.length > 0) {
-    const folders = groupSessionsByFolder(spaces);
+    const folders = groupSessionsByFolder(spaces, t);
     groups.push({
       key: "space",
-      label: "空间",
+      label: t("sessions.tree.spaces"),
       count: folders.length,
       sessions: spaces,
       folders,
@@ -164,9 +166,10 @@ export function SessionTreeList({
   renderTrailing?: (session: Session) => ReactNode;
   className?: string;
 }) {
+  const t = useT();
   return (
     <div className={className}>
-      {buildSessionTree(sessions).map((kind) => {
+      {buildSessionTree(sessions, t).map((kind) => {
         const kindOpen = expanded.has(kind.key);
         const kindSel = selectionState(kind.sessions, selected);
         return (
@@ -176,14 +179,16 @@ export function SessionTreeList({
                 allOn={kindSel.allOn}
                 someOn={kindSel.someOn}
                 onChange={() => onToggleGroup(kind.sessions.map((s) => s.id))}
-                ariaLabel={`选择${kind.label}`}
+                ariaLabel={t("sessions.tree.selectAria", { label: kind.label })}
               />
               <button
                 type="button"
                 className="flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-accent/50"
                 onClick={() => onToggleExpanded(kind.key)}
                 aria-expanded={kindOpen}
-                aria-label={`${kindOpen ? "折叠" : "展开"}${kind.label}`}
+                aria-label={kindOpen
+                  ? t("sessions.tree.collapseAria", { label: kind.label })
+                  : t("sessions.tree.expandAria", { label: kind.label })}
               >
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
                   {kind.label}
@@ -219,14 +224,16 @@ export function SessionTreeList({
                         allOn={folderSel.allOn}
                         someOn={folderSel.someOn}
                         onChange={() => onToggleGroup(folder.sessions.map((s) => s.id))}
-                        ariaLabel={`选择文件夹 ${folder.label}`}
+                        ariaLabel={t("sessions.tree.selectFolderAria", { label: folder.label })}
                       />
                       <button
                         type="button"
                         className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-accent/50"
                         onClick={() => onToggleExpanded(folder.key)}
                         aria-expanded={folderOpen}
-                        aria-label={`${folderOpen ? "折叠" : "展开"}文件夹 ${folder.label}`}
+                        aria-label={folderOpen
+                          ? t("sessions.tree.collapseFolderAria", { label: folder.label })
+                          : t("sessions.tree.expandFolderAria", { label: folder.label })}
                       >
                         <Folder className="size-3.5 shrink-0 text-muted-foreground" />
                         <span className="min-w-0 flex-1 truncate text-sm">{folder.label}</span>

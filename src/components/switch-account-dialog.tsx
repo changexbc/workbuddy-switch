@@ -20,6 +20,7 @@ import { SessionSyncSection, type SessionLinksMeta } from "@/components/session-
 import { SessionTreeList } from "@/components/session-tree";
 import * as api from "@/lib/api";
 import { displayName } from "@/lib/account-display";
+import { useT, type Translate } from "@/lib/i18n";
 import { accountVariant, variantAppName } from "@/lib/variant";
 import type {
   AccountMeta,
@@ -59,9 +60,9 @@ function tabCount(count: number) {
 const LIST_MIN_H = "min-h-[min(7.5rem,26vh)]";
 
 /** 临时备份残留的可读描述：优先标题，其次会话 id，最后操作 id。 */
-function describeTemporaryFile(item: TemporaryFileInfo): string {
+function describeTemporaryFile(item: TemporaryFileInfo, t: Translate): string {
   const label = item.title || item.sessionId || item.operationId;
-  return `${label}：${item.reason}`;
+  return t("dialogs.common.itemError", { label, error: item.reason });
 }
 
 /** 同一操作只保留一条：复制 / 同步 / 恢复三个报告可能重复上报同一残留。 */
@@ -79,6 +80,7 @@ function dedupeTemporaryFiles(items: TemporaryFileInfo[]): TemporaryFileInfo[] {
 
 /** 切换账号弹窗：可勾选当前账号的会话复制到目标账号（路径 B）。 */
 export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Props) {
+  const t = useT();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -182,7 +184,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   async function doSwitch() {
     if (!account) return;
     setBusy(true);
-    setProgress("正在切换账号…");
+    setProgress(t("dialogs.common.switchingAccount"));
     setError("");
     const requestedCopy = selected.size > 0;
     const requestedSync = syncSelections.length > 0;
@@ -199,36 +201,48 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       const copiedCount = copyReport?.copied?.length ?? 0;
       const linkedCount = copyReport?.alreadyLinked?.length ?? 0;
       const copyErrors = copyReport?.errors ?? [];
-      if (copiedCount > 0) parts.push(`已复制 ${copiedCount} 个会话`);
-      if (linkedCount > 0) parts.push(`已关联 ${linkedCount} 个之前复制过的会话`);
-      if (copyErrors.length > 0) parts.push(`会话复制失败 ${copyErrors.length} 个`);
+      if (copiedCount > 0) parts.push(t("dialogs.common.copiedCount", { count: copiedCount }));
+      if (linkedCount > 0) parts.push(t("dialogs.switch.linkedCount", { count: linkedCount }));
+      if (copyErrors.length > 0) {
+        parts.push(t("dialogs.switch.copyFailedCount", { count: copyErrors.length }));
+      }
       const syncReport = res.sessionSync;
       const syncedItems = syncReport?.synced ?? [];
       const skippedItems = syncReport?.skipped ?? [];
       const syncErrors = syncReport?.errors ?? [];
-      if (syncedItems.length > 0) parts.push(`已同步 ${syncedItems.length} 个会话`);
-      if (skippedItems.length > 0) parts.push(`跳过 ${skippedItems.length} 个会话`);
-      if (syncErrors.length > 0) parts.push(`会话同步失败 ${syncErrors.length} 个`);
-      if (res.backup) parts.push(`备份: ${res.backup}`);
+      if (syncedItems.length > 0) {
+        parts.push(t("dialogs.common.syncedCount", { count: syncedItems.length }));
+      }
+      if (skippedItems.length > 0) {
+        parts.push(t("dialogs.switch.skippedCount", { count: skippedItems.length }));
+      }
+      if (syncErrors.length > 0) {
+        parts.push(t("dialogs.switch.syncFailedCount", { count: syncErrors.length }));
+      }
+      if (res.backup) parts.push(t("dialogs.switch.backup", { path: res.backup }));
       // 成功清理：临时备份已回收，不再展示可还原路径；待清理项单独提示，不写进成功文案。
-      toast.success(`已切换至「${nickname}」`, {
-        description: parts.length ? parts.join("；") : `${variantAppName(accountVariant(account))} 已重启为目标账号。`,
+      toast.success(t("dialogs.common.switchedTo", { name: nickname }), {
+        description: parts.length
+          ? parts.join(t("dialogs.common.separator"))
+          : t("dialogs.switch.description", { app: variantAppName(accountVariant(account)) }),
       });
       // 复制失败或被后端跳过时必须显式提示，不能静默当成成功。
       if (copyReport?.error) {
-        toast.error("会话复制未执行", { description: copyReport.error });
+        toast.error(t("dialogs.switch.copyNotRun"), { description: copyReport.error });
       } else if (copyErrors.length > 0) {
         // 失败提示必须带会话标识（能取标题时优先标题），不是只有原因。
         const sessionLabel = (id: string) =>
           sessions.find((item) => item.id === id)?.title || id;
-        toast.error("部分会话未复制", {
+        toast.error(t("dialogs.switch.copyPartialFailed"), {
           description: copyErrors
-            .map((item) => `${sessionLabel(item.id)}：${item.error}`)
-            .join("；"),
+            .map((item) =>
+              t("dialogs.common.itemError", { label: sessionLabel(item.id), error: item.error }),
+            )
+            .join(t("dialogs.common.separator")),
         });
       } else if (requestedCopy && !copyReport) {
-        toast.warning("会话未复制", {
-          description: "没有收到复制结果：当前版本可能不支持复制会话；账号已切换，但会话没有复制。",
+        toast.warning(t("dialogs.switch.copyMissing"), {
+          description: t("dialogs.switch.copyMissingDescription"),
         });
       }
       // 同步结果：成功、跳过、失败与恢复信息都要能看到，不能只显示成功数。
@@ -236,33 +250,42 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         syncGroups.find((group) => group.groupId === groupId)?.title || groupId;
       // 失败与跳过合并成一条提示：两者可能同时出现，不能只报其中一类。
       const syncIssues = [
-        ...syncErrors.map(
-          (item) => `${item.groupId ? groupLabel(item.groupId) : "全部会话"}：${item.error}`,
+        ...syncErrors.map((item) =>
+          t("dialogs.common.itemError", {
+            label: item.groupId ? groupLabel(item.groupId) : t("dialogs.common.allSessions"),
+            error: item.error,
+          }),
         ),
         // 预览过期/前置条件变化一律跳过并给出原因，绝不显示成已同步。
-        ...skippedItems.map((item) => `${groupLabel(item.groupId)}：${item.message}`),
+        ...skippedItems.map((item) =>
+          t("dialogs.common.itemError", { label: groupLabel(item.groupId), error: item.message }),
+        ),
       ];
       if (syncIssues.length > 0) {
         if (syncErrors.length > 0) {
-          toast.error("部分会话没有同步（失败或已跳过）", { description: syncIssues.join("；") });
+          toast.error(t("dialogs.switch.syncPartialFailed"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         } else {
-          toast.warning("有会话没有同步（已跳过）", { description: syncIssues.join("；") });
+          toast.warning(t("dialogs.switch.syncSkipped"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         }
       } else if (requestedSync && !syncReport) {
-        toast.warning("会话同步未执行", {
-          description: "没有收到同步结果：当前版本可能不支持同步会话，或本次切换没有重启应用。",
+        toast.warning(t("dialogs.switch.syncNotRun"), {
+          description: t("dialogs.switch.syncNotRunDescription"),
         });
       }
       if (syncReport?.needsRecovery) {
-        toast.error("有会话同步没有完成", {
-          description: "已保留操作记录与备份，下次切换会先恢复；恢复完成前不会再改动目标账号的内容。",
+        toast.error(t("dialogs.switch.syncIncomplete"), {
+          description: t("dialogs.switch.syncIncompleteDescription"),
         });
       }
       // 未完成的会话写入：可重试项只提示，阻断项由后端直接返回错误。
       const recoveryIssues = res.sessionRecovery?.needsRecovery ?? [];
       if (recoveryIssues.length > 0) {
-        toast.error("有会话操作没有完成", {
-          description: recoveryIssues.map((issue) => issue.reason).join("；"),
+        toast.error(t("dialogs.switch.recoveryIncomplete"), {
+          description: recoveryIssues.map((issue) => issue.reason).join(t("dialogs.common.separator")),
         });
       }
       // 临时备份残留：待清理说明重试入口；待恢复说明必须保留材料并给出下一步。
@@ -278,24 +301,33 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       if (temporaryFiles.length === 0) {
         for (const item of copyReport?.copied ?? []) {
           if (item.cleanupState === "pending") {
-            pendingCleanupReasons.push(item.cleanupError ?? "临时文件待清理");
+            pendingCleanupReasons.push(item.cleanupError ?? t("dialogs.switch.temporaryFilePending"));
           }
         }
         for (const item of syncedItems) {
           if (item.cleanupState === "pending") {
-            pendingCleanupReasons.push(item.cleanupError ?? "临时文件待清理");
+            pendingCleanupReasons.push(item.cleanupError ?? t("dialogs.switch.temporaryFilePending"));
           }
         }
       }
       if (pendingCleanupReasons.length > 0 || pendingFiles.length > 0) {
-        const details = [...pendingCleanupReasons, ...pendingFiles.map(describeTemporaryFile)];
-        toast.warning("会话已完成，部分临时文件待清理", {
-          description: `${details.join("；")}。下次切号时会自动重试清理。`,
+        const details = [
+          ...pendingCleanupReasons,
+          ...pendingFiles.map((item) => describeTemporaryFile(item, t)),
+        ];
+        toast.warning(t("dialogs.switch.cleanupPending"), {
+          description: t("dialogs.switch.cleanupPendingDescription", {
+            details: details.join(t("dialogs.common.separator")),
+          }),
         });
       }
       if (recoveryFiles.length > 0) {
-        toast.error("有临时备份需要确认", {
-          description: `${recoveryFiles.map(describeTemporaryFile).join("；")}。已保留现场，请按提示处理后重试。`,
+        toast.error(t("dialogs.switch.recoveryNeeded"), {
+          description: t("dialogs.switch.recoveryNeededDescription", {
+            details: recoveryFiles
+              .map((item) => describeTemporaryFile(item, t))
+              .join(t("dialogs.common.separator")),
+          }),
         });
       }
       onOpenChange(false);

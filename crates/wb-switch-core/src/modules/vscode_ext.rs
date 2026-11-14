@@ -25,6 +25,7 @@ use crate::modules::codebuddy_cn_ide::{match_account_for_token, parse_token_from
 use crate::modules::config::{atomic_write, now_ms, store_dir};
 use crate::modules::process;
 use crate::modules::variant::codebuddy_domain_for;
+use crate::modules::i18n;
 use crate::modules::vscode_cn_inject::{
     has_secret_row_for, inject_secret_for, read_secret_for, state_db_path_for,
     VscodeSafeStorageTarget,
@@ -117,9 +118,9 @@ fn describe_secret_error(err: String) -> String {
     if err.contains("Unexpected ciphertext prefix")
         || err.contains("Unsupported Linux ciphertext prefix")
     {
-        format!(
-            "{err}\n\n检测到 VS Code 使用了当前版本不支持的 Safe Storage 加密前缀（可能是 Chromium 127+ 的 v20 app-bound 加密）。目前仅支持 v10，请反馈该问题。"
-        )
+        i18n::pick(format!("{err}\n\nVS Code is using a Safe Storage encryption prefix this version does not support (likely v20 app-bound encryption from Chromium 127+). Only v10 is supported; please report this issue."
+        ), format!("{err}\n\nVS Code가 이 버전에서 지원하지 않는 Safe Storage 암호화 접두사를 사용하고 있습니다(Chromium 127+의 v20 app-bound 암호화 가능성). 현재 v10만 지원되므로 이 문제를 알려 주세요."
+        ))
     } else {
         err
     }
@@ -454,8 +455,12 @@ pub fn status() -> Value {
 const VSCODE_CLOSE_TIMEOUT_SECS: i64 = 60;
 
 /// 运行中 + 手动模式（`restart=false`）的报错文案：与改造前逐字一致。
-const RUNNING_MANUAL_HINT: &str =
-    "检测到 VS Code 正在运行，请先完全退出后再切换，否则写入会被 VS Code 覆盖。";
+fn running_manual_hint() -> &'static str {
+    i18n::tr(
+        "VS Code is running. Quit it completely before switching, otherwise VS Code will overwrite the written data.",
+        "VS Code가 실행 중입니다. 전환하기 전에 완전히 종료해 주세요. 그렇지 않으면 기록한 내용을 VS Code가 덮어씁니다.",
+    )
+}
 
 /// 关闭前采集的 VS Code 运行实例快照。
 ///
@@ -522,10 +527,11 @@ fn running_instance() -> RunningInstance {
 /// 关闭超时文案：列出剩余 PID 与可操作提示（**不做强杀**）。
 fn close_timeout_error(alive: &[u32]) -> String {
     let pids: Vec<String> = alive.iter().map(|pid| pid.to_string()).collect();
-    format!(
-        "等待 VS Code 退出超时（仍有进程运行: {}）。请在 VS Code 中处理保存提示；若你在等待期间重新打开过 VS Code，请退出后重试。",
+    i18n::pick(format!("Timed out waiting for VS Code to quit (processes still running: {}). Handle the save prompts in VS Code; if you reopened VS Code while waiting, quit it and try again.",
         pids.join(", ")
-    )
+    ), format!("VS Code 종료를 기다리다 시간이 초과되었습니다(아직 실행 중인 프로세스: {}). VS Code에서 저장 확인 창을 처리해 주세요. 기다리는 동안 VS Code를 다시 열었다면 종료한 뒤 다시 시도해 주세요.",
+        pids.join(", ")
+    ))
 }
 
 /// 优雅关闭 VS Code → 等待进程消失；超时返回可读错误，**绝不强杀**。
@@ -623,7 +629,7 @@ fn close_vscode(pids: &[u32], timeout_secs: i64) -> Result<(), String> {
 fn open_error_reason(out: &std::process::Output) -> String {
     let reason = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if reason.is_empty() {
-        format!("open 退出码 {}", out.status.code().unwrap_or(-1))
+        i18n::pick(format!("open exited with code {}", out.status.code().unwrap_or(-1)), format!("open 종료 코드 {}", out.status.code().unwrap_or(-1)))
     } else {
         reason
     }
@@ -642,25 +648,29 @@ fn launch_vscode(inst: &RunningInstance) -> Result<(), String> {
                 let app = bundle.to_string_lossy().into_owned();
                 match process::run_cmd_timeout("open", &[app.as_str()], 10) {
                     Some(out) if out.status.success() => Ok(()),
-                    Some(out) => Err(format!(
-                        "重新打开 VS Code 失败: {}（路径: {}）",
+                    Some(out) => Err(i18n::pick(format!("Could not reopen VS Code: {} (path: {})",
                         open_error_reason(&out),
                         bundle.display()
-                    )),
-                    None => Err(format!(
-                        "重新打开 VS Code 失败: open 超时（路径: {}）",
+                    ), format!("VS Code를 다시 열지 못했습니다: {}(경로: {})",
+                        open_error_reason(&out),
                         bundle.display()
-                    )),
+                    ))),
+                    None => Err(i18n::pick(format!("Could not reopen VS Code: open timed out (path: {})",
+                        bundle.display()
+                    ), format!("VS Code를 다시 열지 못했습니다: open 시간 초과(경로: {})",
+                        bundle.display()
+                    ))),
                 }
             }
             // 退化：记录不到 bundle 路径时按 bundle id 打开。
             None => match process::run_cmd_timeout("open", &["-b", "com.microsoft.VSCode"], 10) {
                 Some(out) if out.status.success() => Ok(()),
-                Some(out) => Err(format!(
-                    "重新打开 VS Code 失败: {}",
+                Some(out) => Err(i18n::pick(format!("Could not reopen VS Code: {}",
                     open_error_reason(&out)
-                )),
-                None => Err("重新打开 VS Code 失败: open 超时".to_string()),
+                ), format!("VS Code를 다시 열지 못했습니다: {}",
+                    open_error_reason(&out)
+                ))),
+                None => Err(i18n::tr("Could not reopen VS Code: open timed out", "VS Code를 다시 열지 못했습니다: open 시간 초과").to_string()),
             },
         }
     }
@@ -668,13 +678,13 @@ fn launch_vscode(inst: &RunningInstance) -> Result<(), String> {
     {
         let exe = inst
             .launch_target()
-            .ok_or_else(|| "未能记录 VS Code 可执行文件路径，请手动打开 VS Code".to_string())?
+            .ok_or_else(|| i18n::tr("Could not record the VS Code executable path; open VS Code manually", "VS Code 실행 파일 경로를 기록하지 못했습니다. VS Code를 직접 실행해 주세요").to_string())?
             .to_path_buf();
         process::cmd_builder(&exe)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("重新打开 VS Code 失败: {e}（路径: {}）", exe.display()))?;
+            .map_err(|e| i18n::pick(format!("Could not reopen VS Code: {e} (path: {})", exe.display()), format!("VS Code를 다시 열지 못했습니다: {e}(경로: {})", exe.display())))?;
         Ok(())
     }
 }
@@ -682,9 +692,9 @@ fn launch_vscode(inst: &RunningInstance) -> Result<(), String> {
 /// 注入失败的文案映射（D3）：钥匙串 / Safe Storage 缺失时补一条可操作提示。
 fn describe_inject_error(err: String) -> String {
     if err.contains("Safe Storage") || err.contains("Keychain") {
-        format!(
-            "注入登录状态失败：{err}\n\n请先手动打开 VS Code 并登录一次 CodeBuddy 插件，确保系统凭据存储中存在「Code Safe Storage」条目后再试。"
-        )
+        i18n::pick(format!("Could not inject the sign-in state: {err}\n\nOpen VS Code and sign in to the CodeBuddy extension once first, and make sure a \"Code Safe Storage\" entry exists in the system credential store, then try again."
+        ), format!("로그인 상태 주입에 실패했습니다: {err}\n\nVS Code를 직접 열어 CodeBuddy 확장에 한 번 로그인하고, 시스템 자격 증명 저장소에 \"Code Safe Storage\" 항목이 있는지 확인한 뒤 다시 시도해 주세요."
+        ))
     } else {
         err
     }
@@ -694,13 +704,13 @@ fn describe_inject_error(err: String) -> String {
 fn switch_message(name: &str, restarted: bool, relaunch_error: Option<&str>) -> String {
     match (restarted, relaunch_error) {
         (true, _) => {
-            format!("已写入 VS Code CodeBuddy 插件凭证（{name}），VS Code 已重新打开。")
+            i18n::pick(format!("Wrote the VS Code CodeBuddy extension credentials ({name}); VS Code has been reopened."), format!("VS Code CodeBuddy 확장 자격 증명을 기록했습니다({name}). VS Code를 다시 열었습니다."))
         }
-        (false, Some(err)) => format!(
-            "已写入 VS Code CodeBuddy 插件凭证（{name}），但自动重新打开 VS Code 失败：{err}；请手动打开 VS Code 生效。"
-        ),
+        (false, Some(err)) => i18n::pick(format!("Wrote the VS Code CodeBuddy extension credentials ({name}), but reopening VS Code automatically failed: {err}; open VS Code manually for them to take effect."
+        ), format!("VS Code CodeBuddy 확장 자격 증명을 기록했습니다({name}). 하지만 VS Code를 자동으로 다시 열지 못했습니다: {err}. 직접 VS Code를 열어 적용해 주세요."
+        )),
         (false, None) => {
-            format!("已写入 VS Code CodeBuddy 插件凭证（{name}）；请打开 VS Code 生效。")
+            i18n::pick(format!("Wrote the VS Code CodeBuddy extension credentials ({name}); open VS Code for them to take effect."), format!("VS Code CodeBuddy 확장 자격 증명을 기록했습니다({name}). VS Code를 열어 적용해 주세요."))
         }
     }
 }
@@ -712,28 +722,30 @@ fn switch_message(name: &str, restarted: bool, relaunch_error: Option<&str>) -> 
 /// 幂等且廉价，[`switch_account_after_close`] 会再校验一次。
 pub(crate) fn validate_switch_target(account_id: &str) -> Result<(Value, PathBuf), String> {
     let acc =
-        account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
+        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
     let token = get_str(&acc, "access_token")
-        .ok_or_else(|| "账号缺少 access_token，无法注入 VS Code CodeBuddy 插件".to_string())?;
+        .ok_or_else(|| i18n::tr("The account has no access_token, so the VS Code CodeBuddy extension cannot be injected", "계정에 access_token이 없어 VS Code CodeBuddy 확장에 주입할 수 없습니다").to_string())?;
     if token.is_empty() {
-        return Err("账号 access_token 为空".to_string());
+        return Err(i18n::tr("The account access_token is empty", "계정 access_token이 비어 있습니다").to_string());
     }
 
-    let data_dir = vscode_data_dir().ok_or_else(|| "无法定位 VS Code 数据目录".to_string())?;
+    let data_dir = vscode_data_dir().ok_or_else(|| i18n::tr("Could not locate the VS Code data directory", "VS Code 데이터 디렉터리를 찾지 못했습니다").to_string())?;
     if !data_dir.exists() {
-        return Err(format!(
-            "未找到 VS Code 用户数据目录（{}）。请先手动打开 VS Code 并安装 CodeBuddy 插件后重试。",
+        return Err(i18n::pick(format!("VS Code user data directory not found ({}). Open VS Code, install the CodeBuddy extension, and try again.",
             data_dir.display()
-        ));
+        ), format!("VS Code 사용자 데이터 디렉터리를 찾지 못했습니다({}). VS Code를 열어 CodeBuddy 확장을 설치한 뒤 다시 시도해 주세요.",
+            data_dir.display()
+        )));
     }
 
     let db_path =
-        vscode_ext_state_db_path().ok_or_else(|| "无法定位 VS Code 数据目录".to_string())?;
+        vscode_ext_state_db_path().ok_or_else(|| i18n::tr("Could not locate the VS Code data directory", "VS Code 데이터 디렉터리를 찾지 못했습니다").to_string())?;
     if !db_path.exists() {
-        return Err(format!(
-            "未找到 VS Code 状态数据库（{}）。请先手动打开一次 VS Code（无需先登录插件）后重试。",
+        return Err(i18n::pick(format!("VS Code state database not found ({}). Open VS Code once (signing in to the extension is not required) and try again.",
             db_path.display()
-        ));
+        ), format!("VS Code 상태 데이터베이스를 찾지 못했습니다({}). VS Code를 한 번 실행한 뒤 다시 시도해 주세요(확장 로그인은 필요하지 않습니다).",
+            db_path.display()
+        )));
     }
 
     Ok((acc, data_dir))
@@ -762,7 +774,7 @@ fn close_vscode_for_switch_with(
         return Ok(None);
     }
     if !restart {
-        return Err(RUNNING_MANUAL_HINT.to_string());
+        return Err(running_manual_hint().to_string());
     }
     close_vscode(&inst.pids, VSCODE_CLOSE_TIMEOUT_SECS)?;
     Ok(Some(ClosedEditor(inst)))
@@ -875,11 +887,11 @@ pub fn detect_current_account() -> Result<Value, String> {
         return Ok(json!({
             "ok": true,
             "found": false,
-            "message": "本机 VS Code 未找到 CodeBuddy 插件登录 secret",
+            "message": i18n::tr("No CodeBuddy extension sign-in secret found for VS Code on this machine", "이 컴퓨터에서 VS Code CodeBuddy 확장 로그인 secret을 찾지 못했습니다"),
         }));
     };
     let Some((uid, token)) = parse_token_from_secret(&secret) else {
-        return Err("本地 VS Code CodeBuddy 插件登录信息解析失败".to_string());
+        return Err(i18n::tr("Could not parse the local VS Code CodeBuddy extension sign-in information", "로컬 VS Code CodeBuddy 확장 로그인 정보를 해석하지 못했습니다").to_string());
     };
     if let Some(acc) = match_account_for_token(uid.as_deref(), &token) {
         let id = get_str(&acc, "id").unwrap_or_default();
@@ -898,7 +910,7 @@ pub fn detect_current_account() -> Result<Value, String> {
         "found": true,
         "matched": false,
         "uid": uid,
-        "message": "本机 VS Code 已登录 CodeBuddy 插件，但账号库中无匹配账号；可先用「从本机导入」或扫码登录同步账号后再切换。",
+        "message": i18n::tr("The VS Code CodeBuddy extension is signed in on this machine, but no matching account exists in the account store; use \"Import from this machine\" or QR sign-in to add the account, then switch.", "이 컴퓨터에 VS Code CodeBuddy 확장 로그인 상태가 있지만 계정 저장소에 일치하는 계정이 없습니다. \"이 컴퓨터에서 가져오기\" 또는 QR 로그인으로 계정을 추가한 뒤 전환해 주세요."),
     }))
 }
 
@@ -1213,7 +1225,7 @@ mod tests {
 
         let error =
             close_vscode_for_switch_with(instance_with_pids(vec![4242]), false).unwrap_err();
-        assert_eq!(error, RUNNING_MANUAL_HINT);
+        assert_eq!(error, running_manual_hint());
     }
 
     /// 未运行时 [`close_vscode_for_switch`] 必须是空操作。本机可能真的开着 VS Code，

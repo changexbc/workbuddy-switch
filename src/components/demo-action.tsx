@@ -2,7 +2,8 @@ import { cloneElement, isValidElement, useState, type ReactElement, type ReactNo
 import { toast } from "sonner";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled } from "@/lib/demo-mode";
+import { demoModeEnabled } from "@/lib/demo-mode";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface DemoActionProps {
@@ -16,6 +17,7 @@ interface DemoActionProps {
  * cannot trigger a tooltip by themselves.
  */
 export function DemoAction({ children, className }: DemoActionProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
 
   if (!demoModeEnabled) return children;
@@ -30,7 +32,7 @@ export function DemoAction({ children, className }: DemoActionProps) {
 
   function explain() {
     setOpen(true);
-    toast.info(DEMO_UNAVAILABLE_MESSAGE);
+    toast.info(t("lib.demoMode.unavailable"));
   }
 
   return (
@@ -41,7 +43,7 @@ export function DemoAction({ children, className }: DemoActionProps) {
           role="button"
           tabIndex={0}
           aria-disabled="true"
-          aria-label={DEMO_UNAVAILABLE_MESSAGE}
+          aria-label={t("lib.demoMode.unavailable")}
           onPointerDownCapture={(event) => {
             // Disabled form controls do not reliably dispatch click events to ancestors.
             // Pointer-down capture still reports the attempted activation without
@@ -58,7 +60,7 @@ export function DemoAction({ children, className }: DemoActionProps) {
           {child as ReactNode}
         </span>
       </TooltipTrigger>
-      <TooltipContent>{DEMO_UNAVAILABLE_MESSAGE}</TooltipContent>
+      <TooltipContent>{t("lib.demoMode.unavailable")}</TooltipContent>
     </Tooltip>
   );
 }

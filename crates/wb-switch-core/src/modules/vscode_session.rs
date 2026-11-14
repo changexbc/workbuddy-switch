@@ -47,6 +47,7 @@ use crate::modules::config::{atomic_write, backup_dir, utc_iso};
 use crate::modules::session::{SessionPaths, SyncSelection};
 use crate::modules::vscode_ext;
 use crate::modules::vscode_session_sync;
+use crate::modules::i18n;
 
 /// 会话历史目录名。
 const HISTORY_DIR: &str = "history";
@@ -373,7 +374,7 @@ pub fn list_sessions_in_store(spec: SessionStoreSpec, root: &Path, uid: &str) ->
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .unwrap_or("(无标题)")
+                    .unwrap_or(i18n::tr("(Untitled)", "(제목 없음)"))
                     .to_string();
                 let last = time_to_ms(conversation.get("lastMessageAt"));
                 let updated_at = if last > 0 {
@@ -445,26 +446,26 @@ pub fn copy_vscode_sessions(target_uid: &str, items: &[CopyItem]) -> Result<Valu
         return Ok(json!({ "copied": [], "errors": [] }));
     }
     if !is_safe_uid(target_uid) {
-        return Err("目标账号 uid 非法，拒绝写入".to_string());
+        return Err(i18n::tr("The target account uid is invalid; write refused", "대상 계정 uid가 올바르지 않아 기록을 거부했습니다").to_string());
     }
     // 写入前必须先完全退出 VS Code，否则会被运行中的扩展覆盖。
     if vscode_ext::is_vscode_running() {
         return Err(
-            "检测到 VS Code 正在运行，请先完全退出后再复制会话，否则写入会被 VS Code 覆盖。"
+            i18n::tr("VS Code is running. Quit it completely before copying sessions, otherwise VS Code will overwrite the written data.", "VS Code가 실행 중입니다. 세션을 복사하기 전에 완전히 종료해 주세요. 그렇지 않으면 기록한 내용을 VS Code가 덮어씁니다.")
                 .to_string(),
         );
     }
     let source_uid = vscode_ext::active_ext_uid()
         .filter(|uid| is_safe_uid(uid))
         .ok_or_else(|| {
-            "未检测到 VS Code CodeBuddy 插件当前登录账号，无法定位源会话。请先在 VS Code 中登录该插件后重试。"
+            i18n::tr("No signed-in account detected for the VS Code CodeBuddy extension, so the source sessions cannot be located. Sign in to the extension in VS Code and try again.", "VS Code CodeBuddy 확장에 로그인된 계정을 찾지 못해 원본 세션을 확인할 수 없습니다. VS Code에서 확장에 로그인한 뒤 다시 시도해 주세요.")
                 .to_string()
         })?;
     if source_uid == target_uid {
-        return Err("源账号与目标账号相同，无需复制会话".to_string());
+        return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
     }
     let root = ext_data_root()
-        .ok_or_else(|| "未找到 VS Code CodeBuddy 插件数据目录，无法复制会话".to_string())?;
+        .ok_or_else(|| i18n::tr("VS Code CodeBuddy extension data directory not found, so sessions cannot be copied", "VS Code CodeBuddy 확장 데이터 디렉터리를 찾지 못해 세션을 복사할 수 없습니다").to_string())?;
     let backup_root = backup_dir().join(VSCODE_STORE.backup_kind).join(utc_iso());
     copy_sessions_in(&root, &backup_root, &source_uid, target_uid, items)
 }
@@ -502,13 +503,13 @@ pub(crate) fn copy_sessions_in_with(
     items: &[CopyItem],
 ) -> Result<Value, String> {
     if !is_safe_uid(source_uid) {
-        return Err("源账号 uid 非法".to_string());
+        return Err(i18n::tr("The source account uid is invalid", "원본 계정 uid가 올바르지 않습니다").to_string());
     }
     if !is_safe_uid(target_uid) {
-        return Err("目标账号 uid 非法".to_string());
+        return Err(i18n::tr("The target account uid is invalid", "대상 계정 uid가 올바르지 않습니다").to_string());
     }
     if source_uid == target_uid {
-        return Err("源账号与目标账号相同，无需复制会话".to_string());
+        return Err(i18n::tr("The source and target accounts are the same; no need to copy sessions", "원본 계정과 대상 계정이 같아 세션을 복사할 필요가 없습니다").to_string());
     }
 
     let source_history = history_root_in(spec, root, source_uid);
@@ -519,7 +520,7 @@ pub(crate) fn copy_sessions_in_with(
     for workspace_hash in distinct_workspaces(items) {
         let ws_dir = target_history.join(&workspace_hash);
         let state = WorkspaceState::load(&ws_dir, backup_root, &workspace_hash)
-            .map_err(|error| format!("备份目标工作区索引失败（{workspace_hash}）：{error}"))?;
+            .map_err(|error| i18n::pick(format!("Could not back up the target workspace index ({workspace_hash}): {error}"), format!("대상 작업 공간 인덱스를 백업하지 못했습니다({workspace_hash}): {error}")))?;
         states.insert(workspace_hash, state);
     }
 
@@ -533,7 +534,7 @@ pub(crate) fn copy_sessions_in_with(
             errors.push(json!({
                 "workspaceHash": item.workspace_hash,
                 "conversationId": item.conversation_id,
-                "error": "工作区或会话 id 非法",
+                "error": i18n::tr("The workspace or session id is invalid", "작업 공간 또는 세션 id가 올바르지 않습니다"),
             }));
             continue;
         }
@@ -542,7 +543,7 @@ pub(crate) fn copy_sessions_in_with(
             errors.push(json!({
                 "workspaceHash": workspace_hash,
                 "conversationId": conversation_id,
-                "error": "源会话目录不存在",
+                "error": i18n::tr("The source session directory does not exist", "원본 세션 디렉터리가 없습니다"),
             }));
             continue;
         }
@@ -550,7 +551,7 @@ pub(crate) fn copy_sessions_in_with(
             errors.push(json!({
                 "workspaceHash": workspace_hash,
                 "conversationId": conversation_id,
-                "error": "工作区状态缺失",
+                "error": i18n::tr("The workspace state is missing", "작업 공간 상태가 없습니다"),
             }));
             continue;
         };
@@ -605,9 +606,9 @@ pub fn switch_vscode_ext_with_copy(
         return vscode_ext::switch_account(account_id, restart);
     }
     let acc =
-        account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
+        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
     let target_uid = get_str(&acc, "uid")
-        .ok_or_else(|| "账号缺少 uid，无法定位 VS Code CodeBuddy 插件数据目录".to_string())?;
+        .ok_or_else(|| i18n::tr("The account has no uid, so the VS Code CodeBuddy extension data directory cannot be located", "계정에 uid가 없어 VS Code CodeBuddy 확장 데이터 디렉터리를 찾을 수 없습니다").to_string())?;
 
     // 与 [`vscode_ext::switch_account`] 同序：先把「注定失败」的目标挡在关闭之前，
     // 账号存在但 `access_token` 为空 / 数据目录或 state.vscdb 缺失时不该关掉用户的编辑器。
@@ -635,7 +636,7 @@ pub fn switch_vscode_ext_with_copy(
                         &report,
                     ),
                     None => vec![json!({
-                        "error": "未找到 VS Code CodeBuddy 插件数据目录，未能建立会话关联",
+                        "error": i18n::tr("VS Code CodeBuddy extension data directory not found, so the session link could not be created", "VS Code CodeBuddy 확장 데이터 디렉터리를 찾지 못해 세션 연결을 만들지 못했습니다"),
                     })],
                 };
                 if !link_errors.is_empty() {
@@ -690,18 +691,19 @@ pub fn switch_vscode_ext_with_copy(
         Err(error) => {
             let mut done: Vec<String> = Vec::new();
             if copied > 0 {
-                done.push(format!("已成功复制 {copied} 个会话到目标账号"));
+                done.push(i18n::pick(format!("Copied {copied} sessions to the target account"), format!("세션 {copied}개를 대상 계정으로 복사했습니다")));
             }
             if synced > 0 {
-                done.push(format!("已成功同步 {synced} 个会话"));
+                done.push(i18n::pick(format!("Synced {synced} sessions"), format!("세션 {synced}개를 동기화했습니다")));
             }
             if done.is_empty() {
                 Err(error)
             } else {
-                Err(format!(
-                    "{error}（注意：{}，但账号切换未完成，请重试切换）",
-                    done.join("、")
-                ))
+                Err(i18n::pick(format!("{error} (note: {}; the account switch did not complete, please retry the switch)",
+                    done.join(i18n::tr(", ", "、"))
+                ), format!("{error}(참고: {}. 계정 전환이 완료되지 않았습니다. 전환을 다시 시도해 주세요)",
+                    done.join(i18n::tr(", ", "、"))
+                )))
             }
         }
     }
@@ -915,7 +917,7 @@ fn copy_one_conversation(
     state: &mut WorkspaceState,
 ) -> Result<Value, String> {
     let source_index = read_json(&source_dir.join("index.json"))
-        .ok_or_else(|| "源会话 index.json 缺失或损坏".to_string())?;
+        .ok_or_else(|| i18n::tr("The source session index.json is missing or damaged", "원본 세션 index.json이 없거나 손상되었습니다").to_string())?;
 
     let plan = match options.id_policy {
         CopyIdPolicy::AlwaysNew => Some(RemapPlan::build(&source_index, source_dir)),
@@ -939,7 +941,7 @@ fn copy_one_conversation(
     };
     if let Err(error) = write_result {
         remove_dir_all_if_exists(&tmp_dir);
-        return Err(format!("写入临时会话目录失败：{error}"));
+        return Err(i18n::pick(format!("Could not write the temporary session directory: {error}"), format!("임시 세션 디렉터리를 쓰지 못했습니다: {error}")));
     }
 
     // 2) 原子提交：rename tmp → <newId>。
@@ -947,7 +949,7 @@ fn copy_one_conversation(
     remove_dir_all_if_exists(&final_dir);
     if let Err(error) = std::fs::rename(&tmp_dir, &final_dir) {
         remove_dir_all_if_exists(&tmp_dir);
-        return Err(format!("提交会话目录失败：{error}"));
+        return Err(i18n::pick(format!("Could not commit the session directory: {error}"), format!("세션 디렉터리를 커밋하지 못했습니다: {error}")));
     }
 
     // 3) 合并目标工作区索引；失败则回退目录与索引（仅本条）。
@@ -967,7 +969,7 @@ fn copy_one_conversation(
             state.restore();
         }
         remove_dir_all_if_exists(&final_dir);
-        return Err(format!("合并工作区索引失败：{error}"));
+        return Err(i18n::pick(format!("Could not merge the workspace index: {error}"), format!("작업 공간 인덱스를 병합하지 못했습니다: {error}")));
     }
 
     let messages = match &plan {

@@ -30,6 +30,7 @@ use crate::modules::codebuddy_cn_ide::{match_account_for_token, parse_token_from
 use crate::modules::config::{atomic_write, now_ms, store_dir};
 use crate::modules::process;
 use crate::modules::vscode_ext::build_ext_session_json;
+use crate::modules::i18n;
 
 const STATE_FILE: &str = "jetbrains.json";
 /// CodeBuddy 插件写入 `SecretStorage` 的会话密钥（与 VS Code 扩展同 key）。
@@ -276,7 +277,7 @@ fn read_secret_for(config_dir: &Path) -> Result<Option<String>, String> {
         return Ok(None);
     }
     let content =
-        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+        std::fs::read_to_string(&path).map_err(|e| i18n::pick(format!("Could not read {}: {e}", path.display()), format!("{} 읽기에 실패했습니다: {e}", path.display())))?;
     Ok(parse_secret_entries(&content)
         .into_iter()
         .find(|(key, _)| key == SECRET_KEY)
@@ -288,10 +289,10 @@ fn write_secret_for(config_dir: &Path, value: &str) -> Result<PathBuf, String> {
     let path = secret_path_for(config_dir);
     let mut entries: Vec<(String, String)> = if path.exists() {
         let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+            .map_err(|e| i18n::pick(format!("Could not read {}: {e}", path.display()), format!("{} 읽기에 실패했습니다: {e}", path.display())))?;
         // 写前备份（单份覆盖式）：secret 丢了大不了重新登录，但零成本留个还原点。
         let backup = path.with_extension("xml.wb-switch-bak");
-        std::fs::copy(&path, &backup).map_err(|e| format!("备份 {} 失败: {e}", path.display()))?;
+        std::fs::copy(&path, &backup).map_err(|e| i18n::pick(format!("Could not back up {}: {e}", path.display()), format!("{} 백업에 실패했습니다: {e}", path.display())))?;
         parse_secret_entries(&content)
     } else {
         Vec::new()
@@ -304,7 +305,7 @@ fn write_secret_for(config_dir: &Path, value: &str) -> Result<PathBuf, String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     atomic_write(&path, &serialize_secret_entries(&entries))
-        .map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+        .map_err(|e| i18n::pick(format!("Could not write {}: {e}", path.display()), format!("{} 쓰기에 실패했습니다: {e}", path.display())))?;
     Ok(path)
 }
 
@@ -486,15 +487,20 @@ fn running_ides() -> Vec<RunningIde> {
 const CLOSE_TIMEOUT_SECS: i64 = 60;
 
 /// 运行中 + 手动模式的报错文案。
-const RUNNING_MANUAL_HINT: &str =
-    "检测到 JetBrains IDE（IDEA / PyCharm）正在运行，请先完全退出后再切换，否则写入会被 IDE 覆盖。";
+fn running_manual_hint() -> &'static str {
+    i18n::tr(
+        "JetBrains IDE (IDEA / PyCharm) is running. Quit it completely before switching, otherwise the IDE will overwrite the written data.",
+        "JetBrains IDE(IDEA / PyCharm)가 실행 중입니다. 전환하기 전에 완전히 종료해 주세요. 그렇지 않으면 기록한 내용을 IDE가 덮어씁니다.",
+    )
+}
 
 fn close_timeout_error(alive: &[u32]) -> String {
     let pids: Vec<String> = alive.iter().map(|pid| pid.to_string()).collect();
-    format!(
-        "等待 JetBrains IDE 退出超时（仍有进程运行: {}）。请处理 IDE 内的保存提示后重试；若你在等待期间重新打开过 IDE，请退出后重试。",
+    i18n::pick(format!("Timed out waiting for the JetBrains IDE to quit (processes still running: {}). Handle the save prompts in the IDE and try again; if you reopened the IDE while waiting, quit it and try again.",
         pids.join(", ")
-    )
+    ), format!("JetBrains IDE 종료를 기다리다 시간이 초과되었습니다(아직 실행 중인 프로세스: {}). IDE의 저장 확인 창을 처리한 뒤 다시 시도해 주세요. 기다리는 동안 IDE를 다시 열었다면 종료한 뒤 다시 시도해 주세요.",
+        pids.join(", ")
+    ))
 }
 
 /// Windows 侧的 JetBrains IDE 优雅关闭（user32 消息流程）。
@@ -738,21 +744,24 @@ fn launch_ide(inst: &RunningIde) -> Result<(), String> {
     let target = inst
         .launch_target
         .as_ref()
-        .ok_or_else(|| "未能记录 IDE 可执行文件路径，请手动打开".to_string())?;
+        .ok_or_else(|| i18n::tr("Could not record the IDE executable path; open it manually", "IDE 실행 파일 경로를 기록하지 못했습니다. 직접 실행해 주세요").to_string())?;
     #[cfg(target_os = "macos")]
     {
         let app = target.to_string_lossy().into_owned();
         match process::run_cmd_timeout("open", &[app.as_str()], 10) {
             Some(out) if out.status.success() => Ok(()),
-            Some(out) => Err(format!(
-                "重新打开 IDE 失败: {}（路径: {}）",
+            Some(out) => Err(i18n::pick(format!("Could not reopen the IDE: {} (path: {})",
                 String::from_utf8_lossy(&out.stderr).trim(),
                 target.display()
-            )),
-            None => Err(format!(
-                "重新打开 IDE 失败: open 超时（路径: {}）",
+            ), format!("IDE를 다시 열지 못했습니다: {}(경로: {})",
+                String::from_utf8_lossy(&out.stderr).trim(),
                 target.display()
-            )),
+            ))),
+            None => Err(i18n::pick(format!("Could not reopen the IDE: open timed out (path: {})",
+                target.display()
+            ), format!("IDE를 다시 열지 못했습니다: open 시간 초과(경로: {})",
+                target.display()
+            ))),
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -761,7 +770,7 @@ fn launch_ide(inst: &RunningIde) -> Result<(), String> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("重新打开 IDE 失败: {e}（路径: {}）", target.display()))?;
+            .map_err(|e| i18n::pick(format!("Could not reopen the IDE: {e} (path: {})", target.display()), format!("IDE를 다시 열지 못했습니다: {e}(경로: {})", target.display())))?;
         Ok(())
     }
 }
@@ -886,10 +895,11 @@ fn filter_targets_by_selection(
         .filter(|t| selected.iter().any(|s| s == &t.name))
         .collect();
     if filtered.is_empty() {
-        return Err(format!(
-            "所选 JetBrains IDE（{}）均未安装 CodeBuddy 插件，请刷新状态后重试。",
-            selected.join("、")
-        ));
+        return Err(i18n::pick(format!("None of the selected JetBrains IDEs ({}) have the CodeBuddy plugin installed; refresh the status and try again.",
+            selected.join(i18n::tr(", ", "、"))
+        ), format!("선택한 JetBrains IDE({})에 CodeBuddy 플러그인이 설치되어 있지 않습니다. 상태를 새로 고친 뒤 다시 시도해 주세요.",
+            selected.join(i18n::tr(", ", "、"))
+        )));
     }
     Ok(filtered)
 }
@@ -900,15 +910,15 @@ fn validate_switch_target(
     config_dirs: Option<&[String]>,
 ) -> Result<(Value, Vec<Target>), String> {
     let acc =
-        account::find_account(account_id).ok_or_else(|| format!("账号不存在: {account_id}"))?;
+        account::find_account(account_id).ok_or_else(|| i18n::pick(format!("Account not found: {account_id}"), format!("계정을 찾을 수 없습니다: {account_id}")))?;
     let token = get_str(&acc, "access_token")
-        .ok_or_else(|| "账号缺少 access_token，无法注入 JetBrains IDE 插件".to_string())?;
+        .ok_or_else(|| i18n::tr("The account has no access_token, so the JetBrains IDE plugin cannot be injected", "계정에 access_token이 없어 JetBrains IDE 플러그인에 주입할 수 없습니다").to_string())?;
     if token.is_empty() {
-        return Err("账号 access_token 为空".to_string());
+        return Err(i18n::tr("The account access_token is empty", "계정 access_token이 비어 있습니다").to_string());
     }
 
     if jetbrains_config_root().is_none() {
-        return Err("无法定位 JetBrains 配置目录".to_string());
+        return Err(i18n::tr("Could not locate the JetBrains configuration directory", "JetBrains 설정 디렉터리를 찾지 못했습니다").to_string());
     }
     let targets: Vec<Target> = list_targets()
         .into_iter()
@@ -916,7 +926,7 @@ fn validate_switch_target(
         .collect();
     if targets.is_empty() {
         return Err(
-            "未找到已安装 CodeBuddy 插件的 JetBrains IDE。请先在 IDEA / PyCharm 中安装「Tencent Cloud CodeBuddy」插件后重试。".to_string(),
+            i18n::tr("No JetBrains IDE with the CodeBuddy plugin installed was found. Install the \"Tencent Cloud CodeBuddy\" plugin in IDEA / PyCharm and try again.", "CodeBuddy 플러그인이 설치된 JetBrains IDE를 찾지 못했습니다. IDEA / PyCharm에 \"Tencent Cloud CodeBuddy\" 플러그인을 설치한 뒤 다시 시도해 주세요.").to_string(),
         );
     }
     let targets = filter_targets_by_selection(targets, config_dirs)?;
@@ -974,7 +984,7 @@ fn describe_secret_error(err: String) -> String {
 
 /// 注入失败的文案映射。
 fn describe_inject_error(err: String) -> String {
-    format!("注入 JetBrains IDE 插件登录状态失败：{err}")
+    i18n::pick(format!("Could not inject the JetBrains IDE plugin sign-in state: {err}"), format!("JetBrains IDE 플러그인 로그인 상태 주입에 실패했습니다: {err}"))
 }
 
 /// 切换成功文案：区分「已重新打开」「重开失败」「本来没运行」。
@@ -987,14 +997,14 @@ fn switch_message(
     let scope = if written.is_empty() {
         String::new()
     } else {
-        format!("，目标: {}", written.join("、"))
+        i18n::pick(format!(", targets: {}", written.join("、")), format!("，목표: {}", written.join("、")))
     };
     match (restarted, relaunch_error) {
-        (true, _) => format!("已写入 JetBrains IDE CodeBuddy 插件凭证（{name}{scope}），IDE 已重新打开。"),
-        (false, Some(err)) => format!(
-            "已写入 JetBrains IDE CodeBuddy 插件凭证（{name}{scope}），但自动重新打开 IDE 失败：{err}；请手动打开 IDE 生效。"
-        ),
-        (false, None) => format!("已写入 JetBrains IDE CodeBuddy 插件凭证（{name}{scope}）；请打开 IDE 生效。"),
+        (true, _) => i18n::pick(format!("Wrote the JetBrains IDE CodeBuddy plugin credentials ({name}{scope}), and the IDE has been reopened."), format!("JetBrains IDE CodeBuddy 플러그인 자격 증명을 기록했습니다({name}{scope}). IDE를 다시 열었습니다.")),
+        (false, Some(err)) => i18n::pick(format!("Wrote the JetBrains IDE CodeBuddy plugin credentials ({name}{scope}), but reopening the IDE automatically failed: {err}; open the IDE manually for them to take effect."
+        ), format!("JetBrains IDE CodeBuddy 플러그인 자격 증명을 기록했습니다({name}{scope}). 하지만 IDE를 자동으로 다시 열지 못했습니다: {err}. 직접 IDE를 열어 적용해 주세요."
+        )),
+        (false, None) => i18n::pick(format!("Wrote the JetBrains IDE CodeBuddy plugin credentials ({name}{scope}); open the IDE for them to take effect."), format!("JetBrains IDE CodeBuddy 플러그인 자격 증명을 기록했습니다({name}{scope}). IDE를 열어 적용해 주세요.")),
     }
 }
 
@@ -1037,7 +1047,7 @@ pub fn switch_account(
         .collect();
 
     if !matched.is_empty() && !restart {
-        return Err(RUNNING_MANUAL_HINT.to_string());
+        return Err(running_manual_hint().to_string());
     }
 
     if !matched.is_empty() {
@@ -1083,13 +1093,13 @@ pub fn detect_current_account() -> Result<Value, String> {
             "matched": false,
             "configDir": target.name,
             "uid": uid,
-            "message": "本机 JetBrains IDE 已登录 CodeBuddy 插件，但账号库中无匹配账号；可先用「从本机导入」或扫码登录同步账号后再切换。",
+            "message": i18n::tr("The JetBrains IDE CodeBuddy plugin is signed in on this machine, but no matching account exists in the account store; use \"Import from this machine\" or QR sign-in to add the account, then switch.", "이 컴퓨터에 JetBrains IDE CodeBuddy 플러그인 로그인 상태가 있지만 계정 저장소에 일치하는 계정이 없습니다. \"이 컴퓨터에서 가져오기\" 또는 QR 로그인으로 계정을 추가한 뒤 전환해 주세요."),
         }));
     }
     Ok(json!({
         "ok": true,
         "found": false,
-        "message": "本机 JetBrains IDE 未找到 CodeBuddy 插件登录 secret",
+        "message": i18n::tr("No CodeBuddy plugin sign-in secret found for the JetBrains IDE on this machine", "이 컴퓨터에서 JetBrains IDE CodeBuddy 플러그인 로그인 secret을 찾지 못했습니다"),
     }))
 }
 
@@ -1273,7 +1283,7 @@ mod tests {
     #[test]
     fn switch_decision_blocks_manual_mode_with_running_ide() {
         // 契约回归：matched 非空 + restart=false 必须在关进程前报错（不触碰进程表）。
-        assert!(RUNNING_MANUAL_HINT.contains("正在运行"));
+        assert!(running_manual_hint().contains("is running"));
         assert_eq!(CLOSE_TIMEOUT_SECS, 60);
     }
 

@@ -8,6 +8,7 @@ import {
   shouldDefaultSelect,
   summarySentence,
 } from "./session-link-shared";
+import { translateWith, type Translate } from "@/lib/i18n/translate";
 import type { SessionLinkPreviewGroup, SessionSyncMode } from "@/lib/types";
 
 /**
@@ -15,6 +16,8 @@ import type { SessionLinkPreviewGroup, SessionSyncMode } from "@/lib/types";
  *
  * 只覆盖不依赖 DOM 的纯逻辑：可勾选判定、提交组装、模式优先级与摘要文案。
  */
+
+const t: Translate = (key, vars) => translateWith("en", key, vars);
 
 function group(
   overrides: Partial<SessionLinkPreviewGroup> & {
@@ -114,34 +117,37 @@ describe("模式优先级与全选口径不变", () => {
 
 describe("summarySentence", () => {
   it("只归档（identical）说明仅同步归档、保留正文", () => {
-    expect(summarySentence(group({ verdict: "identical", archiveAction: "statusOnly" }), "账号B")).toBe(
-      "仅同步归档，保留正文",
-    );
+    expect(
+      summarySentence(t, group({ verdict: "identical", archiveAction: "statusOnly" }), "账号B"),
+    ).toBe("Sync archive status only; keep content");
   });
 
   it("只归档（ahead）同样说明仅同步归档，不再是「本次不同步」", () => {
-    expect(summarySentence(group({ verdict: "ahead", archiveAction: "statusOnly" }), "账号B")).toBe(
-      "仅同步归档，保留正文",
+    expect(summarySentence(t, group({ verdict: "ahead", archiveAction: "statusOnly" }), "账号B")).toBe(
+      "Sync archive status only; keep content",
     );
   });
 
   it("快进附带归档时保留正文句并写明一并归档", () => {
     const sentence = summarySentence(
+      t,
       group({ verdict: "fastForward", availableModes: ["fastForward"], archiveAction: "statusOnly" }),
       "账号B",
     );
-    expect(sentence).toContain("将当前账号的新内容同步到「账号B」");
-    expect(sentence).toContain("一并归档");
+    expect(sentence).toContain('Sync the current account\'s new content to "账号B"');
+    expect(sentence).toContain("the target session is archived as well");
   });
 
   it("没有归档动作时文案与旧行为逐字一致", () => {
-    expect(summarySentence(group({ verdict: "identical" }), "账号B")).toBe("无需同步");
-    expect(summarySentence(group({ verdict: "ahead" }), "账号B")).toBe("保留目标内容，本次不同步");
+    expect(summarySentence(t, group({ verdict: "identical" }), "账号B")).toBe("Nothing to sync");
+    expect(summarySentence(t, group({ verdict: "ahead" }), "账号B")).toBe(
+      "Keep the target content; nothing is synced this time",
+    );
     expect(
-      summarySentence(group({ verdict: "fastForward", availableModes: ["fastForward"] }), "账号B"),
-    ).toBe("将当前账号的新内容同步到「账号B」");
-    expect(summarySentence(group({ verdict: "unknown" }), "账号B")).toBe(
-      "暂时无法确认两边内容，本次不会同步",
+      summarySentence(t, group({ verdict: "fastForward", availableModes: ["fastForward"] }), "账号B"),
+    ).toBe('Sync the current account\'s new content to "账号B"');
+    expect(summarySentence(t, group({ verdict: "unknown" }), "账号B")).toBe(
+      "Cannot verify either side's content right now; nothing is synced this time",
     );
   });
 });

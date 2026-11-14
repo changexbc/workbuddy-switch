@@ -37,6 +37,7 @@ use crate::modules::config::{
 };
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
 use crate::modules::variant::WbVariant;
+use crate::modules::i18n;
 
 static CHECKIN_RUNNING: AtomicBool = AtomicBool::new(false);
 static CHECKIN_ACCOUNTS_RUNNING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -172,7 +173,7 @@ async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -
 async fn checkin_request(suffix: &str, account: &Value) -> Value {
     let variant = variant_of(account);
     let paths = variant.billing_paths(&format!("{CHECKIN_API_PREFIX}{suffix}"));
-    let mut last = json!({"code": -1, "message": "无可用签到路径"});
+    let mut last = json!({"code": -1, "message": i18n::tr("No usable check-in path", "사용 가능한 출석 경로가 없습니다")});
     for (index, path) in paths.iter().enumerate() {
         let resp = checkin_request_once(path, account, variant).await;
         if index + 1 == paths.len() || !is_route_missing(&resp) {
@@ -228,7 +229,10 @@ pub async fn get_checkin_status(account: &Value) -> Value {
     json!({
         "ok": false,
         "statusUnsupported": true,
-        "error": "该档位暂无签到状态接口",
+        "error": i18n::tr(
+            "This edition has no check-in status endpoint",
+            "이 에디션에는 출석 상태 API가 없습니다",
+        ),
     })
 }
 
@@ -292,7 +296,10 @@ fn decide_from_status(status: &Value) -> StatusDecision {
             status
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("查询签到状态失败")
+                .unwrap_or(i18n::tr(
+                    "Could not query the check-in status",
+                    "출석 상태를 조회하지 못했습니다",
+                ))
                 .to_string(),
         );
     }
@@ -306,7 +313,10 @@ fn decide_from_status(status: &Value) -> StatusDecision {
 /// 对单个账号执行完整签到流程：惰性刷新 → 查状态 → 未签到时提交 → 写提交日志。
 pub async fn checkin_account(account: &Value) -> Value {
     let Some(_account_guard) = AccountRunGuard::try_acquire(account) else {
-        return json!({"result": "error", "error": "该账号正在签到，请稍后再试"});
+        return json!({"result": "error", "error": i18n::tr(
+            "This account is already checking in, please try again later",
+            "이 계정은 출석 처리 중입니다. 잠시 후 다시 시도해 주세요",
+        )});
     };
     // 国际版没有签到接口：自动周期、一键签到与单账号签到的公开入口都在这里汇聚，
     // 统一短路以确保不向任何签到接口发起请求。

@@ -20,7 +20,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import companionTrayIcon from "@/assets/agent-companion-tray.png";
-import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
+import { demoUnavailableMessage, demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
 import { useT } from "@/lib/i18n";
 import { useSessionsNavEnabled } from "@/lib/nav-prefs";
 import { changeCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
@@ -117,7 +117,7 @@ function CompanionDemoFooter() {
   /** 演示面板里的行：保持可聚焦（键盘也能走一遍），但只说明不可用。 */
   function unavailable(event: Event) {
     event.preventDefault();
-    toast.info(DEMO_UNAVAILABLE_MESSAGE);
+    toast.info(demoUnavailableMessage());
   }
 
   return (
