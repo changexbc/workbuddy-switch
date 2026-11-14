@@ -27,6 +27,7 @@ export const libEn = {
   "lib.errors.unknownError": "Unknown error",
   "lib.errorReport.toastRecorded": "An error occurred and was recorded",
   "lib.errorReport.toast": "An error occurred",
+  "lib.errorReport.sourceLabel": "Source: {where}",
   "lib.account.unnamed": "Unnamed account",
   "lib.companion.notReady": "The floating window state is not ready yet",
   "lib.rotate.deferredTitle": "Auto rotation postponed",

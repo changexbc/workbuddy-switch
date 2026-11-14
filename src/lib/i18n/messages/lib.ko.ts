@@ -29,6 +29,7 @@ export const libKo: Partial<Record<keyof typeof libEn, string>> = {
   "lib.errors.unknownError": "알 수 없는 오류",
   "lib.errorReport.toastRecorded": "오류가 발생해 기록했습니다",
   "lib.errorReport.toast": "오류가 발생했습니다",
+  "lib.errorReport.sourceLabel": "출처: {where}",
   "lib.account.unnamed": "이름 없는 계정",
   "lib.companion.notReady": "플로팅 창 상태가 아직 준비되지 않았습니다",
   "lib.rotate.deferredTitle": "자동 로테이션이 연기되었습니다",

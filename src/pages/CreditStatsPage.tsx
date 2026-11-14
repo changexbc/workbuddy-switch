@@ -38,6 +38,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import * as api from "@/lib/api";
 import { creditResourceName } from "@/lib/credit-package-names";
 import { useT, type Translate } from "@/lib/i18n";
+import { intlLocale } from "@/lib/i18n/format";
 import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
   CreditExpiry,
@@ -112,12 +113,12 @@ function dateDaysAgo(days: number): string {
 
 function formatCredits(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(intlLocale(), { maximumFractionDigits: 2 }).format(value);
 }
 
 function formatDateTime(ts: number | null | undefined): string {
   if (ts === null || ts === undefined) return "—";
-  return new Date(ts).toLocaleString("zh-CN", {
+  return new Date(ts).toLocaleString(intlLocale(), {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -127,7 +128,7 @@ function formatDateTime(ts: number | null | undefined): string {
 
 function formatDate(ts: number | null | undefined): string {
   if (ts === null || ts === undefined) return "—";
-  return new Date(ts).toLocaleDateString("zh-CN", {
+  return new Date(ts).toLocaleDateString(intlLocale(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -136,7 +137,7 @@ function formatDate(ts: number | null | undefined): string {
 
 function formatExpiryDateTime(ts: number | null | undefined): string {
   if (ts === null || ts === undefined) return "—";
-  return new Date(ts).toLocaleString("zh-CN", {
+  return new Date(ts).toLocaleString(intlLocale(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -1569,8 +1570,9 @@ function ResourcesByAccount({
   creditMap: Record<string, CreditExpiry>;
   creditLoadingMap: Record<string, boolean>;
 }) {
+  const t = useT();
   if (accounts.length === 0) {
-    return <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">暂无账号统计。</div>;
+    return <div className="px-4 py-8 text-center text-sm text-muted-foreground sm:px-5">{t("stats.credit.noAccountStats")}</div>;
   }
   if (accounts.length === 1) {
     const account = accounts[0];
@@ -1599,6 +1601,7 @@ function SelectedAccountDetails({
   creditMap: Record<string, CreditExpiry>;
   creditLoadingMap: Record<string, boolean>;
 }) {
+  const t = useT();
   const [detailTab, setDetailTab] = useState<"credits" | "requests">("credits");
   const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
   const filterAccounts = official ? official.accounts : stats.accounts;
@@ -1634,27 +1637,29 @@ function SelectedAccountDetails({
     <div className="flex min-w-0 flex-col gap-12">
       <section className="min-w-0 space-y-2.5" aria-labelledby="credit-detail-title">
         <div className="px-1">
-          <h2 id="credit-detail-title" className="text-[13px] font-medium leading-5">积分明细</h2>
+          <h2 id="credit-detail-title" className="text-[13px] font-medium leading-5">{t("stats.credit.creditDetail")}</h2>
         </div>
         <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
           <CardHeader className="gap-0 border-b px-4 pt-3 pb-3 sm:px-5">
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
               <CardDescription className="min-w-0 truncate text-xs">
-                {latestSnapshotAt ? `最近采集 ${formatDateTime(latestSnapshotAt)}` : "暂无账号资源包。"}
+                {latestSnapshotAt
+                  ? t("stats.credit.latestSnapshot", { time: formatDateTime(latestSnapshotAt) })
+                  : t("stats.credit.noAccountResources")}
               </CardDescription>
               <AccountFilterMenu
                 accounts={filterAccounts}
                 accountFilter={effectiveFilter}
                 onAccountFilterChange={setAccountFilter}
-                ariaLabel="按账号筛选积分明细"
+                ariaLabel={t("stats.credit.filterDetailByAccount")}
                 allowAll={false}
               />
             </div>
-            <div className="mt-3 flex max-w-full gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label="积分详情类型">
+            <div className="mt-3 flex max-w-full gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label={t("stats.credit.detailTabLabel")}>
               {(
                 [
-                  ["credits", "积分明细"],
-                  ["requests", "请求用量"],
+                  ["credits", t("stats.credit.creditDetail")],
+                  ["requests", t("stats.credit.requestUsage")],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -1840,7 +1845,7 @@ export default function CreditStatsPage() {
     // D1: 「全部」原样使用 officialUsage.summary / daily / models，不走过滤重算。
     if (viewVariant === "all" || !officialUsage || !variantAccountIds) return officialUsage;
     return recomputeOfficialUsage(officialUsage, variantAccountIds, t);
-  }, [stats, viewVariant, variantAccountIds]);
+  }, [stats, viewVariant, variantAccountIds, t]);
 
   const officialUsage = filteredOfficial;
   const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
@@ -1851,16 +1856,18 @@ export default function CreditStatsPage() {
     <div className="mx-auto w-full max-w-[1180px] min-w-0 px-4 py-6 sm:px-8 sm:py-9">
       <header className="mb-10 flex min-w-0 flex-wrap items-start justify-between gap-4 sm:mb-12">
         <div className="min-w-0">
-          <h1 className="text-[28px] font-semibold tracking-tight">积分统计</h1>
+          <h1 className="text-[28px] font-semibold tracking-tight">{t("stats.credit.title")}</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            当前数据更新于 {stats ? formatDateTime(official?.collectedAt ?? stats.generatedAt) : "—"}
+            {t("stats.credit.updatedAt", {
+              time: stats ? formatDateTime(official?.collectedAt ?? stats.generatedAt) : "—",
+            })}
           </p>
         </div>
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
           <div
             className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1"
             role="tablist"
-            aria-label="档位筛选"
+            aria-label={t("stats.credit.variantFilter")}
           >
             {VARIANT_VIEW_OPTIONS.map((option) => (
               <button
@@ -1888,7 +1895,7 @@ export default function CreditStatsPage() {
               disabled={loading}
             >
               {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              刷新统计
+              {t("stats.credit.refresh")}
             </Button>
           </DemoAction>
         </div>
@@ -1897,11 +1904,11 @@ export default function CreditStatsPage() {
       {error && (
         <Alert variant="destructive" className="mb-5">
           <CircleAlert />
-          <AlertTitle>统计加载失败</AlertTitle>
+          <AlertTitle>{t("stats.credit.loadFailed")}</AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-3">
             <span>{error}</span>
             <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
+              {t("common.retry")}
             </Button>
           </AlertDescription>
         </Alert>
@@ -1910,22 +1917,26 @@ export default function CreditStatsPage() {
       {loading && !stats ? (
         <div className="flex items-center gap-2 py-20 text-sm text-muted-foreground">
           <Loader2 className="animate-spin" />
-          正在采集账号积分并加载统计…
+          {t("stats.credit.loading")}
         </div>
       ) : stats && filteredStats ? (
         <div className="min-w-0 space-y-12">
           {viewVariant === "all" && accounts.length === 0 && (
             <Alert>
               <CircleAlert />
-              <AlertTitle>暂无当前账号</AlertTitle>
-              <AlertDescription>可以先去账号管理导入或登录账号；历史事件仍会保留在下方最近事件中。</AlertDescription>
+              <AlertTitle>{t("stats.credit.noCurrentAccounts")}</AlertTitle>
+              <AlertDescription>{t("stats.credit.noCurrentAccountsHint")}</AlertDescription>
             </Alert>
           )}
 
           {variantEmpty ? (
             <div className="rounded-xl border border-dashed px-4 py-16 text-center text-sm text-muted-foreground">
-              <p>暂无{statsVariantViewLabel(t, viewVariant)}账号的积分数据。</p>
-              <p className="mt-2 text-xs leading-5">国内版与国际版积分体系不同，不会合并计算。</p>
+              <p>
+                {t("stats.credit.variantEmpty", {
+                  variant: statsVariantViewLabel(t, viewVariant),
+                })}
+              </p>
+              <p className="mt-2 text-xs leading-5">{t("stats.credit.variantNote")}</p>
             </div>
           ) : (
             <>
@@ -1933,43 +1944,50 @@ export default function CreditStatsPage() {
                 <Alert variant="warning">
                   <CircleAlert />
                   <AlertTitle>
-                    {officialUsage.status === "partial" ? "部分账号官方用量未同步" : "官方用量暂不可用"}
+                    {officialUsage.status === "partial"
+                      ? t("stats.credit.partialTitle")
+                      : t("stats.credit.officialUnavailableTitle")}
                   </AlertTitle>
                   <AlertDescription>
                     {officialUsage.status === "partial"
-                      ? `已同步 ${officialUsage.accounts.filter((account) => account.ok).length}/${officialUsage.accounts.length} 个当前账号；失败账号的官方数值显示为“—”。`
-                      : "今日、近 7 天和本月消耗将使用本地观察口径；官方接口恢复后刷新即可重新同步。"}
+                      ? t("stats.credit.partialDescription", {
+                          ok: officialUsage.accounts.filter((account) => account.ok).length,
+                          total: officialUsage.accounts.length,
+                        })
+                      : t("stats.credit.officialUnavailableDescription")}
                     {officialUsage.errors.length > 0 && (
                       <span className="text-xs text-amber-900/75">
-                        {officialUsage.errors.map((item) => `${item.accountName}: ${item.error}`).join("；")}
+                        {officialUsage.errors
+                          .map((item) => `${item.accountName}: ${item.error}`)
+                          .join(t("stats.credit.listSeparator"))}
                       </span>
                     )}
                   </AlertDescription>
                 </Alert>
               )}
 
-              <Card className="min-w-0 gap-0 overflow-hidden rounded-2xl bg-card/70 py-0 shadow-none" aria-label="积分总览">
+              <Card className="min-w-0 gap-0 overflow-hidden rounded-2xl bg-card/70 py-0 shadow-none" aria-label={t("stats.credit.overviewLabel")}>
                 <CardContent className="grid min-w-0 grid-cols-1 divide-y divide-border/60 p-0 sm:grid-cols-4 sm:divide-y-0 sm:py-5">
                   <StatMetric
                     icon={Sparkles}
-                    label="剩余积分"
+                    label={t("stats.credit.metricRemaining")}
                     value={formatCredits(filteredStats.summary.currentRemaining)}
                   />
                   <StatMetric
                     icon={TrendingDown}
-                    label="今日消耗"
+                    label={t("stats.credit.metricToday")}
                     value={formatCredits(official ? official.summary.usageToday : filteredStats.summary.usageToday)}
                     divided
                   />
                   <StatMetric
                     icon={CalendarDays}
-                    label="近 7 天消耗"
+                    label={t("stats.credit.metric7d")}
                     value={formatCredits(official ? official.summary.usage7Days : filteredStats.summary.usage7Days)}
                     divided
                   />
                   <StatMetric
                     icon={CalendarRange}
-                    label="本月消耗"
+                    label={t("stats.credit.metricMonth")}
                     value={formatCredits(official ? official.summary.usageThisMonth : filteredStats.summary.usageThisMonth)}
                     divided
                   />
@@ -1979,8 +1997,8 @@ export default function CreditStatsPage() {
               {!official && !filteredStats.coverageStartAt && filteredStats.events.some((event) => event.kind === "checkin") && (
                 <Alert>
                   <CircleCheck />
-                  <AlertTitle>目前只有签到记录</AlertTitle>
-                  <AlertDescription>签到不会被计入积分消耗。首次成功采集积分资源后，趋势统计才会开始累计。</AlertDescription>
+                  <AlertTitle>{t("stats.credit.checkinOnlyTitle")}</AlertTitle>
+                  <AlertDescription>{t("stats.credit.checkinOnlyDescription")}</AlertDescription>
                 </Alert>
               )}
 
@@ -2016,7 +2034,7 @@ export default function CreditStatsPage() {
         </div>
       ) : (
         <div className="rounded-xl border border-dashed px-4 py-16 text-center text-sm text-muted-foreground">
-          暂无统计数据，请点击刷新重试。
+          {t("stats.credit.noStats")}
         </div>
       )}
     </div>

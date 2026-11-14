@@ -16,6 +16,8 @@ export const accountsEn = {
   "accounts.add.export": "Export",
 
   "accounts.status.tooltip": "{product}: {state} · Current account: {account}",
+  "accounts.status.vscodeProduct": "VS Code CodeBuddy extension",
+  "accounts.status.jetbrainsProduct": "JetBrains IDE CodeBuddy plugin",
   "accounts.status.running": "Running",
   "accounts.status.notRunning": "Not running",
   "accounts.status.connected": "Connected",

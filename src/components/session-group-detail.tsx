@@ -12,6 +12,9 @@ import { Popover, PopoverArrow, PopoverContent, PopoverTrigger } from "@/compone
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { displayName } from "@/lib/account-display";
+import { useT, type Translate } from "@/lib/i18n";
+import { intlLocale } from "@/lib/i18n/format";
+import type { MessageKey } from "@/lib/i18n/messages";
 import { accountVariant, variantIsIntl, variantLabel } from "@/lib/variant";
 import type { SessionGroupClient, SessionGroupCurrentAccount, SessionGroupDetail, SessionGroupMemberDetail, SessionGroupUnifyPlan } from "@/lib/types";
 import "./session-group-detail.css";
@@ -42,13 +45,14 @@ export interface GroupDetailPanelProps {
   fullPage: boolean;
 }
 
-const clientNames: Record<SessionGroupClient, string> = {
-  workbuddy: "WorkBuddy", codebuddyIde: "CodeBuddy IDE", vscodeExt: "CodeBuddy 插件",
+const CLIENT_TITLE_KEY: Record<SessionGroupClient, MessageKey> = {
+  workbuddy: "sessions.common.clientWorkbuddy", codebuddyIde: "sessions.common.clientCodebuddyIde", vscodeExt: "sessions.common.clientVscodeExt",
 };
 
 type GraphLine = { path: string; tone: "default" | "common" | `branch-${number}`; points: { x: number; y: number }[] };
 
 export function GroupDetailPanel(props: GroupDetailPanelProps) {
+  const t = useT();
   const { detail } = props;
   // 只存被点成员 id，确认框的成员由当前 detail 派生：浮层不会停留在过期数据上。
   const [unlinkTargetId, setUnlinkTargetId] = useState<string | null>(null);
@@ -120,12 +124,12 @@ export function GroupDetailPanel(props: GroupDetailPanelProps) {
     : detail?.members ?? [];
   const blockedTargets = props.unifyPlan?.targets.flatMap((target) => {
     const preview = target.preview;
-    const issue = target.error || !preview ? target.error ?? "无法检查内容"
+    const issue = target.error || !preview ? target.error ?? t("sessions.detail.issueNoPreview")
       : preview.client !== props.unifyPlan?.client || preview.groupId !== props.unifyPlan.groupId
         || preview.sourceMemberId !== props.unifyPlan.sourceMemberId || preview.targetMemberId !== target.memberId
-        ? "检查结果与当前会话不匹配，请重新选择副本"
+        ? t("sessions.detail.issueMismatch")
         : preview.verdict !== "identical" && (!preview.previewToken || !preview.availableModes.some((mode) => ["fastForward", "overwrite", "unifyOverwrite"].includes(mode)))
-          ? preview.reason || "无法安全更新此副本"
+          ? preview.reason || t("sessions.detail.issueUnsafe")
           : null;
     return issue ? [{ ...target, issue }] : [];
   }) ?? [];
@@ -143,23 +147,25 @@ export function GroupDetailPanel(props: GroupDetailPanelProps) {
   /** 统一确认框的运行提示：WorkBuddy 按档位、插件按编辑器分别措辞；其他客户端不显示。 */
   const restartNotice = props.client === "workbuddy"
     ? {
-        title: runningVariants.length ? `当前运行：${runningVariants.map(variantLabel).join("、")}` : "执行前会检查客户端运行状态",
-        description: `${restartVariants.length ? `确认后将先关闭目标账号所在的${restartVariants.map(variantLabel).join("、")}，同步结束再自动打开。` : "若目标账号所在的客户端正在运行，确认后将自动关闭并在同步结束后重新打开。"}请先保存未完成的输入；执行时会再次核对实际运行状态。若写入待恢复，将暂停重新打开并提示处理。`,
+        title: runningVariants.length ? t("sessions.detail.restartNotice.runningTitle", { variants: runningVariants.map(variantLabel).join(t("sessions.common.listSeparator")) }) : t("sessions.detail.restartNotice.idleTitle"),
+        description: restartVariants.length
+          ? t("sessions.detail.restartNotice.workbuddyWillRestart", { variants: restartVariants.map(variantLabel).join(t("sessions.common.listSeparator")) })
+          : t("sessions.detail.restartNotice.workbuddyMayRestart"),
         willRestart: restartVariants.length > 0,
       }
     : props.client === "vscodeExt"
       ? {
-          title: editorRunning ? "当前运行：VS Code" : "执行前会检查 VS Code 运行状态",
-          description: `${editorRunning ? "若写入目标包含当前登录账号，确认后将先关闭 VS Code，同步结束再自动打开。" : "若写入目标包含当前登录账号且 VS Code 正在运行，确认后将自动关闭并在同步结束后重新打开。"}请先保存未完成的输入；执行时会再次核对实际运行状态。`,
+          title: editorRunning ? t("sessions.detail.restartNotice.vscodeRunningTitle") : t("sessions.detail.restartNotice.vscodeIdleTitle"),
+          description: editorRunning ? t("sessions.detail.restartNotice.vscodeWillRestart") : t("sessions.detail.restartNotice.vscodeMayRestart"),
           willRestart: editorRunning,
         }
       : null;
   const summary = equal
-    ? `${active.length} 个账号内容一致`
-    : canBatch ? `有 ${behind.length} 个账号待同步`
-    : conflict && divergence ? `${divergence.commonMemberIds.length} 个账号在共同旧版，另有 ${divergence.branches.length} 条独立更新`
-    : conflict ? `${active.length} 个账号的会话内容不一致`
-    : detail?.summaryStatus === "missing" ? "部分账号内容缺失" : "部分内容状态尚无法确认";
+    ? t("sessions.detail.summaryEqual", { count: active.length })
+    : canBatch ? t("sessions.detail.summaryBehind", { count: behind.length })
+    : conflict && divergence ? t("sessions.detail.summaryDivergeBranches", { common: divergence.commonMemberIds.length, branches: divergence.branches.length })
+    : conflict ? t("sessions.detail.summaryDiverge", { count: active.length })
+    : detail?.summaryStatus === "missing" ? t("sessions.detail.summaryMissing") : t("sessions.detail.summaryUnknown");
   // Close the popover after the page handler settled; it resolves on failure too and keeps the toast.
   async function completeAdd() {
     await props.onAdd();
@@ -183,55 +189,55 @@ export function GroupDetailPanel(props: GroupDetailPanelProps) {
   }
   function sourceSelect(label: string) {
     return <Select value={selectedSource?.memberId ?? ""} onValueChange={props.setSourceMemberId} disabled={props.busy || sourceOptions.length === 0}>
-      <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label={label}><SelectValue placeholder="选择可读取的账号副本" /></SelectTrigger>
+      <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label={label}><SelectValue placeholder={t("sessions.detail.sourcePlaceholder")} /></SelectTrigger>
       <SelectContent>{sourceOptions.map((member) => <SelectItem key={member.memberId} value={member.memberId} className="text-xs">{member.accountName} · {variantLabel(member.variant)}</SelectItem>)}</SelectContent>
     </Select>;
   }
 
-  return <section aria-label="会话组详情" className="session-relationship flex h-full min-h-0 min-w-0 flex-col bg-card">
+  return <section aria-label={t("sessions.detail.groupAria")} className="session-relationship flex h-full min-h-0 min-w-0 flex-col bg-card">
     <div className="flex shrink-0 items-center justify-between px-4 py-2.5">
-      <span className="text-xs font-medium text-muted-foreground">会话详情</span>
-      <Button variant="ghost" size={props.fullPage ? "sm" : "icon"} className={props.fullPage ? "h-7 text-xs" : "size-7"} aria-label={props.fullPage ? "返回会话" : "关闭详情"} onClick={props.onClose}>
-        {props.fullPage ? <><ChevronLeft className="size-3.5" />返回会话</> : <X className="size-4" />}
+      <span className="text-xs font-medium text-muted-foreground">{t("sessions.detail.title")}</span>
+      <Button variant="ghost" size={props.fullPage ? "sm" : "icon"} className={props.fullPage ? "h-7 text-xs" : "size-7"} aria-label={props.fullPage ? t("sessions.detail.backToSessions") : t("sessions.detail.close")} onClick={props.onClose}>
+        {props.fullPage ? <><ChevronLeft className="size-3.5" />{t("sessions.detail.backToSessions")}</> : <X className="size-4" />}
       </Button>
     </div>
     <div data-detail-scroll className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
       {props.error && <div role="alert" className="mb-3 space-y-1.5 rounded-lg border border-destructive/30 p-2.5 text-xs text-destructive">
-        <p className="break-words">{props.error}</p><Button variant="outline" size="sm" className="h-7 text-xs" disabled={props.loading} onClick={props.onRetry}>重试</Button>
+        <p className="break-words">{props.error}</p><Button variant="outline" size="sm" className="h-7 text-xs" disabled={props.loading} onClick={props.onRetry}>{t("common.retry")}</Button>
       </div>}
-      {!detail && !props.error && <div aria-label="正在加载会话详情" aria-busy="true" className="space-y-3">
+      {!detail && !props.error && <div aria-label={t("sessions.detail.loadingAria")} aria-busy="true" className="space-y-3">
         <Skeleton className="h-6 w-3/4" /><Skeleton className="h-5 w-28" /><Skeleton className="h-12 w-full" /><Skeleton className="h-5 w-32" /><Skeleton className="h-52 w-full" />
       </div>}
       {detail && <>
         <h2 className="session-detail-title break-words text-lg font-semibold leading-snug tracking-tight">{detail.title}</h2>
         <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <Badge variant="success">{clientNames[props.client]}</Badge>
-          <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground"><Folder className="size-3 shrink-0" /><span className="truncate" title={detail.projectLabel}>{detail.projectLabel || "未标记项目"}</span></span>
+          <Badge variant="success">{t(CLIENT_TITLE_KEY[props.client])}</Badge>
+          <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground"><Folder className="size-3 shrink-0" /><span className="truncate" title={detail.projectLabel}>{detail.projectLabel || t("sessions.group.noProject")}</span></span>
         </div>
         <Alert variant={conflict ? "destructive" : canBatch ? "warning" : equal ? "success" : "default"} className={`my-3 min-w-0 items-center py-2.5 pr-11 [&>svg]:translate-y-0 ${conflict ? "border-destructive/35 bg-destructive/10 text-destructive dark:text-red-300" : canBatch ? "dark:text-amber-200" : equal ? "" : "bg-muted/70"}`} data-relationship-summary>
           {conflict ? <TriangleAlert aria-hidden="true" /> : equal ? <Check aria-hidden="true" /> : <Info aria-hidden="true" />}
           <AlertTitle className="text-xs leading-4">{summary}</AlertTitle>
-          {conflict && <AlertDescription className="text-[11px] leading-4 text-destructive/85 dark:text-red-200/80">{divergence ? "这些更新都包含共同旧版，但彼此内容不同，无法自动合并。请选择要保留的一份。" : "选择要保留的一份；确认后将它的内容统一到其他可验证的账号。"}</AlertDescription>}
-          {equal && active[0]?.recordCount != null && <AlertDescription className="text-[11px] leading-4">{active[0].recordCount} 条内容 · 无需同步</AlertDescription>}
-          <Button variant="ghost" size="icon" className={`absolute right-2 top-1 size-7 ${conflict ? "hover:bg-destructive/10" : canBatch ? "hover:bg-amber-500/10" : "hover:bg-emerald-500/10"}`} aria-label="重新检查会话状态" title="重新检查" disabled={props.loading || props.busy} onClick={props.onRetry}><RefreshCw className={`size-3.5 ${props.loading ? "animate-spin" : ""}`} /></Button>
+          {conflict && <AlertDescription className="text-[11px] leading-4 text-destructive/85 dark:text-red-200/80">{divergence ? t("sessions.detail.conflictHintDiverge") : t("sessions.detail.conflictHint")}</AlertDescription>}
+          {equal && active[0]?.recordCount != null && <AlertDescription className="text-[11px] leading-4">{t("sessions.detail.equalRecords", { count: active[0].recordCount })}</AlertDescription>}
+          <Button variant="ghost" size="icon" className={`absolute right-2 top-1 size-7 ${conflict ? "hover:bg-destructive/10" : canBatch ? "hover:bg-amber-500/10" : "hover:bg-emerald-500/10"}`} aria-label={t("sessions.detail.recheckAria")} title={t("sessions.detail.recheck")} disabled={props.loading || props.busy} onClick={props.onRetry}><RefreshCw className={`size-3.5 ${props.loading ? "animate-spin" : ""}`} /></Button>
         </Alert>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div><h3 className="text-sm font-semibold">{divergence ? "内容分支图" : "会话关联图"}</h3><p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{divergence ? `共同旧版上的 ${divergence.branches.length} 条独立更新` : "同一会话，在不同账号中各有一份"}</p></div>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">{detail.members.length} 个账号</span>
+          <div><h3 className="text-sm font-semibold">{divergence ? t("sessions.detail.branchGraph") : t("sessions.detail.linkGraph")}</h3><p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{divergence ? t("sessions.detail.branchGraphHint", { count: divergence.branches.length }) : t("sessions.detail.linkGraphHint")}</p></div>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">{t("sessions.detail.accountCountBadge", { count: detail.members.length })}</span>
         </div>
         <div className="relationship-canvas rounded-xl border border-brand/10 bg-brand/5 p-3">
           {divergence && <div className="relationship-group-labels mb-2 flex items-center justify-between gap-3 text-[11px] leading-4">
-            <span className="rounded-md bg-amber-500/10 px-2 py-1 font-medium text-amber-800 dark:text-amber-200">共同旧版 · {divergence.commonMemberIds.length} 个账号</span>
+            <span className="rounded-md bg-amber-500/10 px-2 py-1 font-medium text-amber-800 dark:text-amber-200">{t("sessions.detail.commonOldVersionCount", { count: divergence.commonMemberIds.length })}</span>
             <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <span className="rounded-md bg-destructive/10 px-2 py-1 font-medium text-destructive">独立更新 · {divergence.branches.length} 条分支</span>
+            <span className="rounded-md bg-destructive/10 px-2 py-1 font-medium text-destructive">{t("sessions.detail.branchCount", { count: divergence.branches.length })}</span>
           </div>}
           <div ref={graphRef} className="relationship-graph" data-lineage={!!divergence}>
           <svg className="relationship-connections" aria-hidden="true">{connections.map((line, index) => <g key={index} data-line-tone={line.tone}><path d={line.path} />{line.points.map((point, pointIndex) => <circle key={pointIndex} cx={point.x} cy={point.y} r="3.5" />)}</g>)}</svg>
           <div className="relationship-root" data-session-hub>
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-brand/25 bg-brand/10 text-brand"><FileText className="size-5" /></span>
-            <div><p className="text-sm font-semibold">{divergence ? "共同旧版" : "同一会话"}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{divergence ? `${divergence.commonMemberIds.length} 个账号内容相同` : `${detail.members.length} 个关联账号`}</p></div>{equal && <Badge variant="success">内容一致</Badge>}
+            <div><p className="text-sm font-semibold">{divergence ? t("sessions.detail.commonOldVersion") : t("sessions.detail.sameSession")}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{divergence ? t("sessions.detail.commonContentCount", { count: divergence.commonMemberIds.length }) : t("sessions.detail.linkedAccountCount", { count: detail.members.length })}</p></div>{equal && <Badge variant="success">{t("sessions.detail.identicalBadge")}</Badge>}
           </div>
-          <ul className="relationship-members" aria-label="关联账号副本">
+          <ul className="relationship-members" aria-label={t("sessions.detail.membersAria")}>
             {displayMembers.map((member, index) => {
               const isActive = member.linkState === "active";
               const isCurrent = isActive && props.currentAccounts.some((current) =>
@@ -251,103 +257,103 @@ export function GroupDetailPanel(props: GroupDetailPanelProps) {
                         <MemberVariantMark client={props.client} variant={member.variant} isCurrent={isCurrent} />
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" aria-label={`${member.accountName} 的操作`} title="更多操作"><Ellipsis className="size-3.5" /></Button>
+                            <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-foreground" aria-label={t("sessions.detail.memberActionsAria", { name: member.accountName })} title={t("sessions.group.moreActions")}><Ellipsis className="size-3.5" /></Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-36">
-                            <DropdownMenuItem onSelect={() => setUnlinkTargetId(member.memberId)}><Unlink />取消关联</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setUnlinkTargetId(member.memberId)}><Unlink />{t("sessions.detail.unlink")}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center justify-between gap-1.5"><span className="text-xs tabular-nums text-muted-foreground">{member.recordCount == null ? "内容条数无法确认" : `${member.recordCount} 条内容`}</span>{divergence && commonMemberIds.has(member.memberId) ? <Badge variant="warning" className="text-[10px]">共同旧版</Badge> : branchIndex != null ? <Badge variant="outline" data-branch-badge className="text-[10px]">分支 {branchIndex + 1}</Badge> : (!conflict || !member.canBeSource) && <MemberStatus status={status} equal={equal} />}</div>
+                    <div className="mt-1 flex flex-wrap items-center justify-between gap-1.5"><span className="text-xs tabular-nums text-muted-foreground">{member.recordCount == null ? t("sessions.detail.recordCountUnknown") : t("sessions.detail.recordCount", { count: member.recordCount })}</span>{divergence && commonMemberIds.has(member.memberId) ? <Badge variant="warning" className="text-[10px]">{t("sessions.detail.commonVersionBadge")}</Badge> : branchIndex != null ? <Badge variant="outline" data-branch-badge className="text-[10px]">{t("sessions.detail.branchBadge", { index: branchIndex + 1 })}</Badge> : (!conflict || !member.canBeSource) && <MemberStatus status={status} equal={equal} />}</div>
                     <Collapsible className="mt-0.5">
-                      <div className="flex flex-wrap items-center justify-between gap-x-2"><p className="text-[11px] text-muted-foreground">{formatDate(member.updatedAt)}</p><CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="h-5 gap-0.5 px-0 text-[11px] text-brand">{conflict && member.canBeSource ? "查看内容" : "副本详情"}<ChevronDown className="size-3" /></Button></CollapsibleTrigger></div>
+                      <div className="flex flex-wrap items-center justify-between gap-x-2"><p className="text-[11px] text-muted-foreground">{formatDate(t, member.updatedAt)}</p><CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="h-5 gap-0.5 px-0 text-[11px] text-brand">{conflict && member.canBeSource ? t("sessions.detail.viewContent") : t("sessions.detail.copyDetails")}<ChevronDown className="size-3" /></Button></CollapsibleTrigger></div>
                       <CollapsibleContent className="space-y-1.5 py-1.5 text-[11px] leading-4 text-muted-foreground">
                         {conflict && member.canBeSource && <div className="max-h-44 space-y-1.5 overflow-y-auto rounded-md bg-muted/60 p-2">
-                          {member.contentPreview?.length ? <><p>最近 {member.contentPreview.length} 条可读内容：</p>{member.contentPreview.map((item, previewIndex) => <p key={previewIndex} className="break-words"><span className="font-medium text-foreground">{item.speaker}：</span>{item.text}</p>)}</> : <p>此副本暂无可展示的内容预览，请在对应客户端查看完整会话。</p>}
+                          {member.contentPreview?.length ? <><p>{t("sessions.detail.recentContent", { count: member.contentPreview.length })}</p>{member.contentPreview.map((item, previewIndex) => <p key={previewIndex} className="break-words"><span className="font-medium text-foreground">{t("sessions.detail.speakerLabel", { speaker: item.speaker })}</span>{item.text}</p>)}</> : <p>{t("sessions.detail.noPreview")}</p>}
                         </div>}
-                        <p className="break-words">{member.projectLabel || "未标记工作区"}</p><p className="break-words">{member.reason}</p>
+                        <p className="break-words">{member.projectLabel || t("sessions.detail.noWorkspace")}</p><p className="break-words">{member.reason}</p>
                       </CollapsibleContent>
                     </Collapsible>
-                    {isActive && member.versionStatus === "behind" && batchSource && <p className="mt-1.5 flex items-start gap-1 text-[11px] leading-4 text-muted-foreground"><ArrowRight className="mt-0.5 size-3 shrink-0" /><span className="break-words">可从「{batchSource.accountName}」同步</span></p>}
-                    {conflict && member.canBeSource && <Button variant="outline" size="sm" className="mt-1.5 h-7 px-2 text-xs" disabled={props.busy || !!props.unifyLoading} onClick={() => props.onPrepareUnify(member)}>{props.unifyLoading === member.memberId ? <Loader2 className="size-3.5 animate-spin" /> : null}{commonMemberIds.has(member.memberId) ? "以旧版为准" : "以此为准"}</Button>}
+                    {isActive && member.versionStatus === "behind" && batchSource && <p className="mt-1.5 flex items-start gap-1 text-[11px] leading-4 text-muted-foreground"><ArrowRight className="mt-0.5 size-3 shrink-0" /><span className="break-words">{t("sessions.detail.syncFrom", { source: batchSource.accountName })}</span></p>}
+                    {conflict && member.canBeSource && <Button variant="outline" size="sm" className="mt-1.5 h-7 px-2 text-xs" disabled={props.busy || !!props.unifyLoading} onClick={() => props.onPrepareUnify(member)}>{props.unifyLoading === member.memberId ? <Loader2 className="size-3.5 animate-spin" /> : null}{commonMemberIds.has(member.memberId) ? t("sessions.detail.useOldAsSource") : t("sessions.detail.useThisAsSource")}</Button>}
                   </article>
               </li>;
             })}
           </ul>
           </div>
-          {equal && <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] leading-4 text-muted-foreground"><Check className="size-3.5 shrink-0 text-brand" />有效关联内容一致，无需同步</p>}
+          {equal && <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] leading-4 text-muted-foreground"><Check className="size-3.5 shrink-0 text-brand" />{t("sessions.detail.equalFooter")}</p>}
         </div>
-        <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-4 text-muted-foreground"><Info className="mt-0.5 size-3 shrink-0" />{divergence ? "线条表示已验证的内容继承与分叉；不同颜色的分支互有新增，无法自动合并。" : conflict ? "连线只表示这些账号属于同一会话；不会自动选择要保留的内容。" : equal ? "账号更新后，可重新检查内容状态。" : "连线表示账号关联；仅在确认可安全补齐时提供批量同步。"}</p>
+        <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-4 text-muted-foreground"><Info className="mt-0.5 size-3 shrink-0" />{divergence ? t("sessions.detail.hintDiverge") : conflict ? t("sessions.detail.hintConflict") : equal ? t("sessions.detail.hintEqual") : t("sessions.detail.hintDefault")}</p>
       </>}
     </div>
     {detail && <Popover open={props.addOpen} onOpenChange={(open) => { if (!open) props.setAddOpen(false); }}>
       <footer data-detail-footer className="relationship-footer shrink-0 space-y-1.5 border-t border-border/70 bg-card px-4 py-2.5">
         {canBatch ? <>
-          <DemoAction className="w-full"><Button size="sm" className="h-8 w-full bg-brand text-xs text-brand-foreground hover:bg-brand/90" disabled={props.busy} onClick={props.onBatchSync}><RefreshCw className={`size-3.5 ${props.busy ? "animate-spin" : ""}`} />同步到 {behind.length} 个落后账号</Button></DemoAction>
-          <div className="flex items-center justify-between gap-2"><p className="min-w-0 truncate text-[11px] text-muted-foreground" title={`${batchSource.accountName} → ${behind.map((member) => member.accountName).join("、")}`}>{batchSource.accountName} → {behind.length} 个账号</p><PopoverTrigger asChild><Button variant="outline" size="sm" className="h-8 shrink-0 text-xs" disabled={detail.addTargets.length === 0} onClick={openAdd}><Plus className="size-3.5" />关联新账号</Button></PopoverTrigger></div>
+          <DemoAction className="w-full"><Button size="sm" className="h-8 w-full bg-brand text-xs text-brand-foreground hover:bg-brand/90" disabled={props.busy} onClick={props.onBatchSync}><RefreshCw className={`size-3.5 ${props.busy ? "animate-spin" : ""}`} />{t("sessions.detail.syncToBehind", { count: behind.length })}</Button></DemoAction>
+          <div className="flex items-center justify-between gap-2"><p className="min-w-0 truncate text-[11px] text-muted-foreground" title={`${batchSource.accountName} → ${behind.map((member) => member.accountName).join(t("sessions.common.listSeparator"))}`}>{t("sessions.detail.syncTargets", { source: batchSource.accountName, count: behind.length })}</p><PopoverTrigger asChild><Button variant="outline" size="sm" className="h-8 shrink-0 text-xs" disabled={detail.addTargets.length === 0} onClick={openAdd}><Plus className="size-3.5" />{t("sessions.detail.linkNewAccount")}</Button></PopoverTrigger></div>
         </> : conflict ? <>
-          <p className="text-center text-xs text-muted-foreground">在上方选择一个副本，统一其他账号</p>
-          <PopoverTrigger asChild><Button variant="outline" size="sm" className="h-8 w-full text-xs" disabled={detail.addTargets.length === 0} onClick={openAdd}><Plus className="size-3.5" />关联新账号</Button></PopoverTrigger>
+          <p className="text-center text-xs text-muted-foreground">{t("sessions.detail.chooseCopyFirst")}</p>
+          <PopoverTrigger asChild><Button variant="outline" size="sm" className="h-8 w-full text-xs" disabled={detail.addTargets.length === 0} onClick={openAdd}><Plus className="size-3.5" />{t("sessions.detail.linkNewAccount")}</Button></PopoverTrigger>
         </> : <>
-          <PopoverTrigger asChild><Button variant="outline" size="sm" className="h-8 w-full text-xs" disabled={detail.addTargets.length === 0} onClick={openAdd}><Link2 className="size-3.5" />关联新账号</Button></PopoverTrigger>
-          <p className="text-center text-[11px] leading-4 text-muted-foreground">选择一个现有账号，将会话复制到新账号</p>
+          <PopoverTrigger asChild><Button variant="outline" size="sm" className="h-8 w-full text-xs" disabled={detail.addTargets.length === 0} onClick={openAdd}><Link2 className="size-3.5" />{t("sessions.detail.linkNewAccount")}</Button></PopoverTrigger>
+          <p className="text-center text-[11px] leading-4 text-muted-foreground">{t("sessions.detail.linkNewAccountHint")}</p>
         </>}
       </footer>
-      <PopoverContent side="top" collisionPadding={12} aria-label="关联新账号" className="w-[min(304px,calc(100vw-32px))] space-y-2.5 p-3">
-        <h3 className="text-xs font-semibold">关联新账号</h3>
-        <p className="text-[11px] leading-4 text-muted-foreground">{equal ? "选择任一可读取的副本，复制到新账号并建立关联。" : "将所选账号的当前副本复制到新账号，并建立关联。"}</p>
-        <div className="space-y-1"><p className="text-[11px] font-medium">复制来源</p>{sourceSelect("选择复制来源")}</div>
-        <div className="space-y-1"><p className="text-[11px] font-medium">目标账号</p><Select value={props.addTargetId} onValueChange={props.setAddTargetId} disabled={props.busy || detail.addTargets.length === 0}>
-          <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label="目标关联账号"><SelectValue placeholder="选择兼容账号" /></SelectTrigger>
+      <PopoverContent side="top" collisionPadding={12} aria-label={t("sessions.detail.linkNewAccount")} className="w-[min(304px,calc(100vw-32px))] space-y-2.5 p-3">
+        <h3 className="text-xs font-semibold">{t("sessions.detail.linkNewAccount")}</h3>
+        <p className="text-[11px] leading-4 text-muted-foreground">{equal ? t("sessions.detail.addDescriptionEqual") : t("sessions.detail.addDescription")}</p>
+        <div className="space-y-1"><p className="text-[11px] font-medium">{t("sessions.detail.copySource")}</p>{sourceSelect(t("sessions.detail.copySourceAria"))}</div>
+        <div className="space-y-1"><p className="text-[11px] font-medium">{t("sessions.common.targetAccount")}</p><Select value={props.addTargetId} onValueChange={props.setAddTargetId} disabled={props.busy || detail.addTargets.length === 0}>
+          <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label={t("sessions.detail.targetAccountAria")}><SelectValue placeholder={t("sessions.detail.targetPlaceholder")} /></SelectTrigger>
           <SelectContent>{detail.addTargets.map((account) => <SelectItem key={account.id} value={account.id} className="text-xs">{displayName(account)} · {variantLabel(accountVariant(account))}</SelectItem>)}</SelectContent>
         </Select></div>
-        {detail.addTargets.length === 0 && <p className="text-[11px] text-muted-foreground">没有可添加的兼容账号。</p>}
-        <DemoAction className="w-full"><Button size="sm" className="h-8 w-full text-xs" disabled={props.busy || !selectedSource || !props.addTargetId} onClick={() => void completeAdd()}><Copy className="size-3.5" />{props.busy ? "处理中…" : "复制并关联"}</Button></DemoAction>
+        {detail.addTargets.length === 0 && <p className="text-[11px] text-muted-foreground">{t("sessions.detail.noCompatibleAccounts")}</p>}
+        <DemoAction className="w-full"><Button size="sm" className="h-8 w-full text-xs" disabled={props.busy || !selectedSource || !props.addTargetId} onClick={() => void completeAdd()}><Copy className="size-3.5" />{props.busy ? t("sessions.common.processing") : t("sessions.common.copyAndLink")}</Button></DemoAction>
         <PopoverArrow />
       </PopoverContent>
     </Popover>}
     <AlertDialog open={!!props.unifyPlan} onOpenChange={(open) => { if (!open) props.setUnifyPlan(null); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>以「{props.unifyPlan?.sourceName}」的内容为准？</AlertDialogTitle>
+          <AlertDialogTitle>{t("sessions.detail.unifyTitle", { source: props.unifyPlan?.sourceName ?? "" })}</AlertDialogTitle>
           <AlertDialogDescription>
-            将这份会话内容统一到其他 {props.unifyPlan?.targets.length ?? 0} 个账号。内容相同的账号会跳过。
+            {t("sessions.detail.unifyDescription", { count: props.unifyPlan?.targets.length ?? 0 })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {props.unifyPlan && commonMemberIds.has(props.unifyPlan.sourceMemberId) && <Alert variant="destructive" className="py-2.5">
           <TriangleAlert aria-hidden="true" />
-          <AlertTitle className="text-xs leading-4">你选择的是共同旧版</AlertTitle>
-          <AlertDescription className="text-[11px] leading-4">确认后，两条独立分支中的新增内容都会被旧版替换。</AlertDescription>
+          <AlertTitle className="text-xs leading-4">{t("sessions.detail.unifyOldWarningTitle")}</AlertTitle>
+          <AlertDescription className="text-[11px] leading-4">{t("sessions.detail.unifyOldWarning")}</AlertDescription>
         </Alert>}
         {restartNotice && changedTargets.length > 0 && <Alert variant="warning" className="py-2.5 dark:text-amber-200">
           <Info aria-hidden="true" />
           <AlertTitle className="text-xs leading-4">{restartNotice.title}</AlertTitle>
           <AlertDescription className="text-[11px] leading-4 text-amber-900/80 dark:text-amber-200/80">{restartNotice.description}</AlertDescription>
         </Alert>}
-        {overwrittenTargets.length > 0 && <p className="text-sm text-destructive">其中 {overwrittenTargets.length} 个账号有独有内容；确认后，它们现有的会话内容会被完整替换。</p>}
+        {overwrittenTargets.length > 0 && <p className="text-sm text-destructive">{t("sessions.detail.unifyOverwriteWarning", { count: overwrittenTargets.length })}</p>}
         {blockedTargets.length > 0 && <div role="alert" className="space-y-1 rounded-lg bg-muted p-3 text-sm">
-          <p className="font-medium">目前无法统一全部账号</p>
-          {blockedTargets.map((target) => <p key={target.memberId} className="break-words text-muted-foreground">{target.accountName}：{target.issue}</p>)}
+          <p className="font-medium">{t("sessions.detail.unifyBlockedTitle")}</p>
+          {blockedTargets.map((target) => <p key={target.memberId} className="break-words text-muted-foreground">{t("sessions.common.errorEntry", { name: target.accountName, error: target.issue })}</p>)}
         </div>}
-        {blockedTargets.length === 0 && <p className="text-xs text-muted-foreground">将更新 {changedTargets.length} 个账号。执行前会重新校验各副本内容；若内容已变化，操作会停止并报告结果。</p>}
+        {blockedTargets.length === 0 && <p className="text-xs text-muted-foreground">{t("sessions.detail.unifyBlockedSummary", { count: changedTargets.length })}</p>}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={props.busy}>取消</AlertDialogCancel>
-          {blockedTargets.length === 0 && <DemoAction><Button variant={overwrittenTargets.length > 0 ? "destructive" : "default"} disabled={props.busy} onClick={() => void props.onConfirmUnify()}>{props.busy ? "处理中…" : restartNotice?.willRestart ? "确认同步并重启" : "确认统一"}</Button></DemoAction>}
+          <AlertDialogCancel disabled={props.busy}>{t("common.cancel")}</AlertDialogCancel>
+          {blockedTargets.length === 0 && <DemoAction><Button variant={overwrittenTargets.length > 0 ? "destructive" : "default"} disabled={props.busy} onClick={() => void props.onConfirmUnify()}>{props.busy ? t("sessions.common.processing") : restartNotice?.willRestart ? t("sessions.detail.unifyConfirmRestart") : t("sessions.detail.unifyConfirm")}</Button></DemoAction>}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
     <AlertDialog open={!!unlinkTarget} onOpenChange={(open) => { if (!open && !unlinkBusy) setUnlinkTargetId(null); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>取消「{unlinkTarget?.accountName}」的关联？</AlertDialogTitle>
+          <AlertDialogTitle>{t("sessions.detail.unlinkTitle", { name: unlinkTarget?.accountName ?? "" })}</AlertDialogTitle>
           <AlertDialogDescription>
-            该账号不再属于这个会话组，不再参与同步；账号里的会话内容不会被删除。
+            {t("sessions.detail.unlinkDescription")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={unlinkBusy}>取消</AlertDialogCancel>
-          <DemoAction><Button variant="destructive" disabled={unlinkBusy || props.busy} onClick={() => void completeUnlink()}>{unlinkBusy ? "处理中…" : "确认取消关联"}</Button></DemoAction>
+          <AlertDialogCancel disabled={unlinkBusy}>{t("common.cancel")}</AlertDialogCancel>
+          <DemoAction><Button variant="destructive" disabled={unlinkBusy || props.busy} onClick={() => void completeUnlink()}>{unlinkBusy ? t("sessions.common.processing") : t("sessions.detail.unlinkConfirm")}</Button></DemoAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -355,27 +361,29 @@ export function GroupDetailPanel(props: GroupDetailPanelProps) {
 }
 
 function MemberStatus({ status, equal }: { status: SessionGroupMemberDetail["versionStatus"]; equal: boolean }) {
-  const labels: Record<typeof status, string> = {
-    latest: equal ? "内容一致" : "内容最新", behind: "内容落后", diverge: "存在分歧",
-    missing: "内容缺失", unknown: "无法确认", stale: "已失效", superseded: "已替代",
+  const t = useT();
+  const labels: Record<typeof status, MessageKey> = {
+    latest: equal ? "sessions.detail.identicalBadge" : "sessions.detail.memberLatest", behind: "sessions.detail.memberBehind", diverge: "sessions.status.diverge",
+    missing: "sessions.status.missing", unknown: "sessions.status.unknown", stale: "sessions.detail.memberStale", superseded: "sessions.detail.memberSuperseded",
   };
   const variant = status === "latest" ? "success" : ["behind", "diverge", "missing"].includes(status) ? "warning" : "outline";
-  return <Badge variant={variant} className="text-[10px] font-medium">{labels[status]}</Badge>;
+  return <Badge variant={variant} className="text-[10px] font-medium">{t(labels[status])}</Badge>;
 }
 
 /** 档位标记：与账号页 / 设置页同一套官方图标，国际版带 INTL 角标；当前账号用绿色描边区分。 */
 function MemberVariantMark({ client, variant, isCurrent }: { client: SessionGroupClient; variant: SessionGroupMemberDetail["variant"]; isCurrent: boolean }) {
+  const t = useT();
   const intl = variantIsIntl(variant);
   const mark = client === "workbuddy"
     ? (intl ? <WorkBuddyAiMark size={18} /> : <WorkBuddyMark size={18} />)
     : client === "codebuddyIde"
       ? (intl ? <CodeBuddyAiIdeMark size={18} /> : <CodeBuddyCnIdeMark size={18} />)
       : (intl ? <VscodeExtAiMark size={18} /> : <VscodeExtMark size={18} />);
-  const label = `${clientNames[client]} · ${variantLabel(variant)}${isCurrent ? " · 当前账号" : ""}`;
+  const label = `${t(CLIENT_TITLE_KEY[client])} · ${variantLabel(variant)}${isCurrent ? ` · ${t("sessions.common.currentAccount")}` : ""}`;
   return <span className={`inline-flex shrink-0 rounded-[26%] ${isCurrent ? "ring-2 ring-brand ring-offset-1 ring-offset-card" : ""}`} title={label} aria-label={label} role="img">{mark}</span>;
 }
 
-function formatDate(timestamp: number): string {
-  if (!timestamp) return "更新时间未知";
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(timestamp);
+function formatDate(t: Translate, timestamp: number): string {
+  if (!timestamp) return t("sessions.detail.updatedUnknown");
+  return new Intl.DateTimeFormat(intlLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(timestamp);
 }

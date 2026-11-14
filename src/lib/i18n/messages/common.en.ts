@@ -32,5 +32,7 @@ export const commonEn = {
   "common.hours": "{count} hours",
   "common.minutes": "{count} minutes",
   "common.seconds": "{count} seconds",
+  "common.hourLabel": "Hours",
+  "common.minuteLabel": "Minutes",
   "common.localeName": "English",
 } as const;

@@ -1017,7 +1017,12 @@ pub fn load_store(paths: &SessionPaths) -> StoreState {
             }
             return StoreState::Missing;
         }
-        Err(error) => return StoreState::Unavailable(format!("同步记录无法读取：{error}")),
+        Err(error) => {
+            return StoreState::Unavailable(i18n::pick(
+                format!("Could not read the sync record: {error}"),
+                format!("동기화 기록을 읽을 수 없습니다: {error}"),
+            ))
+        }
     };
     let mut store = match serde_json::from_str::<LinkStore>(&text) {
         Ok(store) => store,

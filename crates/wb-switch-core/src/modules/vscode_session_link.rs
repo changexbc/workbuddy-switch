@@ -27,6 +27,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::modules::i18n;
 use crate::modules::session_link::{
     self, full_digest_of, line_digest_of, to_hex, ContentSnapshot, ContentState, NormalizedContent,
     SESSION_ID_MARKER,
@@ -51,17 +52,40 @@ pub fn read_session_content(conv_dir: &Path, conversation_id: &str) -> ContentSt
     let index_bytes = match std::fs::read(&index_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ContentState::Missing,
-        Err(error) => return ContentState::Unavailable(format!("会话索引无法读取：{error}")),
+        Err(error) => {
+            return ContentState::Unavailable(i18n::pick(
+                format!("Could not read the session index: {error}"),
+                format!("세션 인덱스를 읽을 수 없습니다: {error}"),
+            ))
+        }
     };
     let index: Value = match serde_json::from_slice(&index_bytes) {
         Ok(value) => value,
-        Err(_) => return ContentState::Unavailable("会话索引无法解析，内容可能不完整".to_string()),
+        Err(_) => {
+            return ContentState::Unavailable(i18n::tr(
+                "The session index could not be parsed; the content may be incomplete",
+                "세션 인덱스를 해석할 수 없습니다. 내용이 불완전할 수 있습니다",
+            )
+            .to_string())
+        }
     };
     let Some(messages) = index.get("messages").and_then(Value::as_array) else {
-        return ContentState::Unavailable("会话索引缺少消息列表，内容可能不完整".to_string());
+        return ContentState::Unavailable(
+            i18n::tr(
+                "The session index is missing the message list; the content may be incomplete",
+                "세션 인덱스에 메시지 목록이 없습니다. 내용이 불완전할 수 있습니다",
+            )
+            .to_string(),
+        );
     };
     if messages.is_empty() {
-        return ContentState::Unavailable("会话内容为空，无法确认".to_string());
+        return ContentState::Unavailable(
+            i18n::tr(
+                "The session content is empty and cannot be confirmed",
+                "세션 내용이 비어 있어 확인할 수 없습니다",
+            )
+            .to_string(),
+        );
     }
 
     let placeholders = placeholder_map(&index, conversation_id);
@@ -72,26 +96,40 @@ pub fn read_session_content(conv_dir: &Path, conversation_id: &str) -> ContentSt
     for message in messages {
         let Some(id) = message_id(message) else {
             return ContentState::Unavailable(
-                "会话索引中的消息缺少 id，内容可能不完整".to_string(),
+                i18n::tr(
+                    "A message in the session index has no id; the content may be incomplete",
+                    "세션 인덱스의 메시지에 id가 없습니다. 내용이 불완전할 수 있습니다",
+                )
+                .to_string(),
             );
         };
         let file = conv_dir.join("messages").join(format!("{id}.json"));
         let bytes = match std::fs::read(&file) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return ContentState::Unavailable(format!(
-                    "消息 {id} 的文件不存在，内容可能不完整"
+                return ContentState::Unavailable(i18n::pick(
+                    format!("The file for message {id} does not exist; the content may be incomplete"),
+                    format!("메시지 {id}의 파일이 없습니다. 내용이 불완전할 수 있습니다"),
                 ));
             }
             Err(error) => {
-                return ContentState::Unavailable(format!("消息 {id} 的文件无法读取：{error}"));
+                return ContentState::Unavailable(i18n::pick(
+                    format!("Could not read the file for message {id}: {error}"),
+                    format!("메시지 {id}의 파일을 읽을 수 없습니다: {error}"),
+                ));
             }
         };
         let Ok(text) = std::str::from_utf8(&bytes) else {
-            return ContentState::Unavailable(format!("消息 {id} 的文件不是文本，无法确认"));
+            return ContentState::Unavailable(i18n::pick(
+                format!("The file for message {id} is not text and cannot be confirmed"),
+                format!("메시지 {id}의 파일이 텍스트가 아니어서 확인할 수 없습니다"),
+            ));
         };
         let Ok(value) = serde_json::from_str::<Value>(text) else {
-            return ContentState::Unavailable(format!("消息 {id} 的文件无法解析，内容可能不完整"));
+            return ContentState::Unavailable(i18n::pick(
+                format!("The file for message {id} could not be parsed; the content may be incomplete"),
+                format!("메시지 {id}의 파일을 해석할 수 없습니다. 내용이 불완전할 수 있습니다"),
+            ));
         };
         line_digests.push(line_digest_of(
             &normalize_message(&value, &placeholders).to_string(),

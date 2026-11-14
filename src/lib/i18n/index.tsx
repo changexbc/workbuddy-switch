@@ -26,8 +26,12 @@ const I18nContext = createContext<I18nValue | null>(null);
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(getLocale);
 
+  // Set during render, not in an effect: children format dates through the
+  // module-level reader on the same commit that the locale changes, and an
+  // effect would leave them one render behind.
+  setActiveLocale(locale);
+
   useEffect(() => {
-    setActiveLocale(locale);
     document.documentElement.lang = locale;
     syncHostLocale(locale);
   }, [locale]);

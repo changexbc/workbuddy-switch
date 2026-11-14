@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "workbuddy-switch · WorkBuddy 账号切换",
+        "title": "workbuddy-switch · WorkBuddy account switcher",
         "width": 1000,
         "height": 720,
         "minWidth": 720,

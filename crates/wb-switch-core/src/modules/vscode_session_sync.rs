@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::modules::account;
 use crate::modules::config::{now_ms, utc_iso};
+use crate::modules::i18n;
 use crate::modules::session::{SessionPaths, SyncSelection, REASON_PREVIEW_STALE};
 use crate::modules::session_backup;
 use crate::modules::session_link::{
@@ -90,7 +91,7 @@ fn conversation_index(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
-                .unwrap_or("(无标题)")
+                .unwrap_or(i18n::tr("(Untitled)", "(제목 없음)"))
                 .to_string();
             out.entry(id.to_string())
                 .or_insert_with(|| ConversationLocator {
@@ -188,7 +189,7 @@ impl SyncContext<'_> {
         self.index_of(uid)
             .get(conversation_id)
             .map(|locator| locator.title.clone())
-            .unwrap_or_else(|| "(无标题)".to_string())
+            .unwrap_or_else(|| i18n::tr("(Untitled)", "(제목 없음)").to_string())
     }
 }
 
@@ -271,7 +272,10 @@ fn register_copied_sessions_inner(
     let source_uid = uid_of(report, "sourceUid");
     let target_uid = uid_of(report, "targetUid");
     let (Some(source_uid), Some(target_uid)) = (source_uid, target_uid) else {
-        return vec![json!({ "error": "复制报告缺少账号信息，未能建立会话关联" })];
+        return vec![json!({ "error": i18n::tr(
+            "The copy report has no account information, so the session link could not be created",
+            "복사 보고서에 계정 정보가 없어 세션 연결을 만들지 못했습니다",
+        ) })];
     };
     let source_index = conversation_index(spec, root, &source_uid);
     let target_index = conversation_index(spec, root, &target_uid);
@@ -298,7 +302,10 @@ fn register_copied_sessions_inner(
         let (Some(workspace_hash), Some(source_id), Some(target_id)) =
             (workspace_hash, source_id, target_id)
         else {
-            errors.push(json!({ "error": "复制报告条目缺少会话信息，未能建立会话关联" }));
+            errors.push(json!({ "error": i18n::tr(
+                "A copy report entry has no session information, so the session link could not be created",
+                "복사 보고서 항목에 세션 정보가 없어 세션 연결을 만들지 못했습니다",
+            ) }));
             continue;
         };
         let outcome = register_one(&context, variant, isolate_variant, source_id, target_id);
@@ -324,12 +331,26 @@ fn register_one(
     let paths = context.paths;
     let source_uid = context.source_uid;
     let target_uid = context.target_uid;
-    let source_content = ready_content(context, source_uid, source_id, "来源")?;
-    let target_content = ready_content(context, target_uid, target_id, "副本")?;
+    let source_content = ready_content(
+        context,
+        source_uid,
+        source_id,
+        i18n::tr("source", "원본"),
+    )?;
+    let target_content = ready_content(
+        context,
+        target_uid,
+        target_id,
+        i18n::tr("copy", "사본"),
+    )?;
     // 基线只能建立在「双方内容确实一致」之上：不一致时不登记，
     // 让该会话以「未关联」呈现，而不是留下一条错误的共同基线。
     if source_content.normalized.line_digests != target_content.normalized.line_digests {
-        return Err("已复制但副本内容与来源不一致，未建立关联".to_string());
+        return Err(i18n::tr(
+            "Copied, but the copy's content does not match the source; the session link was not created",
+            "복사했지만 사본 내용이 원본과 일치하지 않아 세션 연결을 만들지 않았습니다",
+        )
+        .to_string());
     }
     let normalized = source_content.normalized.clone();
     let (source_account_id, source_variant) = account_metadata_for_uid(paths, source_uid);
@@ -461,8 +482,14 @@ fn ready_content(
 ) -> Result<ContentSnapshot, String> {
     match context.content_of(uid, conversation_id) {
         ContentState::Ready(snapshot) => Ok(snapshot),
-        ContentState::Missing => Err(format!("已复制但找不到{what}内容，未建立关联")),
-        ContentState::Unavailable(reason) => Err(format!("内容无法确认（{reason}），未建立关联")),
+        ContentState::Missing => Err(i18n::pick(
+            format!("Copied, but the {what} content could not be found; the session link was not created"),
+            format!("복사했지만 {what} 내용을 찾을 수 없어 세션 연결을 만들지 않았습니다"),
+        )),
+        ContentState::Unavailable(reason) => Err(i18n::pick(
+            format!("The content cannot be confirmed ({reason}); the session link was not created"),
+            format!("내용을 확인할 수 없습니다({reason}). 세션 연결을 만들지 않았습니다"),
+        )),
     }
 }
 
@@ -472,13 +499,21 @@ fn ready_content(
 
 /// 预览「当前插件账号 → 目标账号」可同步的关联会话（只读，不写任何会话正文）。
 pub fn links_preview(target_acc: &Value) -> Result<Value, String> {
-    let root = vscode_session::ext_data_root()
-        .ok_or_else(|| "未找到 VS Code CodeBuddy 插件数据目录，无法同步会话".to_string())?;
+    let root = vscode_session::ext_data_root().ok_or_else(|| {
+        i18n::tr(
+            "VS Code CodeBuddy extension data directory not found, so sessions cannot be synced",
+            "VS Code CodeBuddy 확장 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다",
+        )
+        .to_string()
+    })?;
     let source_uid = vscode_ext::active_ext_uid()
         .filter(|uid| !uid.trim().is_empty())
         .ok_or_else(|| {
-            "未检测到 VS Code CodeBuddy 插件当前登录账号，无法同步会话。请先在 VS Code 中登录该插件后重试。"
-                .to_string()
+            i18n::tr(
+                "No signed-in account detected for the VS Code CodeBuddy extension, so sessions cannot be synced. Sign in to the extension in VS Code and try again.",
+                "VS Code CodeBuddy 확장에 로그인된 계정을 찾지 못해 세션을 동기화할 수 없습니다. VS Code에서 확장에 로그인한 뒤 다시 시도해 주세요.",
+            )
+            .to_string()
         })?;
     links_preview_at(
         &root,
@@ -531,7 +566,11 @@ fn links_preview_in_filtered(
 ) -> Result<Value, String> {
     let target_uid = target_uid_of(target_acc)?;
     if source_uid == target_uid {
-        return Err("当前账号与目标账号相同，无需同步会话".to_string());
+        return Err(i18n::tr(
+            "The current account and the target account are the same; no need to sync sessions",
+            "현재 계정과 대상 계정이 같아 세션을 동기화할 필요가 없습니다",
+        )
+        .to_string());
     }
     // 两侧数据仓都没有档位能力探测：同一数据仓可跨档位复制。
     let mut report = json!({
@@ -581,7 +620,13 @@ fn target_uid_of(target_acc: &Value) -> Result<String, String> {
     account::get_str(target_acc, "uid")
         .map(|uid| uid.trim().to_string())
         .filter(|uid| !uid.is_empty())
-        .ok_or_else(|| "目标账号缺少 uid，无法同步会话".to_string())
+        .ok_or_else(|| {
+            i18n::tr(
+                "The target account has no uid, so sessions cannot be synced",
+                "대상 계정에 uid가 없어 세션을 동기화할 수 없습니다",
+            )
+            .to_string()
+        })
 }
 
 /// `None` 表示不过滤（插件路径）；`Some` 时组档位必须一致（IDE 共用命名空间）。
@@ -680,7 +725,7 @@ fn preview_group_item(context: &SyncContext<'_>, group: &LinkGroup) -> Value {
     let target_any = group.members.iter().find(|m| m.uid == context.target_uid);
     let title = source_any
         .map(|member| context.title_of(context.source_uid, &member.session_id))
-        .unwrap_or_else(|| "(无标题)".to_string());
+        .unwrap_or_else(|| i18n::tr("(Untitled)", "(제목 없음)").to_string());
     let source_summary = member_summary(source_any);
     let target_summary = member_summary(target_any);
 
@@ -698,7 +743,10 @@ fn preview_group_item(context: &SyncContext<'_>, group: &LinkGroup) -> Value {
             "common": 0,
             "defaultChecked": false,
             "availableModes": [],
-            "reason": "对应的会话已失效或已被替换，需手动处理",
+            "reason": i18n::tr(
+                "The matching session is no longer valid or has been replaced; handle it manually",
+                "해당 세션이 더 이상 유효하지 않거나 교체되었습니다. 직접 처리해 주세요",
+            ),
             "recordCount": {"source": 0, "target": 0, "baseline": null},
             "source": source_summary,
             "target": target_summary,
@@ -760,7 +808,10 @@ fn preview_group_item(context: &SyncContext<'_>, group: &LinkGroup) -> Value {
                 // 绑定存不下来就不能让用户勾选：不给出可执行动作，并说明原因。
                 item["availableModes"] = json!([]);
                 item["defaultChecked"] = json!(false);
-                item["reason"] = json!(format!("{reason}（检查结果无法保存：{error}）"));
+                item["reason"] = json!(i18n::pick(
+                    format!("{reason} (the check result could not be saved: {error})"),
+                    format!("{reason}(검사 결과를 저장할 수 없습니다: {error})"),
+                ));
             }
         }
     }
@@ -786,18 +837,27 @@ pub fn sync_selected(target_acc: &Value, selections: &[SyncSelection]) -> Result
         return Ok(empty_report());
     }
     if vscode_ext::is_vscode_running() {
-        return Err(
-            "检测到 VS Code 正在运行，请先完全退出后再同步会话，否则写入会被 VS Code 覆盖。"
-                .to_string(),
-        );
+        return Err(i18n::tr(
+            "VS Code is running. Quit it completely before syncing sessions, otherwise VS Code will overwrite the written data.",
+            "VS Code가 실행 중입니다. 세션을 동기화하기 전에 완전히 종료해 주세요. 그렇지 않으면 기록한 내용을 VS Code가 덮어씁니다.",
+        )
+        .to_string());
     }
-    let root = vscode_session::ext_data_root()
-        .ok_or_else(|| "未找到 VS Code CodeBuddy 插件数据目录，无法同步会话".to_string())?;
+    let root = vscode_session::ext_data_root().ok_or_else(|| {
+        i18n::tr(
+            "VS Code CodeBuddy extension data directory not found, so sessions cannot be synced",
+            "VS Code CodeBuddy 확장 데이터 디렉터리를 찾지 못해 세션을 동기화할 수 없습니다",
+        )
+        .to_string()
+    })?;
     let source_uid = vscode_ext::active_ext_uid()
         .filter(|uid| !uid.trim().is_empty())
         .ok_or_else(|| {
-            "未检测到 VS Code CodeBuddy 插件当前登录账号，无法同步会话。请先在 VS Code 中登录该插件后重试。"
-                .to_string()
+            i18n::tr(
+                "No signed-in account detected for the VS Code CodeBuddy extension, so sessions cannot be synced. Sign in to the extension in VS Code and try again.",
+                "VS Code CodeBuddy 확장에 로그인된 계정을 찾지 못해 세션을 동기화할 수 없습니다. VS Code에서 확장에 로그인한 뒤 다시 시도해 주세요.",
+            )
+            .to_string()
         })?;
     sync_selected_at(
         &root,
@@ -873,12 +933,20 @@ fn sync_selected_in_filtered(
     }
     let target_uid = target_uid_of(target_acc)?;
     if source_uid == target_uid {
-        return Err("当前账号与目标账号相同，无需同步会话".to_string());
+        return Err(i18n::tr(
+            "The current account and the target account are the same; no need to sync sessions",
+            "현재 계정과 대상 계정이 같아 세션을 동기화할 필요가 없습니다",
+        )
+        .to_string());
     }
     let store = match session_link::load_store(paths) {
         StoreState::Ready(store) => store,
         StoreState::Missing => {
-            return Err("同步记录不存在或不可用，无法同步会话".to_string());
+            return Err(i18n::tr(
+                "The sync record does not exist or is unavailable, so sessions cannot be synced",
+                "동기화 기록이 없거나 사용할 수 없어 세션을 동기화할 수 없습니다",
+            )
+            .to_string());
         }
         StoreState::Unavailable(reason) => return Err(reason),
     };
@@ -964,7 +1032,11 @@ fn plan_sync_item(
     let Some(token) = session_link::load_preview_token(context.paths, &selection.preview_token)
     else {
         return SyncItemOutcome::Rejected {
-            message: "检查结果不存在或已失效，请重新检查后再操作".to_string(),
+            message: i18n::tr(
+                "The check result does not exist or has expired; check again before continuing",
+                "검사 결과가 없거나 만료되었습니다. 다시 검사한 뒤 작업해 주세요",
+            )
+            .to_string(),
         };
     };
     let binding = &token.binding;
@@ -972,7 +1044,11 @@ fn plan_sync_item(
         || !passes_variant_filter(context.variant_filter, binding.variant)
     {
         return SyncItemOutcome::Rejected {
-            message: "检查结果与所选会话不匹配，已拒绝".to_string(),
+            message: i18n::tr(
+                "The check result does not match the selected session; request rejected",
+                "검사 결과가 선택한 세션과 일치하지 않아 거부했습니다",
+            )
+            .to_string(),
         };
     }
     let skip = |message: String| SyncItemOutcome::Skipped {
@@ -980,25 +1056,49 @@ fn plan_sync_item(
         verdict: Some(binding.verdict),
     };
     if binding.source.uid != context.source_uid || binding.target.uid != context.target_uid {
-        return skip("账号已变化，检查结果已失效".to_string());
+        return skip(
+            i18n::tr(
+                "The account has changed, so the check result has expired",
+                "계정이 변경되어 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     }
     let Some(group) = store.groups.iter().find(|group| {
         group.id == selection.group_id
             && passes_variant_filter(context.variant_filter, group.variant)
     }) else {
-        return skip("会话的关联关系已不存在，检查结果已失效".to_string());
+        return skip(
+            i18n::tr(
+                "The session link no longer exists, so the check result has expired",
+                "세션 연결이 더 이상 존재하지 않아 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     let (Some(source_member), Some(target_member)) = (
         session_link::active_member_for(group, context.source_uid),
         session_link::active_member_for(group, context.target_uid),
     ) else {
-        return skip("对应的会话已失效，检查结果已失效".to_string());
+        return skip(
+            i18n::tr(
+                "The matching session is no longer valid, so the check result has expired",
+                "해당 세션이 더 이상 유효하지 않아 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     let (Some(source_dir), Some(target_dir)) = (
         context.dir_of(context.source_uid, &source_member.session_id),
         context.dir_of(context.target_uid, &target_member.session_id),
     ) else {
-        return skip("找不到会话所在的工作区，检查结果已失效".to_string());
+        return skip(
+            i18n::tr(
+                "The workspace that contains the session could not be found, so the check result has expired",
+                "세션이 있는 워크스페이스를 찾을 수 없어 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     // 重新加载正文、基线与判定，再与凭据逐项核对；任一变化都跳过（含显式覆盖）。
     let source_content =
@@ -1023,14 +1123,24 @@ fn plan_sync_item(
     );
     let mismatches = session_link::verify_preview(&token, &live);
     if !mismatches.is_empty() {
-        return skip(format!("检查结果已失效：{}", mismatches.join("；")));
+        return skip(i18n::pick(
+            format!("The check result has expired: {}", mismatches.join("; ")),
+            format!("검사 결과가 만료되었습니다: {}", mismatches.join("; ")),
+        ));
     }
     if !decision.verdict.allows(selection.mode) {
         return SyncItemOutcome::Rejected {
-            message: format!(
-                "该组判定为 {}，不允许以 {} 模式同步",
-                decision.verdict.as_str(),
-                selection.mode.as_str()
+            message: i18n::pick(
+                format!(
+                    "This group's verdict is {}, so syncing in {} mode is not allowed",
+                    decision.verdict.as_str(),
+                    selection.mode.as_str()
+                ),
+                format!(
+                    "이 그룹은 {} 상태이므로 {} 모드로 동기화할 수 없습니다",
+                    decision.verdict.as_str(),
+                    selection.mode.as_str()
+                ),
             ),
         };
     }
@@ -1038,7 +1148,13 @@ fn plan_sync_item(
     let (ContentState::Ready(source_snapshot), ContentState::Ready(target_snapshot)) =
         (&source_content, &target_content)
     else {
-        return skip("双方内容不可验证，检查结果已失效".to_string());
+        return skip(
+            i18n::tr(
+                "The content on both sides cannot be verified, so the check result has expired",
+                "양쪽 내용을 확인할 수 없어 검사 결과가 만료되었습니다",
+            )
+            .to_string(),
+        );
     };
     SyncItemOutcome::Validated(Box::new(SyncItemPlan {
         group_id: selection.group_id.clone(),
@@ -1067,7 +1183,11 @@ fn execute_sync_item(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value,
         SyncMode::FastForward => fast_forward(paths, plan),
         SyncMode::Overwrite | SyncMode::UnifyOverwrite => overwrite(paths, plan),
         // 插件侧没有 sessions 表、不感知归档状态，永不产生状态同步计划。
-        SyncMode::StatusOnly => Err("当前客户端不支持仅同步归档，已拒绝".to_string()),
+        SyncMode::StatusOnly => Err(i18n::tr(
+            "This client does not support archive-only sync; request rejected",
+            "이 클라이언트는 보관만 동기화하는 기능을 지원하지 않아 거부했습니다",
+        )
+        .to_string()),
     }
 }
 
@@ -1096,12 +1216,21 @@ fn begin_index_backup(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<PathB
     let dir = backup_root(paths, plan.backup_kind)
         .join(&plan.workspace_hash)
         .join(&plan.target_conversation_id);
-    std::fs::create_dir_all(&dir).map_err(|error| format!("创建索引备份目录失败：{error}"))?;
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        i18n::pick(
+            format!("Could not create the index backup directory: {error}"),
+            format!("인덱스 백업 디렉터리를 만들지 못했습니다: {error}"),
+        )
+    })?;
     for name in ["index.json", ".index_bak.json"] {
         let from = plan.target_dir.join(name);
         if from.is_file() {
-            std::fs::copy(&from, dir.join(name))
-                .map_err(|error| format!("备份目标索引失败（{name}）：{error}"))?;
+            std::fs::copy(&from, dir.join(name)).map_err(|error| {
+                i18n::pick(
+                    format!("Could not back up the target index ({name}): {error}"),
+                    format!("대상 인덱스를 백업하지 못했습니다({name}): {error}"),
+                )
+            })?;
         }
     }
     Ok(dir)
@@ -1126,10 +1255,16 @@ pub(crate) fn rollback_index(
         let target = plan.target_dir.join(name);
         if backup.is_file() {
             if let Err(error) = std::fs::copy(&backup, &target) {
-                failures.push(format!("索引 {name} 未恢复：{error}"));
+                failures.push(i18n::pick(
+                    format!("Index {name} was not restored: {error}"),
+                    format!("인덱스 {name} 복원 실패: {error}"),
+                ));
             }
         } else if let Err(error) = remove_file_if_exists(&target) {
-            failures.push(format!("索引 {name} 未删除：{error}"));
+            failures.push(i18n::pick(
+                format!("Index {name} was not deleted: {error}"),
+                format!("인덱스 {name} 삭제 실패: {error}"),
+            ));
         }
     }
     // 新增消息可能上百条：逐条列名会把用户可见文案撑爆，这里只报失败条数。
@@ -1138,15 +1273,25 @@ pub(crate) fn rollback_index(
         .filter(|path| remove_file_if_exists(path).is_err())
         .count();
     if undeleted > 0 {
-        failures.push(format!("本次新增的 {undeleted} 个消息文件未删除"));
+        failures.push(i18n::pick(
+            format!("{undeleted} newly added message files were not deleted"),
+            format!("이번에 추가한 메시지 파일 {undeleted}개를 삭제하지 못했습니다"),
+        ));
     }
     if failures.is_empty() {
         return Ok(());
     }
-    Err(format!(
-        "副本回滚未完成（{}），请从备份目录 {} 手工恢复",
-        failures.join("；"),
-        backup_dir.display()
+    Err(i18n::pick(
+        format!(
+            "The copy rollback did not complete ({}); restore manually from the backup directory {}",
+            failures.join("; "),
+            backup_dir.display()
+        ),
+        format!(
+            "사본 롤백이 완료되지 않았습니다({}). 백업 디렉터리 {}에서 직접 복원해 주세요",
+            failures.join("; "),
+            backup_dir.display()
+        ),
     ))
 }
 
@@ -1162,29 +1307,59 @@ fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
 /// 写目标会话索引（`index.json` 与 `.index_bak.json` 同内容，与复制路径一致）。
 fn write_session_index(target_dir: &Path, index: &Value) -> Result<(), String> {
     let text = index.to_string();
-    session_backup::durable_write_str(&target_dir.join("index.json"), &text)
-        .map_err(|error| format!("写入副本索引失败：{error}"))?;
-    session_backup::durable_write_str(&target_dir.join(".index_bak.json"), &text)
-        .map_err(|error| format!("写入副本索引备份失败：{error}"))?;
+    session_backup::durable_write_str(&target_dir.join("index.json"), &text).map_err(|error| {
+        i18n::pick(
+            format!("Could not write the copy's index: {error}"),
+            format!("사본 인덱스를 쓰지 못했습니다: {error}"),
+        )
+    })?;
+    session_backup::durable_write_str(&target_dir.join(".index_bak.json"), &text).map_err(
+        |error| {
+            i18n::pick(
+                format!("Could not write the copy's index backup: {error}"),
+                format!("사본 인덱스 백업을 쓰지 못했습니다: {error}"),
+            )
+        },
+    )?;
     Ok(())
 }
 
 /// 快进：把来源基线之后的新增记录追加到副本（design §6.1）。
 fn fast_forward(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String> {
-    let source_index = vscode_session_link::read_session_index(&plan.source_dir)
-        .ok_or_else(|| "源会话索引缺失或损坏，已停止同步".to_string())?;
-    let target_index = vscode_session_link::read_session_index(&plan.target_dir)
-        .ok_or_else(|| "目标会话索引缺失或损坏，已停止同步".to_string())?;
+    let source_index =
+        vscode_session_link::read_session_index(&plan.source_dir).ok_or_else(|| {
+            i18n::tr(
+                "The source session index is missing or damaged; sync stopped",
+                "원본 세션 인덱스가 없거나 손상되어 동기화를 중단했습니다",
+            )
+            .to_string()
+        })?;
+    let target_index =
+        vscode_session_link::read_session_index(&plan.target_dir).ok_or_else(|| {
+            i18n::tr(
+                "The target session index is missing or damaged; sync stopped",
+                "대상 세션 인덱스가 없거나 손상되어 동기화를 중단했습니다",
+            )
+            .to_string()
+        })?;
     let source_message_ids = vscode_session_link::message_ids_of(&source_index);
     let target_message_ids = vscode_session_link::message_ids_of(&target_index);
     let baseline_count = plan.target_content.normalized.record_count;
     if target_message_ids.len() != baseline_count {
-        return Err("目标内容与索引不一致，已停止同步".to_string());
+        return Err(i18n::tr(
+            "The target content does not match its index; sync stopped",
+            "대상 내용이 인덱스와 일치하지 않아 동기화를 중단했습니다",
+        )
+        .to_string());
     }
     if source_message_ids.len() < baseline_count
         || plan.source_content.normalized.line_digests.len() != source_message_ids.len()
     {
-        return Err("来源内容与索引不一致，已停止同步".to_string());
+        return Err(i18n::tr(
+            "The source content does not match its index; sync stopped",
+            "원본 내용이 인덱스와 일치하지 않아 동기화를 중단했습니다",
+        )
+        .to_string());
     }
     let source_messages = source_index
         .get("messages")
@@ -1230,7 +1405,13 @@ fn fast_forward(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, Stri
                 break;
             }
         }
-        let derived = derived.ok_or_else(|| "目标账号已存在同名请求，已停止同步".to_string())?;
+        let derived = derived.ok_or_else(|| {
+            i18n::tr(
+                "The target account already has a request with the same name; sync stopped",
+                "대상 계정에 같은 이름의 요청이 이미 있어 동기화를 중단했습니다",
+            )
+            .to_string()
+        })?;
         used_request_ids.insert(derived.clone());
         translation.insert(source_id.clone(), derived);
     }
@@ -1242,10 +1423,18 @@ fn fast_forward(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, Stri
             .source_dir
             .join("messages")
             .join(format!("{source_id}.json"));
-        let text = std::fs::read_to_string(&source_file)
-            .map_err(|error| format!("读取来源消息失败（{source_id}）：{error}"))?;
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|_| format!("来源消息 {source_id} 无法解析，已停止同步"))?;
+        let text = std::fs::read_to_string(&source_file).map_err(|error| {
+            i18n::pick(
+                format!("Could not read the source message ({source_id}): {error}"),
+                format!("원본 메시지를 읽지 못했습니다({source_id}): {error}"),
+            )
+        })?;
+        let value: Value = serde_json::from_str(&text).map_err(|_| {
+            i18n::pick(
+                format!("The source message {source_id} could not be parsed; sync stopped"),
+                format!("원본 메시지({source_id})를 해석할 수 없어 동기화를 중단했습니다"),
+            )
+        })?;
         let planned = plan_message_file(plan, index, digest, source_id, &value, &mut translation)?;
         translation.insert(source_id.clone(), planned.id.clone());
         files.push(planned);
@@ -1309,9 +1498,15 @@ fn fast_forward(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, Stri
         "recordCount": {"source": source_count, "targetBefore": target_before, "target": source_count},
         "assets": {"copied": assets.0, "overwritten": assets.1},
         "backup": backup_dir.to_string_lossy(),
-        "message": format!(
-            "已把当前账号新增的 {} 条内容同步到副本（追加，不改动目标已有内容）",
-            source_count.saturating_sub(target_before)
+        "message": i18n::pick(
+            format!(
+                "Synced {} new records from the current account to the copy (appended; existing target content was left unchanged)",
+                source_count.saturating_sub(target_before)
+            ),
+            format!(
+                "현재 계정에서 추가된 {}건을 사본에 동기화했습니다(추가 방식이며 대상의 기존 내용은 변경하지 않았습니다)",
+                source_count.saturating_sub(target_before)
+            ),
         ),
     }))
 }
@@ -1327,8 +1522,12 @@ fn write_fast_forward(
         if file.already_applied {
             continue;
         }
-        session_backup::durable_write_str(&file.path, &file.content)
-            .map_err(|error| format!("写入副本消息失败：{error}"))?;
+        session_backup::durable_write_str(&file.path, &file.content).map_err(|error| {
+            i18n::pick(
+                format!("Could not write the copy's message file: {error}"),
+                format!("사본 메시지 파일을 쓰지 못했습니다: {error}"),
+            )
+        })?;
         created.push(file.path.clone());
     }
     write_session_index(&plan.target_dir, index)?;
@@ -1377,7 +1576,11 @@ fn plan_message_file(
             }
         }
     }
-    Err("目标账号已存在同名消息且内容不同，已停止同步".to_string())
+    Err(i18n::tr(
+        "The target account already has a message with the same name but different content; sync stopped",
+        "대상 계정에 같은 이름의 메시지가 있지만 내용이 달라 동기화를 중단했습니다",
+    )
+    .to_string())
 }
 
 /// 索引里的请求 id 序列。
@@ -1410,14 +1613,22 @@ fn commit_baseline(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<(), Stri
     let baseline_ref = uuid::Uuid::new_v4().to_string();
     session_link::with_link_store_write(paths, move |store| {
         let Some(group) = store.groups.iter_mut().find(|group| group.id == group_id) else {
-            return Err("会话的关联关系已不存在，未提交同步结果".to_string());
+            return Err(i18n::tr(
+                "The session link no longer exists; the sync result was not committed",
+                "세션 연결이 더 이상 존재하지 않아 동기화 결과를 커밋하지 않았습니다",
+            )
+            .to_string());
         };
         if !group
             .members
             .iter()
             .any(|member| member.member_id == source_member_id)
         {
-            return Err("当前账号的会话已不存在，未提交同步结果".to_string());
+            return Err(i18n::tr(
+                "The current account's session no longer exists; the sync result was not committed",
+                "현재 계정의 세션이 더 이상 존재하지 않아 동기화 결과를 커밋하지 않았습니다",
+            )
+            .to_string());
         }
         let now = now_ms();
         for member_id in [&source_member_id, &target_member_id] {
@@ -1445,12 +1656,22 @@ fn commit_baseline(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<(), Stri
 
 /// 覆盖：整目录备份 → 按确定性翻译表全量重建（保留目标会话 id）→ 失败整目录恢复 → 提交基线。
 fn overwrite(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String> {
-    let source_index = vscode_session_link::read_session_index(&plan.source_dir)
-        .ok_or_else(|| "源会话索引缺失或损坏，已停止同步".to_string())?;
+    let source_index =
+        vscode_session_link::read_session_index(&plan.source_dir).ok_or_else(|| {
+            i18n::tr(
+                "The source session index is missing or damaged; sync stopped",
+                "원본 세션 인덱스가 없거나 손상되어 동기화를 중단했습니다",
+            )
+            .to_string()
+        })?;
     let source_message_ids = vscode_session_link::message_ids_of(&source_index);
     let digests = &plan.source_content.normalized.line_digests;
     if digests.len() != source_message_ids.len() {
-        return Err("来源内容与索引不一致，已停止同步".to_string());
+        return Err(i18n::tr(
+            "The source content does not match its index; sync stopped",
+            "원본 내용이 인덱스와 일치하지 않아 동기화를 중단했습니다",
+        )
+        .to_string());
     }
 
     // 1) 整目录备份（先备份再动任何东西）。
@@ -1458,8 +1679,12 @@ fn overwrite(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String>
         .join(&plan.workspace_hash)
         .join(format!("{}{OVERWRITE_SUFFIX}", plan.target_conversation_id));
     vscode_session::remove_dir_all_if_exists(&backup_dir);
-    vscode_session::copy_dir_recursive(&plan.target_dir, &backup_dir)
-        .map_err(|error| format!("备份目标会话目录失败：{error}"))?;
+    vscode_session::copy_dir_recursive(&plan.target_dir, &backup_dir).map_err(|error| {
+        i18n::pick(
+            format!("Could not back up the target session directory: {error}"),
+            format!("대상 세션 디렉터리를 백업하지 못했습니다: {error}"),
+        )
+    })?;
 
     // 2) 翻译表：全量重建，消息 / 请求 id 用确定性派生（保留目标会话 id → 工作区索引无需改动）。
     let mut message_ids: BTreeMap<String, String> = BTreeMap::new();
@@ -1503,14 +1728,20 @@ fn overwrite(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String>
         vscode_session::write_conversation(&plan.source_dir, &tmp_dir, &source_index, &remap)
     {
         vscode_session::remove_dir_all_if_exists(&tmp_dir);
-        return Err(format!("重建副本会话目录失败：{error}"));
+        return Err(i18n::pick(
+            format!("Could not rebuild the copy's session directory: {error}"),
+            format!("사본 세션 디렉터리를 다시 만들지 못했습니다: {error}"),
+        ));
     }
     vscode_session::remove_dir_all_if_exists(&plan.target_dir);
     if let Err(error) = std::fs::rename(&tmp_dir, &plan.target_dir) {
         vscode_session::remove_dir_all_if_exists(&tmp_dir);
         return Err(rollback_message(
             restore_dir(&backup_dir, &plan.target_dir),
-            &format!("提交副本会话目录失败：{error}"),
+            &i18n::pick(
+                format!("Could not commit the copy's session directory: {error}"),
+                format!("사본 세션 디렉터리를 커밋하지 못했습니다: {error}"),
+            ),
         ));
     }
 
@@ -1525,7 +1756,10 @@ fn overwrite(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String>
     if !verified {
         return Err(rollback_message(
             restore_dir(&backup_dir, &plan.target_dir),
-            "重建后的内容与来源不一致，已整目录回滚",
+            i18n::tr(
+                "The rebuilt content does not match the source; the whole directory was rolled back",
+                "다시 만든 내용이 원본과 일치하지 않아 디렉터리 전체를 롤백했습니다",
+            ),
         ));
     }
 
@@ -1550,7 +1784,14 @@ fn overwrite(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String>
         },
         "assets": {"copied": 0, "overwritten": 0},
         "backup": backup_dir.to_string_lossy(),
-        "message": format!("已用当前账号的 {source_count} 条内容覆盖副本（覆盖前已整目录备份）"),
+        "message": i18n::pick(
+            format!(
+                "Overwrote the copy with {source_count} records from the current account (the whole directory was backed up before overwriting)"
+            ),
+            format!(
+                "현재 계정의 {source_count}건으로 사본을 덮어썼습니다(덮어쓰기 전에 디렉터리 전체를 백업했습니다)"
+            ),
+        ),
     }))
 }
 
@@ -1562,9 +1803,15 @@ fn overwrite(paths: &SessionPaths, plan: &SyncItemPlan) -> Result<Value, String>
 pub(crate) fn restore_dir(backup_dir: &Path, target_dir: &Path) -> Result<(), String> {
     vscode_session::remove_dir_all_if_exists(target_dir);
     vscode_session::copy_dir_recursive(backup_dir, target_dir).map_err(|error| {
-        format!(
-            "副本目录未恢复（{error}），请从备份目录 {} 手工恢复",
-            backup_dir.display()
+        i18n::pick(
+            format!(
+                "The copy directory was not restored ({error}); restore manually from the backup directory {}",
+                backup_dir.display()
+            ),
+            format!(
+                "사본 디렉터리를 복원하지 못했습니다({error}). 백업 디렉터리 {}에서 직접 복원해 주세요",
+                backup_dir.display()
+            ),
         )
     })
 }
@@ -1574,7 +1821,10 @@ pub(crate) fn restore_dir(backup_dir: &Path, target_dir: &Path) -> Result<(), St
 fn rollback_message(restored: Result<(), String>, message: &str) -> String {
     match restored {
         Ok(()) => message.to_string(),
-        Err(error) => format!("{message}；且{error}"),
+        Err(error) => i18n::pick(
+            format!("{message}; rollback also failed: {error}"),
+            format!("{message}; 롤백도 실패했습니다: {error}"),
+        ),
     }
 }
 
@@ -1648,7 +1898,12 @@ fn copy_if_needed(from: &Path, to: &Path) -> Result<Option<bool>, String> {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
     }
-    std::fs::copy(from, to).map_err(|error| format!("复制附件失败：{error}"))?;
+    std::fs::copy(from, to).map_err(|error| {
+        i18n::pick(
+            format!("Could not copy the attachment: {error}"),
+            format!("첨부 파일을 복사하지 못했습니다: {error}"),
+        )
+    })?;
     Ok(Some(!existed))
 }
 

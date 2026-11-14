@@ -34,5 +34,7 @@ export const commonKo: Partial<Record<keyof typeof commonEn, string>> = {
   "common.hours": "{count}시간",
   "common.minutes": "{count}분",
   "common.seconds": "{count}초",
+  "common.hourLabel": "시",
+  "common.minuteLabel": "분",
   "common.localeName": "한국어",
 };

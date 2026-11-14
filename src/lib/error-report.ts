@@ -113,7 +113,7 @@ export function installGlobalErrorHandlers(): void {
     if (!event.message) return;
     const where = event.filename ? `${event.filename}:${event.lineno}:${event.colno}` : "";
     reportError("frontend_unhandled", event.message, {
-      detail: [stackOf(event.error), where ? `来源: ${where}` : ""].filter(Boolean).join("\n"),
+      detail: [stackOf(event.error), where ? translate("lib.errorReport.sourceLabel", { where }) : ""].filter(Boolean).join("\n"),
       source: where || "window.error",
     });
   });

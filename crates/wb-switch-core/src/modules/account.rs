@@ -478,11 +478,11 @@ fn upsert_account_in(accounts: &mut Vec<Value>, updated: &Value) {
 /// 发出前应先用本函数短路。
 pub fn envelope_token_error(account: &Value) -> Option<String> {
     if is_envelope(account, "access_token") {
-        return Some(
-            "该账号凭据为 WorkBuddy 加密信封态，无法直接调用签到 / 积分 / Token 统计等接口；\
-             切换功能不受影响，如需上述功能请删除该账号后改用「OAuth 扫码添加」获取明文凭据。"
-                .to_string(),
-        );
+        return Some(i18n::tr(
+            "This account's credentials are stored in an encrypted WorkBuddy envelope, so check-in, credits, and token stats cannot be called directly. Switching still works; to use those features, delete this account and add it again with 'OAuth QR code' to get plaintext credentials.",
+            "이 계정의 자격 증명은 WorkBuddy 암호화 봉투 형식이라 체크인, 크레딧, 토큰 통계 API를 직접 호출할 수 없습니다. 전환은 그대로 동작하며, 해당 기능을 사용하려면 이 계정을 삭제한 뒤 'OAuth QR 코드'로 다시 추가해 평문 자격 증명을 받으세요.",
+        )
+        .to_string());
     }
     None
 }
@@ -546,7 +546,7 @@ mod tests {
             "refresh_token": {"$wbEncrypted": true, "envelope": "…"},
         });
         let err = envelope_token_error(&envelope).expect("信封 access_token 应返回错误");
-        assert!(err.contains("信封"), "错误文案应可读：{err}");
+        assert!(err.contains("envelope"), "错误文案应可读：{err}");
         assert!(err.contains("OAuth"), "应给出扫码重新添加的指引：{err}");
 
         let plain = json!({"id": "a2", "access_token": "SECRET", "refresh_token": "R"});

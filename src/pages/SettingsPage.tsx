@@ -34,6 +34,7 @@ import { displayName } from "@/lib/account-display";
 import * as api from "@/lib/api";
 import { canPersistErrorLog } from "@/lib/error-report";
 import { useLocale, useSetLocale, useT, type Translate } from "@/lib/i18n";
+import { intlLocale } from "@/lib/i18n/format";
 import { isLocale, LOCALE_OPTIONS } from "@/lib/i18n/locale";
 import type { MessageKey } from "@/lib/i18n/messages";
 import { setSessionsNavEnabled, useSessionsNavEnabled } from "@/lib/nav-prefs";
@@ -258,7 +259,7 @@ function NumberSettingRow({
 
 function formatTime(ts: number): string {
   try {
-    return new Date(ts).toLocaleString("zh-CN", {
+    return new Date(ts).toLocaleString(intlLocale(), {
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
@@ -1050,20 +1051,25 @@ function AutoRotateCard() {
       // webui 没有事件通道：手动检查的推迟提示只能从返回值里取（桌面端由
       // `rotate-deferred` 事件统一弹出，避免同一件事弹两次）。
       if (api.isWebui() && res.notify?.body) {
-        toast.warning("自动轮换已推迟", { description: res.notify.body, duration: 10_000 });
+        toast.warning(t("settings.rotation.deferredToast"), {
+          description: res.notify.body,
+          duration: 10_000,
+        });
       }
       const text =
         res.status === "switched"
-          ? `已切换到 ${res.to ?? "目标账号"}`
+          ? t("settings.rotation.switchedTo", {
+              account: res.to ?? t("settings.rotation.targetAccount"),
+            })
           : res.status === "disabled"
-            ? "自动轮换未启用（请在下方开启后重试）"
-            : (res.reason ?? `检查完成：${res.status}`);
+            ? t("settings.rotation.notEnabled")
+            : (res.reason ?? t("settings.rotation.checkFinished", { status: res.status }));
       if (res.status === "error") toast.error(text);
       else toast.success(text);
       void loadConfig();
       if (logsOpen) void loadLogs();
     } catch (e) {
-      toast.error("轮换检查失败", { description: api.asError(e) });
+      toast.error(t("settings.rotation.checkFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -1072,13 +1078,13 @@ function AutoRotateCard() {
   function actionLabel(action: string): { text: string; tone: "success" | "warning" | "error" } {
     switch (action) {
       case "switched":
-        return { text: "已切换", tone: "success" };
+        return { text: t("settings.rotation.actionSwitched"), tone: "success" };
       case "skipped":
-        return { text: "未切换", tone: "warning" };
+        return { text: t("settings.rotation.actionSkipped"), tone: "warning" };
       case "disabled":
-        return { text: "未启用", tone: "warning" };
+        return { text: t("settings.rotation.actionDisabled"), tone: "warning" };
       case "error":
-        return { text: "出错", tone: "error" };
+        return { text: t("settings.rotation.actionError"), tone: "error" };
       default:
         return { text: action, tone: "warning" };
     }
@@ -1087,19 +1093,29 @@ function AutoRotateCard() {
   return (
     <SettingsGroup
       id="settings-auto-rotate"
-      title="CodeBuddy CLI 自动轮换"
+      title={t("settings.rotation.title")}
     >
       <CardContent className="space-y-0 p-0">
         {status && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/60 bg-muted/25 px-4 py-3 text-xs text-muted-foreground sm:px-5">
             <span>
-              当前 CLI 账号：
-              <b className="text-foreground">{status.activeAccountName ?? "未配置"}</b>
+              {t("settings.rotation.currentAccount")}{" "}
+              <b className="text-foreground">
+                {status.activeAccountName ?? t("settings.rotation.notConfigured")}
+              </b>
             </span>
-            {status.lastCheckAt && <span>上次检查 {formatTime(status.lastCheckAt)}</span>}
-            {status.lastSwitchAt && <span>上次切换 {formatTime(status.lastSwitchAt)}</span>}
+            {status.lastCheckAt && (
+              <span>
+                {t("settings.rotation.lastCheck", { time: formatTime(status.lastCheckAt) })}
+              </span>
+            )}
+            {status.lastSwitchAt && (
+              <span>
+                {t("settings.rotation.lastSwitch", { time: formatTime(status.lastSwitchAt) })}
+              </span>
+            )}
             {!status.cliConfigured && (
-              <span className="text-destructive">未接入 CodeBuddy CLI（请先到账号页安装 helper）</span>
+              <span className="text-destructive">{t("settings.rotation.cliNotConnected")}</span>
             )}
           </div>
         )}
@@ -1109,20 +1125,21 @@ function AutoRotateCard() {
           <>
             <AccordionSettingsRow
               value="params"
-              label="启用自动轮换"
-              description="开启后按设定的间隔自动检查并切换 CodeBuddy CLI 账号"
+              label={t("settings.rotation.enable")}
+              description={t("settings.rotation.enableDescription")}
               actions={
                 <>
                   <DemoAction>
                     <Switch
-                      aria-label="启用自动轮换"
+                      aria-label={t("settings.rotation.enable")}
                       checked={cfg.enabled}
                       onCheckedChange={onToggleEnabled}
                     />
                   </DemoAction>
                   <DemoAction>
                     <Button size="sm" variant="outline" onClick={runNow} disabled={busy}>
-                      {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}立即检查一次
+                      {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                      {t("settings.rotation.checkNow")}
                     </Button>
                   </DemoAction>
                 </>
@@ -1133,7 +1150,7 @@ function AutoRotateCard() {
                   className={PANEL_ROW}
                   id="ar-interval"
                   spec={ROTATE_NUMBER_FIELDS.check_interval_minutes}
-                  description="分钟"
+                  description={t("settings.rotation.minutes")}
                   value={numDraft.check_interval_minutes ?? String(cfg.check_interval_minutes)}
                   onChange={(text) => onNumberChange("check_interval_minutes", text)}
                   onCommit={(raw) => onNumberCommit("check_interval_minutes", raw)}
@@ -1142,7 +1159,7 @@ function AutoRotateCard() {
                   className={PANEL_ROW}
                   id="ar-cooldown"
                   spec={ROTATE_NUMBER_FIELDS.cooldown_minutes}
-                  description="分钟"
+                  description={t("settings.rotation.minutes")}
                   value={numDraft.cooldown_minutes ?? String(cfg.cooldown_minutes)}
                   onChange={(text) => onNumberChange("cooldown_minutes", text)}
                   onCommit={(raw) => onNumberCommit("cooldown_minutes", raw)}
@@ -1151,7 +1168,7 @@ function AutoRotateCard() {
                   className={PANEL_ROW}
                   id="ar-gap"
                   spec={ROTATE_NUMBER_FIELDS.min_gap_hours}
-                  description="小时"
+                  description={t("settings.rotation.hours")}
                   value={numDraft.min_gap_hours ?? String(cfg.min_gap_hours)}
                   onChange={(text) => onNumberChange("min_gap_hours", text)}
                   onCommit={(raw) => onNumberCommit("min_gap_hours", raw)}
@@ -1160,7 +1177,7 @@ function AutoRotateCard() {
                   className={PANEL_ROW}
                   id="ar-urgency"
                   spec={ROTATE_NUMBER_FIELDS.min_urgency_hours}
-                  description="小时"
+                  description={t("settings.rotation.hours")}
                   value={numDraft.min_urgency_hours ?? String(cfg.min_urgency_hours)}
                   onChange={(text) => onNumberChange("min_urgency_hours", text)}
                   onCommit={(raw) => onNumberCommit("min_urgency_hours", raw)}
@@ -1169,34 +1186,38 @@ function AutoRotateCard() {
                   className={cn(PANEL_ROW, "border-b-0")}
                   id="ar-min"
                   spec={ROTATE_NUMBER_FIELDS.min_remaining_credits}
-                  description="低于此值时不切换"
+                  description={t("settings.rotation.minRemainingCreditsDescription")}
                   value={numDraft.min_remaining_credits ?? String(cfg.min_remaining_credits)}
                   onChange={(text) => onNumberChange("min_remaining_credits", text)}
                   onCommit={(raw) => onNumberCommit("min_remaining_credits", raw)}
                 />
                 <p className="pt-1 text-[13px] leading-5 text-muted-foreground">
-                  切换时机：目标账号剩余到期时间少于「紧迫阈值」且比当前账号早超过「差异阈值」，且目标剩余积分不低于「最小剩余积分」。检测到有 CodeBuddy CLI 会话在运行时，本次轮换会跳过并在当日最多提示 5 次；重启 CLI 后新账号才会生效。
+                  {t("settings.rotation.timingHint")}
                 </p>
               </div>
             </AccordionSettingsRow>
           </>
         ) : (
-          <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">加载配置中…</p>
+          <p className="px-4 py-3 text-sm text-muted-foreground sm:px-5">
+            {t("settings.shared.configLoading")}
+          </p>
         )}
 
         <AccordionSettingsRow
           value="logs"
-          label="轮换日志"
-          description="保留最近 200 条；本机明文保存，可能含账号昵称。"
+          label={t("settings.rotation.logs")}
+          description={t("settings.rotation.logsDescription")}
           divider={false}
         >
           <div className={INSET_PANEL}>
             {logsError ? (
               <p className="py-2 text-xs text-destructive">{logsError}</p>
             ) : !logs ? (
-              <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
+              <p className="py-2 text-xs text-muted-foreground">{t("settings.shared.reading")}</p>
             ) : logs.length === 0 ? (
-              <p className="py-2 text-xs text-muted-foreground">暂无轮换记录</p>
+              <p className="py-2 text-xs text-muted-foreground">
+                {t("settings.rotation.logsEmpty")}
+              </p>
             ) : (
               <div className="max-h-64 overflow-y-auto pr-1">
                 {logs.map((l, i) => {
@@ -1212,7 +1233,11 @@ function AutoRotateCard() {
                             {l.from.name ?? l.from.id} → {l.to.name ?? l.to.id}
                           </span>
                         )}
-                        {l.reason && <span className="text-muted-foreground">（{l.reason}）</span>}
+                        {l.reason && (
+                          <span className="text-muted-foreground">
+                            {t("settings.rotation.logReason", { reason: l.reason })}
+                          </span>
+                        )}
                       </div>
                       <div className="ml-2 flex shrink-0 items-center gap-2">
                         <span
@@ -1243,6 +1268,7 @@ function AutoRotateCard() {
 
 /** 权限检测卡片：确认本 App 是否有权写入 WorkBuddy 认证文件（探针与展示路径同档位）。 */
 function PermissionCheckCard() {
+  const t = useT();
   const authFile = useAuthFile();
   const variant = useAccountsStore((s) => s.variant);
   const [checking, setChecking] = useState(false);
@@ -1255,9 +1281,11 @@ function PermissionCheckCard() {
     try {
       const res = await api.checkAuthPermission(variant);
       if (res.ok) {
-        toast.success(res.message ?? "认证目录可写，权限正常");
+        toast.success(res.message ?? t("settings.permission.ok"));
       } else {
-        setError(`${res.error}（${res.dir ?? ""}）`);
+        setError(
+          t("settings.permission.errorDetail", { error: res.error ?? "", dir: res.dir ?? "" }),
+        );
       }
     } catch (e) {
       setError(api.asError(e));
@@ -1269,32 +1297,32 @@ function PermissionCheckCard() {
   return (
     <SettingsGroup
       id="settings-permission"
-      title="权限检测"
+      title={t("settings.permission.title")}
     >
       <CardContent className="space-y-0 p-0">
         <div className="break-all border-b border-border/60 bg-muted/25 px-4 py-3 font-mono text-[11px] leading-5 text-muted-foreground sm:px-5">
-          {authFile || "认证文件路径未获取"}
+          {authFile || t("settings.permission.authFileUnknown")}
         </div>
         <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
           <DemoAction><Button size="sm" onClick={runCheck} disabled={checking}>
-            {checking ? "检测中…" : "检测权限"}
+            {checking ? t("settings.permission.checking") : t("settings.permission.check")}
           </Button></DemoAction>
           <DemoAction><Button
             size="sm"
             variant="outline"
             onClick={() => void api.openPermissionSettings("all_files")}
           >
-            打开完全磁盘访问
+            {t("settings.permission.openFullDiskAccess")}
           </Button></DemoAction>
           <DemoAction><Button
             size="sm"
             variant="outline"
             onClick={() => void api.openPermissionSettings("app_management")}
           >
-            打开 App 管理
+            {t("settings.permission.openAppManagement")}
           </Button></DemoAction>
           <DemoAction><Button size="sm" variant="outline" onClick={() => void api.revealAppInFinder()}>
-            在 Finder 中显示
+            {t("settings.permission.revealInFinder")}
           </Button></DemoAction>
         </div>
 
@@ -1305,15 +1333,20 @@ function PermissionCheckCard() {
         )}
         {error && (
           <div className="mx-4 mb-4 border-l-2 border-destructive/50 bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground sm:mx-5">
-            <p className="mb-1 font-medium text-foreground">如何授权（拖拽方式）：</p>
+            <p className="mb-1 font-medium text-foreground">
+              {t("settings.permission.howToTitle")}
+            </p>
             <ol className="list-decimal space-y-1 pl-4">
-              <li>点上方「打开完全磁盘访问」</li>
-              <li>再点「在 Finder 中显示」打开 workbuddy-switch 所在位置</li>
+              <li>{t("settings.permission.step1")}</li>
+              <li>{t("settings.permission.step2")}</li>
               <li>
-                把 <b>workbuddy-switch.app</b> 从 Finder <b>直接拖进</b>完全磁盘访问的列表区域
-                （即使没有提示框，拖入即生效），然后打开它的开关
+                {t("settings.permission.step3Prefix")}
+                <b>workbuddy-switch.app</b>
+                {t("settings.permission.step3Middle")}
+                <b>{t("settings.permission.step3Drag")}</b>
+                {t("settings.permission.step3Suffix")}
               </li>
-              <li>回到本页点「检测权限」，或直接重试切换</li>
+              <li>{t("settings.permission.step4")}</li>
             </ol>
           </div>
         )}
@@ -1328,6 +1361,7 @@ function useAuthFile(): string | undefined {
 
 /** 自动更新：检查公开 GitHub Releases 源 + 安装签名更新。 */
 function UpdateCard() {
+  const t = useT();
   const version = useAccountsStore((s) => s.status?.version);
   // 阶段与进度来自 Rust 更新服务（托盘同源）：下载完成时按钮换成「重启以完成升级」。
   const snapshot = useUpdateState();
@@ -1349,7 +1383,7 @@ function UpdateCard() {
         setProxyUrl(config.proxy ?? "");
       })
       .catch((e) => {
-        if (!cancelled) toast.error("更新配置加载失败", { description: api.asError(e) });
+        if (!cancelled) toast.error(t("settings.update.loadFailed"), { description: api.asError(e) });
       });
     return () => {
       cancelled = true;
@@ -1362,10 +1396,10 @@ function UpdateCard() {
       const r = await api.checkUpdate(proxyUrl, true);
       setInfo(r);
       if (!r.ok) {
-        toast.error("检查更新失败", { description: r.message || r.error });
+        toast.error(t("settings.update.checkFailed"), { description: r.message || r.error });
       }
     } catch (e) {
-      toast.error("检查更新失败", { description: api.asError(e) });
+      toast.error(t("settings.update.checkFailed"), { description: api.asError(e) });
     } finally {
       setChecking(false);
     }
@@ -1378,7 +1412,7 @@ function UpdateCard() {
       await api.updateRestart();
     } catch (e) {
       setRestarting(false);
-      toast.error("重启失败", { description: api.asError(e) });
+      toast.error(t("settings.update.restartFailed"), { description: api.asError(e) });
     }
   }
 
@@ -1391,7 +1425,7 @@ function UpdateCard() {
           throw new Error("unsupported proxy protocol");
         }
       } catch {
-        toast.error("代理地址格式不正确，请填写 HTTP/HTTPS 地址，例如 http://127.0.0.1:7897");
+        toast.error(t("settings.update.proxyInvalid"));
         return;
       }
     }
@@ -1401,9 +1435,9 @@ function UpdateCard() {
       const saved = await api.saveGithubConfig({ ...githubConfig, proxy: value });
       setGithubConfig(saved);
       setProxyUrl(saved.proxy ?? "");
-      toast.success(value ? "更新代理已保存" : "已关闭更新代理");
+      toast.success(value ? t("settings.update.proxySaved") : t("settings.update.proxyCleared"));
     } catch (e) {
-      toast.error("保存代理失败", { description: api.asError(e) });
+      toast.error(t("settings.update.proxySaveFailed"), { description: api.asError(e) });
     } finally {
       setProxySaving(false);
     }
@@ -1412,22 +1446,23 @@ function UpdateCard() {
   return (
     <SettingsGroup
       id="settings-updates"
-      title="自动更新"
+      title={t("settings.update.title")}
     >
       <CardContent className="space-y-0 p-0">
         <div className="border-b border-border/60 px-4 py-3 text-sm sm:px-5">
-          当前版本：<span className="font-mono">v{version || "?"}</span>
+          {t("settings.update.currentVersion")}{" "}
+          <span className="font-mono">v{version || "?"}</span>
         </div>
 
         <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/60 bg-muted/25 px-4 py-3 text-sm sm:px-5">
           <div className="min-w-0 flex-1">
-            <div className="font-medium">公开更新源</div>
+            <div className="font-medium">{t("settings.update.publicSource")}</div>
             <div className="truncate text-xs text-muted-foreground">{GITHUB_REPOSITORY_URL}</div>
           </div>
           <DemoAction><Button
             variant="ghost"
             size="icon"
-            title="打开 GitHub Release"
+            title={t("settings.update.openRelease")}
             onClick={() => void openReleaseUrl(GITHUB_RELEASE_URL)}
           >
             <ExternalLink />
@@ -1435,8 +1470,8 @@ function UpdateCard() {
         </div>
 
         <SettingsFieldRow
-          label="更新代理地址"
-          description="仅用于 GitHub 更新检查和安装包下载；留空表示关闭显式代理。"
+          label={t("settings.update.proxy")}
+          description={t("settings.update.proxyDescription")}
           htmlFor="update-proxy"
           className="bg-muted/25"
           operational
@@ -1446,7 +1481,7 @@ function UpdateCard() {
             className="w-full sm:w-80"
             value={proxyUrl}
             onChange={(event) => setProxyUrl(event.target.value)}
-            placeholder="例如 http://127.0.0.1:7897"
+            placeholder={t("settings.update.proxyPlaceholder")}
             spellCheck={false}
             autoComplete="off"
           />
@@ -1455,14 +1490,14 @@ function UpdateCard() {
         <div className="flex flex-wrap gap-2 border-b border-border/60 bg-muted/25 px-4 py-3 sm:px-5">
           <DemoAction><Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
             {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
-            保存代理
+            {t("settings.update.saveProxy")}
           </Button></DemoAction>
         </div>
 
         <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
           <DemoAction><Button size="sm" variant="outline" onClick={check} disabled={checking}>
             {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            检查更新
+            {t("settings.update.check")}
           </Button></DemoAction>
         </div>
 
@@ -1470,11 +1505,16 @@ function UpdateCard() {
           <Alert variant="default" className={cn("!w-auto mx-4 my-4 sm:mx-5", info.hasUpdate && "border-primary/35 bg-primary/[0.06]")}>
             {info.hasUpdate && <ArrowUpCircle className="text-primary" />}
             <AlertDescription className="space-y-2">
-              <AlertTitle className={cn(info.hasUpdate && "text-primary")}>{info.hasUpdate ? "发现新版本" : "更新检查完成"}</AlertTitle>
+              <AlertTitle className={cn(info.hasUpdate && "text-primary")}>
+                {info.hasUpdate ? t("settings.update.available") : t("settings.update.upToDateTitle")}
+              </AlertTitle>
               <div className="text-sm">
                 {info.hasUpdate
-                  ? `发现新版本 v${info.latest}（当前 v${info.current}）`
-                  : `已是最新版本 v${info.current}`}
+                  ? t("settings.update.availableDetail", {
+                      latest: info.latest ?? "",
+                      current: info.current ?? "",
+                    })
+                  : t("settings.update.upToDateDetail", { current: info.current ?? "" })}
                 {info.releaseName && <span className="text-muted-foreground"> · {info.releaseName}</span>}
               </div>
               {info.hasUpdate && (
@@ -1482,12 +1522,14 @@ function UpdateCard() {
                   {snapshot.phase === "readyToRestart" ? (
                     <Button size="sm" onClick={() => void restartNow()} disabled={restarting}>
                       {restarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                      {restarting ? "正在重启…" : "重启以完成升级"}
+                      {restarting
+                        ? t("settings.update.restarting")
+                        : t("settings.update.restart")}
                     </Button>
                   ) : (
                     <Button size="sm" onClick={() => setInstallOpen(true)}>
                       <ArrowUpCircle />
-                      立即升级
+                      {t("settings.update.upgradeNow")}
                     </Button>
                   )}
                 </DemoAction>
@@ -1499,7 +1541,7 @@ function UpdateCard() {
                   className="h-auto p-0"
                   onClick={() => void openReleaseUrl(info.releaseUrl)}
                 >
-                  打开 GitHub Release
+                  {t("settings.update.openRelease")}
                 </Button></DemoAction>
               )}
             </AlertDescription>
@@ -1513,6 +1555,7 @@ function UpdateCard() {
 
 /** 开机自启（仅桌面端渲染）：开关直接反映系统自启注册状态，切换立即生效。 */
 function StartupCard() {
+  const t = useT();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -1524,7 +1567,7 @@ function StartupCard() {
         if (!cancelled) setEnabled(value);
       })
       .catch((e) => {
-        if (!cancelled) toast.error("开机自启状态读取失败", { description: api.asError(e) });
+        if (!cancelled) toast.error(t("settings.startup.loadFailed"), { description: api.asError(e) });
       });
     return () => {
       cancelled = true;
@@ -1539,11 +1582,13 @@ function StartupCard() {
       // 后端回读 OS 权威状态；即使与请求一致，也以回读值显示。
       const authoritative = await api.setLaunchAtLoginEnabled(value);
       setEnabled(authoritative);
-      toast.success(authoritative ? "已开启开机自启" : "已关闭开机自启");
+      toast.success(
+        authoritative ? t("settings.startup.enabledToast") : t("settings.startup.disabledToast"),
+      );
     } catch (e) {
       // 失败时恢复到最后一次确认的状态，并显示可读错误。
       setEnabled(previous);
-      toast.error("开机自启设置失败", { description: api.asError(e) });
+      toast.error(t("settings.startup.saveFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -1552,13 +1597,13 @@ function StartupCard() {
   return (
     <SettingsGroup
       id="settings-startup"
-      title="启动设置"
+      title={t("settings.startup.title")}
     >
       <CardContent className="space-y-0 p-0">
         <SettingsFieldRow
           className="border-b-0"
-          label="开机时静默启动到托盘"
-          description="开关直接反映系统登录项状态；之后可从托盘「打开主界面」恢复"
+          label={t("settings.startup.silentLaunch")}
+          description={t("settings.startup.silentLaunchDescription")}
           htmlFor="startup-silent"
           operational
         >
@@ -1567,7 +1612,7 @@ function StartupCard() {
             checked={enabled ?? false}
             disabled={busy || enabled === null}
             onCheckedChange={(v) => void onToggle(v)}
-            aria-label="开机时静默启动到托盘"
+            aria-label={t("settings.startup.silentLaunch")}
           />
         </SettingsFieldRow>
       </CardContent>
@@ -1577,14 +1622,19 @@ function StartupCard() {
 
 /** 桌面版 Agent Companion：状态以宿主后端的持久化结果为准。 */
 function CompanionCard() {
+  const t = useT();
   const { enabled, busy, error } = useCompanionEnabled();
 
   async function onToggle(next: boolean) {
     try {
       const confirmed = await changeCompanionEnabled(next);
-      toast.success(confirmed ? "已启用 Agent Companion 悬浮窗" : "已关闭 Agent Companion 悬浮窗");
+      toast.success(
+        confirmed
+          ? t("settings.companion.enabledToast")
+          : t("settings.companion.disabledToast"),
+      );
     } catch (cause) {
-      toast.error("悬浮窗设置失败", { description: api.asError(cause) });
+      toast.error(t("settings.companion.saveFailed"), { description: api.asError(cause) });
     }
   }
 
@@ -1592,32 +1642,36 @@ function CompanionCard() {
     try {
       await api.openCompanionSettings();
     } catch (error) {
-      toast.error("打开悬浮窗设置失败", { description: api.asError(error) });
+      toast.error(t("settings.companion.openSettingsFailed"), { description: api.asError(error) });
     }
   }
 
   return (
-    <SettingsGroup id="settings-companion" title="Agent Companion">
+    <SettingsGroup id="settings-companion" title={t("settings.companion.title")}>
       <CardContent className="space-y-0 p-0">
         <SettingsFieldRow
           className="border-b-0"
-          label="启用会话悬浮窗"
-          description="启用后显示悬浮栏；开机静默启动时也会显示，可从托盘临时隐藏"
+          label={t("settings.companion.enable")}
+          description={t("settings.companion.enableDescription")}
           htmlFor="companion-enabled"
         >
           <div className="flex items-center gap-2">
             {error && enabled === null ? (
-              <Button size="sm" variant="outline" onClick={() => void reloadCompanionEnabled()}>重试</Button>
+              <Button size="sm" variant="outline" onClick={() => void reloadCompanionEnabled()}>
+                {t("common.retry")}
+              </Button>
             ) : null}
             {enabled ? (
-              <Button size="sm" variant="outline" onClick={() => void openSettings()}>悬浮窗设置</Button>
+              <Button size="sm" variant="outline" onClick={() => void openSettings()}>
+                {t("settings.companion.settings")}
+              </Button>
             ) : null}
             <Switch
               id="companion-enabled"
               checked={enabled ?? false}
               disabled={busy || enabled === null}
               onCheckedChange={(value) => void onToggle(value)}
-              aria-label="启用会话悬浮窗"
+              aria-label={t("settings.companion.enable")}
             />
           </div>
         </SettingsFieldRow>
@@ -1627,11 +1681,11 @@ function CompanionCard() {
 }
 
 /** 外观：主题选择（持久化到 localStorage）。 */
-const NOTIFICATION_LEVEL_LABEL: Record<AppNotification["level"], string> = {
-  success: "成功",
-  error: "错误",
-  warning: "警告",
-  info: "提示",
+const NOTIFICATION_LEVEL_LABEL: Record<AppNotification["level"], MessageKey> = {
+  success: "settings.notifications.levelSuccess",
+  error: "settings.notifications.levelError",
+  warning: "settings.notifications.levelWarning",
+  info: "settings.notifications.levelInfo",
 };
 
 const NOTIFICATION_LEVEL_DOT: Record<AppNotification["level"], string> = {
@@ -1646,12 +1700,13 @@ function formatNotificationTime(at: number): string {
   const date = new Date(at);
   const sameDay = date.toDateString() === new Date().toDateString();
   return sameDay
-    ? date.toLocaleTimeString("zh-CN", { hour12: false })
-    : date.toLocaleString("zh-CN", { hour12: false });
+    ? date.toLocaleTimeString(intlLocale(), { hour12: false })
+    : date.toLocaleString(intlLocale(), { hour12: false });
 }
 
 /** 通知历史：最近 100 条应用内提示，供事后核对。 */
 function NotificationHistoryCard() {
+  const t = useT();
   /** 手风琴展开的面板：应用内提示存档，默认收起。 */
   const [openSections, setOpenSections] = useState<string[]>([]);
   const open = openSections.includes("history");
@@ -1681,38 +1736,40 @@ function NotificationHistoryCard() {
     try {
       await api.clearNotifications();
       setItems([]);
-      toast.success("通知历史已清空");
+      toast.success(t("settings.notifications.clearedToast"));
     } catch (e) {
-      toast.error("清空通知历史失败", { description: api.asError(e) });
+      toast.error(t("settings.notifications.clearFailed"), { description: api.asError(e) });
     }
   }
 
   return (
-    <SettingsGroup id="settings-notifications" title="通知历史">
+    <SettingsGroup id="settings-notifications" title={t("settings.notifications.title")}>
       <CardContent className="space-y-0 p-0">
         <Accordion type="multiple" value={openSections} onValueChange={setOpenSections}>
           <AccordionSettingsRow
             value="history"
-            label="应用内提示存档"
-            description="保留最近 100 条，便于事后核对；本机明文保存，可能含账号昵称与本地路径。"
+            label={t("settings.notifications.archive")}
+            description={t("settings.notifications.archiveDescription")}
             divider={false}
             actions={
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button variant="ghost" size="sm" disabled={!items || items.length === 0}>
-                    清空
+                    {t("settings.notifications.clear")}
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>清空通知历史？</AlertDialogTitle>
+                    <AlertDialogTitle>{t("settings.notifications.clearTitle")}</AlertDialogTitle>
                     <AlertDialogDescription>
-                      将删除本机保存的全部提示存档，无法恢复。
+                      {t("settings.notifications.clearDescription")}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>取消</AlertDialogCancel>
-                    <AlertDialogAction onClick={clearHistory}>清空</AlertDialogAction>
+                    <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+                    <AlertDialogAction onClick={clearHistory}>
+                      {t("settings.notifications.clear")}
+                    </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
@@ -1722,9 +1779,11 @@ function NotificationHistoryCard() {
               {error ? (
                 <p className="py-2 text-xs text-destructive">{error}</p>
               ) : !items ? (
-                <p className="py-2 text-xs text-muted-foreground">正在读取…</p>
+                <p className="py-2 text-xs text-muted-foreground">{t("settings.shared.reading")}</p>
               ) : items.length === 0 ? (
-                <p className="py-2 text-xs text-muted-foreground">还没有记录到任何提示。</p>
+                <p className="py-2 text-xs text-muted-foreground">
+                  {t("settings.notifications.empty")}
+                </p>
               ) : (
                 <ul className="max-h-72 divide-y divide-border/40 overflow-auto">
                   {items.map((item, index) => (
@@ -1737,7 +1796,7 @@ function NotificationHistoryCard() {
                           )}
                           aria-hidden
                         />
-                        <span>{NOTIFICATION_LEVEL_LABEL[item.level]}</span>
+                        <span>{t(NOTIFICATION_LEVEL_LABEL[item.level])}</span>
                         <span aria-hidden>·</span>
                         <span>{formatNotificationTime(item.at)}</span>
                       </div>
@@ -1761,6 +1820,7 @@ function NotificationHistoryCard() {
 
 /** 错误日志：前端崩溃与未捕获错误的落盘位置（排障用；与通知历史同为事后核对入口）。 */
 function ErrorLogCard() {
+  const t = useT();
   const [path, setPath] = useState<string | null>(null);
   const [pathError, setPathError] = useState(false);
   const [revealing, setRevealing] = useState(false);
@@ -1790,7 +1850,7 @@ function ErrorLogCard() {
     try {
       await api.revealErrorLog();
     } catch (e) {
-      toast.error("打开日志位置失败", { description: api.asError(e) });
+      toast.error(t("settings.errorLog.revealFailed"), { description: api.asError(e) });
     } finally {
       setRevealing(false);
     }
@@ -1798,20 +1858,20 @@ function ErrorLogCard() {
 
   const pathText =
     path === null
-      ? "正在读取…"
+      ? t("settings.shared.reading")
       : path
         ? path
         : pathError
-          ? "未能读取错误日志路径"
-          : "浏览器模式下不会写入本机错误日志";
+          ? t("settings.errorLog.pathUnavailable")
+          : t("settings.errorLog.pathWeb");
 
   return (
-    <SettingsGroup id="settings-error-log" title="错误日志">
+    <SettingsGroup id="settings-error-log" title={t("settings.errorLog.title")}>
       <CardContent className="space-y-0 p-0">
         <div className="border-b border-border/50 px-4 py-3 text-xs leading-5 text-muted-foreground sm:px-5">
           {showReveal
-            ? "界面崩溃与未捕获的错误会记录在这里（最多保留最近 200 条），反馈问题时可直接附上。"
-            : "浏览器模式下，界面错误只会在页面上提示，不会写入本机错误日志。"}
+            ? t("settings.errorLog.description")
+            : t("settings.errorLog.descriptionWeb")}
         </div>
         <div
           className={cn(
@@ -1830,7 +1890,8 @@ function ErrorLogCard() {
                 disabled={revealing || !path}
                 onClick={() => void revealLog()}
               >
-                {revealing ? <Loader2 className="animate-spin" /> : null}打开日志位置
+                {revealing ? <Loader2 className="animate-spin" /> : null}
+                {t("settings.errorLog.reveal")}
               </Button>
             </DemoAction>
           </div>
@@ -1884,44 +1945,49 @@ function AppearanceCard() {
           </Select>
         </SettingsFieldRow>
         <SettingsFieldRow
-          label="主题"
-          description="选择浅色、深色，或跟随系统外观自动切换"
+          label={t("settings.appearance.theme")}
+          description={t("settings.appearance.themeDescription")}
           htmlFor="appearance-theme"
         >
           <Select value={theme} onValueChange={onThemeChange}>
-            <SelectTrigger id="appearance-theme" size="sm" className="w-full sm:w-40" aria-label="主题">
+            <SelectTrigger
+              id="appearance-theme"
+              size="sm"
+              className="w-full sm:w-40"
+              aria-label={t("settings.appearance.theme")}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="system">系统</SelectItem>
-              <SelectItem value="light">浅色</SelectItem>
-              <SelectItem value="dark">深色</SelectItem>
+              <SelectItem value="system">{t("settings.appearance.themeSystem")}</SelectItem>
+              <SelectItem value="light">{t("settings.appearance.themeLight")}</SelectItem>
+              <SelectItem value="dark">{t("settings.appearance.themeDark")}</SelectItem>
             </SelectContent>
           </Select>
         </SettingsFieldRow>
         <SettingsFieldRow
-          label="显示关联会话菜单"
-          description="关闭后左侧导航不再显示「关联会话」入口，会话数据与关联关系不受影响"
+          label={t("settings.appearance.sessionsNav")}
+          description={t("settings.appearance.sessionsNavDescription")}
           htmlFor="appearance-sessions-nav"
         >
           <Switch
             id="appearance-sessions-nav"
             checked={sessionsNavEnabled}
             onCheckedChange={(on) => setSessionsNavEnabled(on)}
-            aria-label="显示关联会话菜单"
+            aria-label={t("settings.appearance.sessionsNav")}
           />
         </SettingsFieldRow>
         <SettingsFieldRow
           className="border-b-0"
-          label="切换账号时默认勾选归档同步"
-          description="开启后，切换账号时会预先勾选可仅同步归档状态的关联会话，保留正文。你仍可取消勾选，确认切换后才执行。正文快进和覆盖沿用原有规则。"
+          label={t("settings.appearance.archiveSync")}
+          description={t("settings.appearance.archiveSyncDescription")}
           htmlFor="sync-default-archive"
         >
           <Switch
             id="sync-default-archive"
             checked={defaultArchiveSyncEnabled}
             onCheckedChange={(on) => setDefaultArchiveSyncEnabled(on)}
-            aria-label="切换账号时默认勾选归档同步"
+            aria-label={t("settings.appearance.archiveSync")}
           />
         </SettingsFieldRow>
       </CardContent>
@@ -1951,7 +2017,7 @@ function SupportedToolsCard() {
   };
 
   return (
-    <SettingsGroup id="settings-tools" title="支持工具">
+    <SettingsGroup id="settings-tools" title={t("settings.tools.title")}>
       <CardContent className="space-y-0 p-0">
         {SUPPORTED_TOOLS.map((tool, index) => (
           <SettingsFieldRow
@@ -1981,6 +2047,7 @@ function SupportedToolsCard() {
 
 /** 限额监听：总开关 + hook 接入状态（CLI / WorkBuddy 实时上报，IDE 仍走日志扫描）。 */
 function RateLimitCard() {
+  const t = useT();
   const [config, setConfig] = useState<RateLimitConfig | null>(null);
   const [status, setStatus] = useState<RateLimitHookStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1994,7 +2061,8 @@ function RateLimitCard() {
         setStatus(hook);
       })
       .catch((e) => {
-        if (!cancelled) toast.error("限额监听配置加载失败", { description: api.asError(e) });
+        if (!cancelled)
+          toast.error(t("settings.rateLimit.loadFailed"), { description: api.asError(e) });
       });
     return () => {
       cancelled = true;
@@ -2009,10 +2077,12 @@ function RateLimitCard() {
     try {
       // 整个配置一起提交：只带 enabled 会把「卸载过」标记冲掉，重启后 hook 又被自动装回。
       setConfig(await api.saveRateLimitConfig({ ...config, enabled }));
-      toast.success(enabled ? "限额监听已开启" : "限额监听已关闭");
+      toast.success(
+        enabled ? t("settings.rateLimit.enabledToast") : t("settings.rateLimit.disabledToast"),
+      );
     } catch (e) {
       setConfig(previous);
-      toast.error("限额监听设置保存失败", { description: api.asError(e) });
+      toast.error(t("settings.rateLimit.saveFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -2032,12 +2102,12 @@ function RateLimitCard() {
       setConfig(await api.saveRateLimitConfig({ ...config, scanIdeLogs }));
       toast.success(
         scanIdeLogs
-          ? "已开启 IDE 日志扫描"
-          : "已关闭 IDE 日志扫描：两个 CodeBuddy IDE 的限额不再显示",
+          ? t("settings.rateLimit.ideScanEnabledToast")
+          : t("settings.rateLimit.ideScanDisabledToast"),
       );
     } catch (e) {
       setConfig(previous);
-      toast.error("限额监听设置保存失败", { description: api.asError(e) });
+      toast.error(t("settings.rateLimit.saveFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
     }
@@ -2061,11 +2131,11 @@ function RateLimitCard() {
     setBusy(true);
     try {
       setStatus(await api.installRateLimitHook());
-      toast.success("已接入限额监听", {
-        description: "CodeBuddy CLI / WorkBuddy 的 429 会实时上报（原配置已备份，可随时卸载还原）",
+      toast.success(t("settings.rateLimit.installedToast"), {
+        description: t("settings.rateLimit.installedToastDescription"),
       });
     } catch (e) {
-      toast.error("接入 hook 失败", { description: api.asError(e) });
+      toast.error(t("settings.rateLimit.installFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
       void refreshHookConfig();
@@ -2077,11 +2147,11 @@ function RateLimitCard() {
     setBusy(true);
     try {
       setStatus(await api.uninstallRateLimitHook());
-      toast.success("已卸载 hook", {
-        description: "客户端配置恢复原状，之后不会再自动接入（限额改由日志扫描发现，可随时点「接入 hook」恢复）",
+      toast.success(t("settings.rateLimit.uninstalledToast"), {
+        description: t("settings.rateLimit.uninstalledToastDescription"),
       });
     } catch (e) {
-      toast.error("卸载 hook 失败", { description: api.asError(e) });
+      toast.error(t("settings.rateLimit.uninstallFailed"), { description: api.asError(e) });
     } finally {
       setBusy(false);
       void refreshHookConfig();
@@ -2093,24 +2163,28 @@ function RateLimitCard() {
   // IDE 的限额只有日志一条来源：扫描开关关闭时文案不能再说「仍按日志扫描」。
   const ideNote =
     config?.scanIdeLogs === false
-      ? "CodeBuddy IDE 的日志扫描已关闭"
-      : "CodeBuddy IDE 无事件，仍按日志扫描";
+      ? t("settings.rateLimit.ideNoteScanOff")
+      : t("settings.rateLimit.ideNoteScanOn");
   const hookDescription = status
     ? existingTargets.length === 0
-      ? `未检测到 CodeBuddy CLI / WorkBuddy 客户端：没有可接入的配置（${ideNote}）`
+      ? t("settings.rateLimit.hookNoClients", { ideNote })
       : status.installed
-        ? `${installedCount} / ${existingTargets.length} 个已安装客户端已接入：429 当轮实时上报（秒级）；${ideNote}`
+        ? t("settings.rateLimit.hookInstalled", {
+            installed: installedCount,
+            total: existingTargets.length,
+            ideNote,
+          })
         : config?.hookOptOut
-          ? "已卸载：不会再自动接入，限额改由日志扫描发现；点「接入 hook」可恢复实时上报"
-          : "未接入：限额仅靠定期扫描日志发现（最多滞后数分钟）"
-    : "加载中…";
+          ? t("settings.rateLimit.hookUninstalled")
+          : t("settings.rateLimit.hookNotConnected")
+    : t("settings.rateLimit.hookLoading");
 
   return (
-    <SettingsGroup id="settings-rate-limit" title="限额监听">
+    <SettingsGroup id="settings-rate-limit" title={t("settings.rateLimit.title")}>
       <CardContent className="space-y-0 p-0">
         <SettingsFieldRow
-          label="启用限额监听"
-          description="关闭后不扫描日志、账号卡片不显示限额标记；重新开启后恢复"
+          label={t("settings.rateLimit.enable")}
+          description={t("settings.rateLimit.enableDescription")}
           htmlFor="rl-enabled"
           operational
         >
@@ -2119,13 +2193,13 @@ function RateLimitCard() {
             checked={config?.enabled ?? true}
             disabled={busy || !config}
             onCheckedChange={(v) => void onToggle(v)}
-            aria-label="启用限额监听"
+            aria-label={t("settings.rateLimit.enable")}
           />
         </SettingsFieldRow>
 
         <SettingsFieldRow
-          label="扫描 CodeBuddy IDE 日志"
-          description="IDE 的限额只有日志一条来源，关掉后不再显示；CodeBuddy CLI / WorkBuddy 的实时上报不受影响"
+          label={t("settings.rateLimit.scanIdeLogs")}
+          description={t("settings.rateLimit.scanIdeLogsDescription")}
           htmlFor="rl-ide-scan"
           operational
         >
@@ -2134,13 +2208,13 @@ function RateLimitCard() {
             checked={config?.scanIdeLogs ?? true}
             disabled={busy || !config}
             onCheckedChange={(v) => void onToggleIdeLogs(v)}
-            aria-label="扫描 CodeBuddy IDE 日志"
+            aria-label={t("settings.rateLimit.scanIdeLogs")}
           />
         </SettingsFieldRow>
 
         <SettingsFieldRow
           className="border-b-0"
-          label="接入客户端 hook"
+          label={t("settings.rateLimit.hook")}
           description={hookDescription}
           operational
         >
@@ -2152,7 +2226,8 @@ function RateLimitCard() {
               disabled={busy}
               onClick={() => void onUninstall()}
             >
-              {busy ? <Loader2 className="animate-spin" /> : null}卸载 hook
+              {busy ? <Loader2 className="animate-spin" /> : null}
+              {t("settings.rateLimit.uninstall")}
             </Button>
           ) : (
             <Button
@@ -2161,7 +2236,8 @@ function RateLimitCard() {
               disabled={busy || !status || existingTargets.length === 0}
               onClick={() => void onInstall()}
             >
-              {busy ? <Loader2 className="animate-spin" /> : null}接入 hook
+              {busy ? <Loader2 className="animate-spin" /> : null}
+              {t("settings.rateLimit.install")}
             </Button>
           )}
         </SettingsFieldRow>
@@ -2172,12 +2248,15 @@ function RateLimitCard() {
 
 /** 设置页：演示模式不渲染自动签到；Agent Companion 只在桌面正式版显示。 */
 export default function SettingsPage() {
+  const t = useT();
   return (
     <div className="mx-auto min-w-0 w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
       <header className="mb-10 sm:mb-12">
-        <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("settings.title")}</h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {api.isDemoMode() ? "限额监听、权限检测与自动更新配置。" : "自动签到、限额监听、权限检测与自动更新配置。"}
+          {api.isDemoMode()
+            ? t("settings.descriptionDemo")
+            : t("settings.description")}
         </p>
       </header>
 

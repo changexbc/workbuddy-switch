@@ -30,6 +30,12 @@ import type {
   TemporaryFileInfo,
 } from "@/lib/types";
 
+/**
+ * Rust 侧 `auth_file::PERMISSION_DENIED_PREFIX` 的镜像：权限不足的错误文案已经
+ * 本地化，不能再按中文字面量判断，改用这个与语言无关的前缀；展示前剥掉。
+ */
+const PERMISSION_DENIED_PREFIX = "permission-denied: ";
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -353,18 +359,22 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   /** 权限自检：确认完全磁盘访问是否生效（探针按目标账号档位）。 */
   const [permCheck, setPermCheck] = useState<string | null>(null);
   async function runPermissionCheck() {
-    setPermCheck("检测中…");
+    setPermCheck(t("dialogs.switch.permChecking"));
     try {
       const res = await api.checkAuthPermission(accountVariant(account));
-      setPermCheck(res.ok ? `✓ ${res.message}` : `✗ ${res.error}（${res.dir}）`);
+      setPermCheck(
+        res.ok
+          ? `✓ ${res.message}`
+          : t("dialogs.switch.permFailed", { error: res.error ?? "", dir: res.dir ?? "" }),
+      );
     } catch (e) {
       setPermCheck(`✗ ${api.asError(e)}`);
     }
   }
 
-  // 出现「无权限」错误时，自动每 2s 轮询一次授权状态；用户拖入 app 授权成功后自动恢复
+  // 出现权限不足错误时，自动每 2s 轮询一次授权状态；用户拖入 app 授权成功后自动恢复
   useEffect(() => {
-    if (!open || !error.includes("无权限")) return;
+    if (!open || !error.startsWith(PERMISSION_DENIED_PREFIX)) return;
     let cancelled = false;
     let timer: number | undefined;
     const check = async () => {
@@ -372,7 +382,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         const res = await api.checkAuthPermission(accountVariant(account));
         if (res.ok) {
           if (!cancelled) {
-            setPermCheck("✓ 授权成功，可以重新切换了");
+            setPermCheck(t("dialogs.switch.permGranted"));
             setError("");
           }
           return;
@@ -387,7 +397,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [error, open, variant]);
+  }, [error, open, variant, t]);
 
   const copyCount = selected.size;
   const syncCount = syncSelections.length;
@@ -396,33 +406,36 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const linksAvailable = linksMeta?.available ?? true;
   const summaryMain =
     copyCount > 0 && syncCount > 0
-      ? `将复制 ${copyCount} 个、同步 ${syncCount} 个关联会话`
+      ? t("dialogs.common.summaryCopyAndSync", { copy: copyCount, sync: syncCount })
       : copyCount > 0
-        ? `将复制 ${copyCount} 个会话`
+        ? t("dialogs.common.summaryCopy", { count: copyCount })
         : syncCount > 0
-          ? `将同步 ${syncCount} 个关联会话`
-          : "本次仅切换账号";
+          ? t("dialogs.common.summarySync", { count: syncCount })
+          : t("dialogs.common.summarySwitchOnly");
   const summarySub =
     overwriteCount > 0
-      ? `其中 ${overwriteCount} 个会替换目标账号的完整内容`
+      ? t("dialogs.common.summaryOverwrite", { count: overwriteCount })
       : copyCount === 0 && syncCount === 0
-        ? "未选择复制或同步会话"
+        ? t("dialogs.common.summaryNoneSelected")
         : copyCount === 0
-          ? "未选择复制会话"
+          ? t("dialogs.common.summaryNoCopy")
           : syncCount === 0
-            ? "未选择同步会话"
+            ? t("dialogs.common.summaryNoSync")
             : null;
-  const needsPermission = error.includes("无权限");
+  const needsPermission = error.startsWith(PERMISSION_DENIED_PREFIX);
+  const errorText = needsPermission
+    ? error.slice(PERMISSION_DENIED_PREFIX.length)
+    : error;
   const sessionsEmpty = !loadingSessions && sessions.length === 0;
   const copyHint = loadingSessions
-    ? "正在加载会话…"
+    ? t("dialogs.common.loadingSessions")
     : error && sessionsEmpty
-      ? "无法加载会话列表，暂不能复制"
+      ? t("dialogs.switch.copyUnavailable")
       : sessionsEmpty
         ? currentUid
-          ? "当前账号暂无会话，无法复制"
-          : "未检测到当前登录账号，无法列出会话"
-        : "把当前账号勾选的会话复制给目标账号（复制后归属目标账号）；已经复制过的不会重复复制";
+          ? t("dialogs.switch.noSessionsToCopy")
+          : t("dialogs.switch.noSignedInAccount")
+        : t("dialogs.switch.copyHint");
 
   // 关联 tab 不可用（国际版能力判定不通过）时回落到复制会话，避免停在空 tab。
   useEffect(() => {
@@ -453,13 +466,13 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         <div
           className={`flex items-center justify-center gap-2 text-sm text-muted-foreground ${LIST_MIN_H}`}
         >
-          <Loader2 className="animate-spin" /> 加载会话…
+          <Loader2 className="animate-spin" /> {t("dialogs.common.loadingSessions")}
         </div>
       ) : sessions.length === 0 ? (
         <p
           className={`flex items-center justify-center px-3 text-center text-sm text-muted-foreground ${LIST_MIN_H}`}
         >
-          {currentUid ? "当前账号暂无会话" : "未检测到当前登录账号，无法列出会话"}
+          {currentUid ? t("dialogs.switch.noSessions") : t("dialogs.switch.noSignedInAccount")}
         </p>
       ) : (
         <SessionTreeList
@@ -484,16 +497,22 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
         <DialogAutoHeight>
         <div className="flex max-h-[calc(min(90vh,100vh-2rem)-2px)] min-w-0 flex-col gap-4 p-6">
         <DialogHeader className="shrink-0">
-          <DialogTitle>切换到「{account ? displayName(account) : "该账号"}」</DialogTitle>
-          <DialogDescription>切换时将重启 {variantAppName(accountVariant(account))}。</DialogDescription>
+          <DialogTitle>
+            {t("dialogs.common.switchTitle", {
+              name: account ? displayName(account) : t("dialogs.common.targetAccount"),
+            })}
+          </DialogTitle>
+          <DialogDescription>
+            {t("dialogs.switch.description", { app: variantAppName(accountVariant(account)) })}
+          </DialogDescription>
         </DialogHeader>
 
         {busy && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 rounded-lg bg-background/85 backdrop-blur-sm">
             <Loader2 className="size-8 animate-spin text-primary" />
-            <p className="text-sm font-medium">{progress || "正在切换账号…"}</p>
+            <p className="text-sm font-medium">{progress || t("dialogs.common.switchingAccount")}</p>
             <p className="max-w-xs text-center text-xs text-muted-foreground">
-              正在处理中，请勿关闭窗口
+              {t("dialogs.common.busyHint")}
             </p>
           </div>
         )}
@@ -504,34 +523,36 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           {error && (
             <Alert variant={needsPermission ? "warning" : "destructive"} className="min-w-0 shrink-0 break-all">
               <AlertDescription className="min-w-0 break-all">
-                <div className="min-w-0 break-all">{error}</div>
+                <div className="min-w-0 break-all">{errorText}</div>
                 {needsPermission && (
                   <div className="mt-2 space-y-2">
                     <div className="rounded-md border bg-muted/60 p-3 text-xs text-muted-foreground">
-                      <p className="mb-1 font-medium text-foreground">如何授权（只需 3 步）：</p>
+                      <p className="mb-1 font-medium text-foreground">
+                        {t("dialogs.switch.permissionTitle")}
+                      </p>
                       <ol className="list-decimal space-y-1 pl-4">
-                        <li>点击下方「打开完全磁盘访问」</li>
+                        <li>{t("dialogs.switch.permissionStep1")}</li>
                         <li>
-                          把 <b>workbuddy-switch.app</b> 从 Finder 拖进面板列表（即使没提示框也直接拖），
-                          打开它的开关
+                          <b>workbuddy-switch.app</b>
+                          {t("dialogs.switch.permissionStep2")}
                         </li>
-                        <li>授权后这里会自动检测到，无需其他操作</li>
+                        <li>{t("dialogs.switch.permissionStep3")}</li>
                       </ol>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button variant="outline" size="sm" onClick={openPermissionSettings}>
                         <ExternalLink />
-                        打开完全磁盘访问
+                        {t("dialogs.switch.openFullDiskAccess")}
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => void api.revealAppInFinder()}
                       >
-                        在 Finder 中显示
+                        {t("dialogs.common.revealInFinder")}
                       </Button>
                       <Button variant="secondary" size="sm" onClick={runPermissionCheck}>
-                        立即检测
+                        {t("dialogs.switch.checkNow")}
                       </Button>
                     </div>
                   </div>
@@ -543,16 +564,18 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           {linksMeta?.error && (
             <Alert variant="destructive" className="min-w-0 shrink-0">
               <CircleAlert />
-              <AlertTitle>无法检查会话</AlertTitle>
+              <AlertTitle>{t("dialogs.switch.linksCheckFailed")}</AlertTitle>
               <AlertDescription className="min-w-0 break-all">{linksMeta.error}</AlertDescription>
             </Alert>
           )}
           {linksMeta?.storeStatus === "unavailable" && (
             <Alert variant="warning" className="min-w-0 shrink-0">
               <CircleAlert />
-              <AlertTitle>同步记录不可用</AlertTitle>
+              <AlertTitle>{t("dialogs.switch.storeUnavailable")}</AlertTitle>
               <AlertDescription className="min-w-0 break-all">
-                {`${linksMeta.storeError || "原因未知"}；本次不会同步任何会话，请处理后重试。`}
+                {t("dialogs.switch.storeUnavailableDescription", {
+                  reason: linksMeta.storeError || t("dialogs.switch.unknownReason"),
+                })}
               </AlertDescription>
             </Alert>
           )}
@@ -565,11 +588,11 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
             >
               <TabsList className="h-auto w-full shrink-0 justify-start gap-5 rounded-none border-b border-border bg-transparent p-0">
                 <TabsTrigger value="links" className={TAB_TRIGGER_CLASS}>
-                  关联会话
+                  {t("dialogs.common.linkedSessions")}
                   {tabCount(linksMeta?.groupCount ?? 0)}
                 </TabsTrigger>
                 <TabsTrigger value="copy" className={TAB_TRIGGER_CLASS}>
-                  复制会话
+                  {t("dialogs.common.copySessions")}
                   {tabCount(copyCount)}
                 </TabsTrigger>
               </TabsList>
@@ -610,10 +633,10 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
           </div>
           <div className="flex shrink-0 gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button onClick={doSwitch} disabled={busy}>
-              {busy ? "切换中…" : "确认切换"}
+              {busy ? t("dialogs.common.switching") : t("dialogs.common.confirmSwitch")}
             </Button>
           </div>
         </DialogFooter>

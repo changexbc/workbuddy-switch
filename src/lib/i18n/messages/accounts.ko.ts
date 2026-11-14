@@ -18,6 +18,8 @@ export const accountsKo: Partial<Record<keyof typeof accountsEn, string>> = {
   "accounts.add.export": "내보내기",
 
   "accounts.status.tooltip": "{product}: {state} · 현재 계정: {account}",
+  "accounts.status.vscodeProduct": "VS Code CodeBuddy 확장 프로그램",
+  "accounts.status.jetbrainsProduct": "JetBrains IDE CodeBuddy 플러그인",
   "accounts.status.running": "실행 중",
   "accounts.status.notRunning": "실행 안 함",
   "accounts.status.connected": "연결됨",

@@ -475,7 +475,12 @@ async fn download_package<R: Runtime>(
     let builder = app.updater_builder();
     let builder = match configured_proxy() {
         Some(proxy) => builder.proxy(
-            tauri::Url::parse(&proxy).map_err(|error| format!("更新代理地址无效：{error}"))?,
+            tauri::Url::parse(&proxy).map_err(|error| {
+                i18n::pick(
+                    format!("The update proxy address is invalid: {error}"),
+                    format!("업데이트 프록시 주소가 올바르지 않습니다: {error}"),
+                )
+            })?,
         ),
         None => builder,
     };

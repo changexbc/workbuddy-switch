@@ -12,6 +12,11 @@ use crate::modules::config::{atomic_write, backup_dir, now_ms, utc_iso};
 use crate::modules::i18n;
 use crate::modules::variant::WbVariant;
 
+/// 权限不足错误的稳定前缀。错误文案已随语言本地化，webview 不能再按中文字面量
+/// 判断「是否需要引导用户授权」，因此改用这个与语言无关的标记；展示前会剥掉。
+/// 前端对应 `PERMISSION_DENIED_PREFIX`（`src/components/switch-account-dialog.tsx`）。
+pub const PERMISSION_DENIED_PREFIX: &str = "permission-denied: ";
+
 /// WorkBuddy 官方认证文件路径（按档位，与 cockpit 一致）。
 pub fn auth_file_path(variant: WbVariant) -> PathBuf {
     variant.auth_file_path()
@@ -230,11 +235,13 @@ fn write_account_to_auth_file_at(acc: &Value, path: &Path) -> Result<(), String>
     if let Err(e) = atomic_write(path, &content) {
         eprintln!("[auth] atomic_write FAILED: {e}");
         if e.kind() == std::io::ErrorKind::PermissionDenied {
-            return Err(i18n::tr(
-                "No permission to write the authentication file: open System Settings → Privacy & Security → App Management and allow this app to control WorkBuddy's data (or enable Full Disk Access for it and try again)",
-                "인증 파일을 쓸 권한이 없습니다. 시스템 설정 → 개인정보 보호 및 보안 → 앱 관리에서 이 앱이 WorkBuddy 데이터를 제어하도록 허용하거나, 전체 디스크 접근 권한을 켠 뒤 다시 시도해 주세요",
-            )
-            .to_string());
+            return Err(format!(
+                "{PERMISSION_DENIED_PREFIX}{}",
+                i18n::tr(
+                    "No permission to write the authentication file: open System Settings → Privacy & Security → App Management and allow this app to control WorkBuddy's data (or enable Full Disk Access for it and try again)",
+                    "인증 파일을 쓸 권한이 없습니다. 시스템 설정 → 개인정보 보호 및 보안 → 앱 관리에서 이 앱이 WorkBuddy 데이터를 제어하도록 허용하거나, 전체 디스크 접근 권한을 켠 뒤 다시 시도해 주세요",
+                )
+            ));
         }
         return Err(e.to_string());
     }

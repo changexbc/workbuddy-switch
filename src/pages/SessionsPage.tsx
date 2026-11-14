@@ -18,20 +18,36 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { displayName } from "@/lib/account-display";
 import * as api from "@/lib/api";
-import type { AccountMeta, Session, SessionGroupClient, SessionGroupCurrentAccount, SessionGroupDetail, SessionGroupMemberDetail, SessionGroupSummary, SessionGroupUnifyPlan, SessionSyncMode, WbVariant } from "@/lib/types";
+import { useT, type Translate } from "@/lib/i18n";
+import { intlLocale } from "@/lib/i18n/format";
+import type { MessageKey } from "@/lib/i18n/messages";
+import type { AccountMeta, Session, SessionGroupClient, SessionGroupCurrentAccount, SessionGroupDetail, SessionGroupMemberDetail, SessionGroupSummary, SessionGroupStatus, SessionGroupUnifyPlan, SessionSyncMode, WbVariant } from "@/lib/types";
 import { accountVariant, variantLabel } from "@/lib/variant";
 import { useAccountsStore } from "@/stores/accounts";
 
 const PAGE_SIZE = 8;
 /** 列表不超过该数量时隐藏底部分页条：一页装得下，去掉更清爽。 */
 const PAGINATION_HIDE_MAX = 4;
-const CLIENTS: { id: SessionGroupClient; title: string; description: string }[] = [
-  { id: "workbuddy", title: "WorkBuddy", description: "含国内版与国际版会话" },
-  { id: "vscodeExt", title: "CodeBuddy 插件", description: "VS Code 扩展会话" },
-  { id: "codebuddyIde", title: "CodeBuddy IDE", description: "国内版 / 国际版独立分组" },
+const CLIENT_TITLE_KEY: Record<SessionGroupClient, MessageKey> = {
+  workbuddy: "sessions.common.clientWorkbuddy",
+  codebuddyIde: "sessions.common.clientCodebuddyIde",
+  vscodeExt: "sessions.common.clientVscodeExt",
+};
+const CLIENTS: { id: SessionGroupClient; subtitleKey: MessageKey }[] = [
+  { id: "workbuddy", subtitleKey: "sessions.page.workbuddySubtitle" },
+  { id: "vscodeExt", subtitleKey: "sessions.page.vscodeExtSubtitle" },
+  { id: "codebuddyIde", subtitleKey: "sessions.page.codebuddyIdeSubtitle" },
 ];
+const SUMMARY_STATUS_KEY: Record<SessionGroupStatus, MessageKey> = {
+  latest: "sessions.status.latest",
+  behind: "sessions.status.behind",
+  diverge: "sessions.status.diverge",
+  missing: "sessions.status.missing",
+  unknown: "sessions.status.unknown",
+};
 
 export default function SessionsPage() {
+  const t = useT();
   const { accounts, fetchAll } = useAccountsStore();
   const [client, setClient] = useState<SessionGroupClient>("workbuddy");
   const [variantScope, setVariantScope] = useState<WbVariant>("cn");
@@ -291,7 +307,7 @@ export default function SessionsPage() {
           targets: actions.map(({ target, preview, mode }) => ({ targetMemberId: target.memberId, previewToken: preview.previewToken!, mode })),
           ...(restart ? { restart: true } : {}),
         });
-        notifyResult(report);
+        notifyResult(t, report);
       } else {
         const combined: { synced: unknown[]; skipped: unknown[]; errors: { error: string }[]; needsRecovery: boolean } = { synced: [], skipped: [], errors: [], needsRecovery: false };
         for (const { target, preview, mode } of actions) {
@@ -310,11 +326,11 @@ export default function SessionsPage() {
             break;
           }
         }
-        notifyResult(combined);
+        notifyResult(t, combined);
       }
       await reloadSelectedGroup();
     } catch (error) {
-      toast.error("统一会话内容失败", { description: api.asError(error) });
+      toast.error(t("sessions.page.unifyFailed"), { description: api.asError(error) });
     } finally {
       setActionBusy(false);
     }
@@ -328,7 +344,7 @@ export default function SessionsPage() {
       .map((member) => member.accountId)
       .filter((id): id is string => Boolean(id));
     if (await needsEditorRestart(targetAccountIds)) {
-      setRestartPrompt({ actionLabel: "关闭并同步", run: () => runSafeBatch(true) });
+      setRestartPrompt({ actionLabel: t("sessions.page.restartCloseAndSync"), run: () => runSafeBatch(true) });
       return;
     }
     await runSafeBatch(false);
@@ -339,10 +355,10 @@ export default function SessionsPage() {
     setActionBusy(true);
     try {
       const report = await api.syncSessionGroupSafeBatch(client, detail.groupId, scope, restart);
-      notifyResult(report);
+      notifyResult(t, report);
       await reloadSelectedGroup();
     } catch (error) {
-      toast.error("批量同步失败", { description: api.asError(error) });
+      toast.error(t("sessions.page.batchSyncFailed"), { description: api.asError(error) });
     } finally {
       setActionBusy(false);
     }
@@ -351,7 +367,7 @@ export default function SessionsPage() {
   async function addMember() {
     if (!detail || !sourceMemberId || !addTargetId || actionBusy) return;
     if (await needsEditorRestart([addTargetId])) {
-      setRestartPrompt({ actionLabel: "关闭并复制", run: () => runAddMember(true) });
+      setRestartPrompt({ actionLabel: t("sessions.page.restartCloseAndCopy"), run: () => runAddMember(true) });
       return;
     }
     await runAddMember(false);
@@ -369,14 +385,14 @@ export default function SessionsPage() {
         variantScope: scope,
         restart,
       });
-      if (report.status === "linked") toast.success("已复制并添加到关联组", report.restartedEditor ? { description: "已重新打开 VS Code" } : undefined);
-      else if (report.status === "alreadyLinked") toast.info("该账号已在关联组中");
-      else if (report.status === "copiedUnlinked") toast.warning("会话已复制，但没有建立关联", { description: JSON.stringify(report.linkErrors ?? []) });
-      else toast.error("添加关联账号失败");
-      if (report.editorError) toast.warning("VS Code 未能自动重新打开", { description: report.editorError });
+      if (report.status === "linked") toast.success(t("sessions.page.addedAndLinked"), report.restartedEditor ? { description: t("sessions.page.reopenedVscode") } : undefined);
+      else if (report.status === "alreadyLinked") toast.info(t("sessions.page.alreadyLinked"));
+      else if (report.status === "copiedUnlinked") toast.warning(t("sessions.page.copiedNotLinked"), { description: JSON.stringify(report.linkErrors ?? []) });
+      else toast.error(t("sessions.page.addFailed"));
+      if (report.editorError) toast.warning(t("sessions.page.vscodeReopenFailed"), { description: report.editorError });
       await reloadSelectedGroup();
     } catch (error) {
-      toast.error("添加关联账号失败", { description: api.asError(error) });
+      toast.error(t("sessions.page.addFailed"), { description: api.asError(error) });
     } finally {
       setActionBusy(false);
     }
@@ -395,13 +411,13 @@ export default function SessionsPage() {
 
   async function unlinkMember(member: SessionGroupMemberDetail) {
     if (actionBusy) {
-      const error = new Error("请等待当前操作完成");
-      toast.error("取消关联失败", { description: error.message });
+      const error = new Error(t("sessions.page.busy"));
+      toast.error(t("sessions.page.unlinkFailed"), { description: error.message });
       throw error;
     }
     if (!detail || detail.client !== client || detail.groupId !== selectedGroupId) {
-      const error = new Error("会话组已变化，请刷新后重试");
-      toast.error("取消关联失败", { description: error.message });
+      const error = new Error(t("sessions.page.groupChanged"));
+      toast.error(t("sessions.page.unlinkFailed"), { description: error.message });
       throw error;
     }
     const groupId = detail.groupId;
@@ -414,7 +430,7 @@ export default function SessionsPage() {
         variantScope: scope,
       });
       if (report.status === "groupRemoved") {
-        toast.success("已取消关联，该会话组已无成员，已删除");
+        toast.success(t("sessions.page.groupRemoved"));
         // 组已删除，再拉详情只会得到「不存在」。关掉弹窗并只刷新列表。
         closeDetail();
         setSelectedGroupId(null);
@@ -422,11 +438,11 @@ export default function SessionsPage() {
         setDetailError(null);
         await reloadGroups();
       } else {
-        toast.success(`已取消「${member.accountName}」的关联`);
+        toast.success(t("sessions.page.unlinkedMember", { name: member.accountName }));
         await reloadSelectedGroup();
       }
     } catch (error) {
-      toast.error("取消关联失败", { description: api.asError(error) });
+      toast.error(t("sessions.page.unlinkFailed"), { description: api.asError(error) });
       throw error;
     } finally {
       setActionBusy(false);
@@ -440,7 +456,7 @@ export default function SessionsPage() {
     setActionBusy(true);
     try {
       const report = await api.deleteSessionGroup({ client, groupId: group.groupId, variantScope: scope });
-      toast.success(`已删除「${group.title}」的关联`, { description: `共解除 ${report.removed} 个账号的关联，账号内的会话内容不受影响` });
+      toast.success(t("sessions.page.groupDeleted", { title: group.title }), { description: t("sessions.page.groupDeletedDescription", { count: report.removed }) });
       setDeleteTarget(null);
       if (group.groupId === selectedGroupId) {
         closeDetail();
@@ -451,7 +467,7 @@ export default function SessionsPage() {
       await reloadGroups();
     } catch (error) {
       // 失败时保留确认框，方便直接重试。
-      toast.error("删除关联失败", { description: api.asError(error) });
+      toast.error(t("sessions.page.deleteFailed"), { description: api.asError(error) });
     } finally {
       setActionBusy(false);
     }
@@ -500,9 +516,9 @@ export default function SessionsPage() {
       addOpen={addOpen} setAddOpen={setAddOpen} fullPage={false}
     />
   );
-  const statusOptions = [
-    ["all", "全部"], ["behind", "待同步"], ["diverge", "有分歧"], ["latest", "内容一致"],
-    ["missing", "内容缺失"], ["unknown", "无法确认"],
+  const statusOptions: [string, string][] = [
+    ["all", t("sessions.status.all")], ["behind", t("sessions.status.behind")], ["diverge", t("sessions.status.diverge")], ["latest", t("sessions.status.latest")],
+    ["missing", t("sessions.status.missing")], ["unknown", t("sessions.status.unknown")],
   ];
   const pages = Array.from({ length: pageCount }, (_, index) => index + 1)
     .filter((value) => value === 1 || value === pageCount || Math.abs(value - currentPage) <= 1);
@@ -513,19 +529,19 @@ export default function SessionsPage() {
         <header className="mb-6">
           <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="text-[28px] font-semibold tracking-tight">关联会话</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">统一管理各账号下的会话副本，按需复制或同步。</p>
+              <h1 className="text-[28px] font-semibold tracking-tight">{t("sessions.page.title")}</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{t("sessions.page.description")}</p>
             </div>
             <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-              <Button variant="outline" size="sm" className="shrink-0" onClick={() => void (selectedGroupId ? reloadSelectedGroup() : reloadGroups())} disabled={loading || detailLoading}><RefreshCw className={loading ? "animate-spin" : undefined} />刷新</Button>
+              <Button variant="outline" size="sm" className="shrink-0" onClick={() => void (selectedGroupId ? reloadSelectedGroup() : reloadGroups())} disabled={loading || detailLoading}><RefreshCw className={loading ? "animate-spin" : undefined} />{t("common.refresh")}</Button>
               <AddLinkedSessionDialog client={client} disabled={loading} onDone={() => void (selectedGroupId ? reloadSelectedGroup() : reloadGroups())} requestRestartConfirm={(actionLabel, run) => setRestartPrompt({ actionLabel, run })} />
             </div>
           </div>
           <Tabs value={client} onValueChange={changeClient} className="mt-4">
-            <TabsList aria-label="会话客户端" className="grid h-auto w-full grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2 bg-transparent p-0">
+            <TabsList aria-label={t("sessions.page.tabsAria")} className="grid h-auto w-full grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2 bg-transparent p-0">
               {CLIENTS.map((item) => <TabsTrigger key={item.id} value={item.id} className="relative h-auto min-w-0 justify-start gap-3 rounded-lg border border-border bg-background px-3 py-4 text-left hover:border-brand/50 data-[state=active]:border-brand data-[state=active]:bg-brand/5 data-[state=active]:shadow-sm">
                 <ClientMark client={item.id} />
-                <span className="min-w-0"><span className="block truncate text-sm font-semibold text-foreground">{item.title}</span><span className="mt-1 block truncate text-xs font-normal text-muted-foreground">{item.id === "workbuddy" ? "国内版 · 国际版" : item.id === "codebuddyIde" ? "国内版 / 国际版" : "VS Code"}</span></span>
+                <span className="min-w-0"><span className="block truncate text-sm font-semibold text-foreground">{t(CLIENT_TITLE_KEY[item.id])}</span><span className="mt-1 block truncate text-xs font-normal text-muted-foreground">{t(item.subtitleKey)}</span></span>
                 {client === item.id && <CheckCircle2 className="absolute right-2 top-2 size-3.5 text-brand" />}
               </TabsTrigger>)}
             </TabsList>
@@ -533,31 +549,31 @@ export default function SessionsPage() {
         </header>
         <section aria-labelledby="session-groups-title" className="min-w-0">
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            <h2 id="session-groups-title" className="text-base font-semibold tracking-tight">{CLIENTS.find((item) => item.id === client)?.title} 会话</h2>
-            <Badge variant="secondary" className="h-6 min-w-6 rounded-full border-0 px-1.5 text-[11px] tabular-nums text-muted-foreground shadow-none" aria-label={`${groups.length} 个会话组`}>{groups.length}</Badge>
+            <h2 id="session-groups-title" className="text-base font-semibold tracking-tight">{t("sessions.page.groupsHeading", { client: t(CLIENT_TITLE_KEY[client]) })}</h2>
+            <Badge variant="secondary" className="h-6 min-w-6 rounded-full border-0 px-1.5 text-[11px] tabular-nums text-muted-foreground shadow-none" aria-label={t("sessions.page.groupsCountAria", { count: groups.length })}>{groups.length}</Badge>
           </div>
           <div className="my-4 flex flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
-              {client === "codebuddyIde" && <Select value={variantScope} onValueChange={(value) => { setVariantScope(value as WbVariant); setSelectedGroupId(null); setDetailOpen(false); }}><SelectTrigger size="sm" className="w-32 bg-background text-xs" aria-label="选择 CodeBuddy IDE 档位"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="cn">国内版</SelectItem><SelectItem value="ai">国际版</SelectItem></SelectContent></Select>}
+              {client === "codebuddyIde" && <Select value={variantScope} onValueChange={(value) => { setVariantScope(value as WbVariant); setSelectedGroupId(null); setDetailOpen(false); }}><SelectTrigger size="sm" className="w-32 bg-background text-xs" aria-label={t("sessions.page.variantAria")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="cn">{t("sessions.common.cnVersion")}</SelectItem><SelectItem value="ai">{t("sessions.common.intlVersion")}</SelectItem></SelectContent></Select>}
               <Tabs value={statusFilter} onValueChange={setStatusFilter} className="min-w-0 max-w-full gap-0">
-                <TabsList className="h-auto max-w-full flex-wrap justify-start gap-0.5" aria-label="按状态筛选">
+                <TabsList className="h-auto max-w-full flex-wrap justify-start gap-0.5" aria-label={t("sessions.page.filterAria")}>
                   {statusOptions.filter(([value]) => ["all", "behind", "diverge", "latest"].includes(value) || value === statusFilter || groups.some((group) => group.summaryStatus === value)).map(([value, label]) => <TabsTrigger key={value} value={value} className="h-8 gap-1.5 px-2.5 hover:bg-background/60">
                     {label}<span className={`rounded-full px-1.5 text-[11px] tabular-nums ${statusFilter === value ? "bg-muted" : "bg-background/70"}`}>{value === "all" ? groups.length : groups.filter((group) => group.summaryStatus === value).length}</span>
                   </TabsTrigger>)}
                 </TabsList>
               </Tabs>
             </div>
-            <Select value={sortOrder} onValueChange={setSortOrder}><SelectTrigger size="sm" className="w-auto min-w-28 gap-1.5 border-0 bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent hover:text-foreground" aria-label="排序方式"><SlidersHorizontal className="size-4" aria-hidden="true" /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="recent">最近更新</SelectItem><SelectItem value="oldest">最早更新</SelectItem></SelectContent></Select>
+            <Select value={sortOrder} onValueChange={setSortOrder}><SelectTrigger size="sm" className="w-auto min-w-28 gap-1.5 border-0 bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent hover:text-foreground" aria-label={t("sessions.page.sortAria")}><SlidersHorizontal className="size-4" aria-hidden="true" /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="recent">{t("sessions.page.sortRecent")}</SelectItem><SelectItem value="oldest">{t("sessions.page.sortOldest")}</SelectItem></SelectContent></Select>
           </div>
-          {(storeStatus === "unavailable" || storeError) && <p role="status" className="mb-3 rounded-lg border border-amber-500/30 p-3 text-sm text-muted-foreground">{storeError ?? "关联组存储暂不可用，当前只展示可读取的数据。"}</p>}
-          {loadError && <div role="alert" className="mb-3 rounded-lg border border-destructive/30 p-3 text-sm text-destructive">{loadError}<Button variant="outline" size="sm" className="ml-2" onClick={() => void reloadGroups()}>重试</Button></div>}
-          {loading ? <GroupSkeleton /> : filteredGroups.length === 0 ? <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed p-6 text-center"><Layers3 className="size-7 text-muted-foreground" /><h3 className="mt-3 text-sm font-medium">{groups.length === 0 ? "还没有关联会话组" : "没有符合条件的会话"}</h3><p className="mt-2 text-sm text-muted-foreground">{groups.length === 0 ? "从账号切换时复制会话后，关联组会显示在这里。" : "试试其它筛选条件。"}</p></div> : <div className={`grid min-w-0 gap-3 ${contentWidth >= 600 ? "grid-cols-2" : "grid-cols-1"}`}>{visibleGroups.map((group) => <SessionGroupCard key={group.key} group={group} selected={group.groupId === selectedGroupId} onSelect={() => openDetail(group.groupId)} onRequestDelete={() => setDeleteTarget(group)} />)}</div>}
-          {!loading && filteredGroups.length > PAGINATION_HIDE_MAX && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground"><span>显示 {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredGroups.length)}，共 {filteredGroups.length} 个会话</span><nav aria-label="会话分页" className="flex flex-wrap items-center gap-1.5"><Button variant="outline" size="icon" className="size-8" aria-label="上一页" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}><ChevronLeft /></Button>{pages.map((value, index) => <span key={value} className="flex items-center gap-1.5">{index > 0 && value - pages[index - 1] > 1 && <span>…</span>}<Button variant={value === currentPage ? "default" : "outline"} className={`size-8 p-0 ${value === currentPage ? "bg-brand text-brand-foreground hover:bg-brand/90" : ""}`} aria-label={`第 ${value} 页`} aria-current={value === currentPage ? "page" : undefined} onClick={() => setPage(value)}>{value}</Button></span>)}<Button variant="outline" size="icon" className="size-8" aria-label="下一页" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}><ChevronRight /></Button></nav></div>}
+          {(storeStatus === "unavailable" || storeError) && <p role="status" className="mb-3 rounded-lg border border-amber-500/30 p-3 text-sm text-muted-foreground">{storeError ?? t("sessions.page.storeUnavailable")}</p>}
+          {loadError && <div role="alert" className="mb-3 rounded-lg border border-destructive/30 p-3 text-sm text-destructive">{loadError}<Button variant="outline" size="sm" className="ml-2" onClick={() => void reloadGroups()}>{t("common.retry")}</Button></div>}
+          {loading ? <GroupSkeleton /> : filteredGroups.length === 0 ? <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed p-6 text-center"><Layers3 className="size-7 text-muted-foreground" /><h3 className="mt-3 text-sm font-medium">{groups.length === 0 ? t("sessions.page.emptyTitle") : t("sessions.page.emptyFilteredTitle")}</h3><p className="mt-2 text-sm text-muted-foreground">{groups.length === 0 ? t("sessions.page.emptyHint") : t("sessions.page.emptyFilteredHint")}</p></div> : <div className={`grid min-w-0 gap-3 ${contentWidth >= 600 ? "grid-cols-2" : "grid-cols-1"}`}>{visibleGroups.map((group) => <SessionGroupCard key={group.key} group={group} selected={group.groupId === selectedGroupId} onSelect={() => openDetail(group.groupId)} onRequestDelete={() => setDeleteTarget(group)} />)}</div>}
+          {!loading && filteredGroups.length > PAGINATION_HIDE_MAX && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground"><span>{t("sessions.page.range", { start: (currentPage - 1) * PAGE_SIZE + 1, end: Math.min(currentPage * PAGE_SIZE, filteredGroups.length), total: filteredGroups.length })}</span><nav aria-label={t("sessions.page.paginationAria")} className="flex flex-wrap items-center gap-1.5"><Button variant="outline" size="icon" className="size-8" aria-label={t("sessions.page.previousPage")} disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}><ChevronLeft /></Button>{pages.map((value, index) => <span key={value} className="flex items-center gap-1.5">{index > 0 && value - pages[index - 1] > 1 && <span>…</span>}<Button variant={value === currentPage ? "default" : "outline"} className={`size-8 p-0 ${value === currentPage ? "bg-brand text-brand-foreground hover:bg-brand/90" : ""}`} aria-label={t("sessions.page.pageNumber", { page: value })} aria-current={value === currentPage ? "page" : undefined} onClick={() => setPage(value)}>{value}</Button></span>)}<Button variant="outline" size="icon" className="size-8" aria-label={t("sessions.page.nextPage")} disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}><ChevronRight /></Button></nav></div>}
         </section>
       </div>
       <Dialog open={detailOpen} onOpenChange={(open) => { if (!open) closeDetail(); }}>
         <DialogContent showCloseButton={false} aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); if (!detailOpen) openerRef.current?.focus({ preventScroll: true }); }} className="session-detail-modal flex flex-col gap-0 overflow-hidden p-0">
-          <DialogTitle className="sr-only">会话详情</DialogTitle>
+          <DialogTitle className="sr-only">{t("sessions.detail.title")}</DialogTitle>
           <DialogAutoHeight>{detailPanel}</DialogAutoHeight>
         </DialogContent>
       </Dialog>
@@ -565,29 +581,29 @@ export default function SessionsPage() {
       <AlertDialog open={!!restartPrompt} onOpenChange={(open) => { if (!open && !actionBusy) setRestartPrompt(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>同步前需要重启 VS Code</AlertDialogTitle>
+            <AlertDialogTitle>{t("sessions.page.restartTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              检测到 VS Code 正在运行：运行中的写入会被编辑器覆盖。确认后将先关闭 VS Code（未保存内容由 VS Code 自身提示保护，最多等待 60 秒），完成后再自动重新打开。
+              {t("sessions.page.restartDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {actionBusy && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在关闭 VS Code 并处理，请勿关闭本窗口…</p>}
+          {actionBusy && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />{t("sessions.page.restartBusy")}</p>}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={actionBusy}>取消</AlertDialogCancel>
-            <DemoAction><Button disabled={actionBusy} onClick={() => void confirmRestart()}>{actionBusy ? "处理中…" : restartPrompt?.actionLabel ?? "关闭并继续"}</Button></DemoAction>
+            <AlertDialogCancel disabled={actionBusy}>{t("common.cancel")}</AlertDialogCancel>
+            <DemoAction><Button disabled={actionBusy} onClick={() => void confirmRestart()}>{actionBusy ? t("sessions.common.processing") : restartPrompt?.actionLabel ?? t("sessions.page.closeAndContinue")}</Button></DemoAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open && !actionBusy) setDeleteTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除「{deleteTarget?.title}」的关联？</AlertDialogTitle>
+            <AlertDialogTitle>{t("sessions.page.deleteTitle", { title: deleteTarget?.title ?? "" })}</AlertDialogTitle>
             <AlertDialogDescription>
-              组内 {deleteTarget?.memberCount} 个账号会一起解除关联，不再参与同步；账号里的会话内容不会被删除。
+              {t("sessions.page.deleteDescription", { count: deleteTarget?.memberCount ?? 0 })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={actionBusy}>取消</AlertDialogCancel>
-            <DemoAction><Button variant="destructive" disabled={actionBusy} onClick={() => void deleteGroup()}>{actionBusy ? "处理中…" : "确认删除关联"}</Button></DemoAction>
+            <AlertDialogCancel disabled={actionBusy}>{t("common.cancel")}</AlertDialogCancel>
+            <DemoAction><Button variant="destructive" disabled={actionBusy} onClick={() => void deleteGroup()}>{actionBusy ? t("sessions.common.processing") : t("sessions.page.deleteConfirm")}</Button></DemoAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -618,6 +634,7 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
   /** 插件侧运行中：请求页面统一的「关闭并重开」确认框；用户确认后执行 `run`。 */
   requestRestartConfirm: (actionLabel: string, run: () => Promise<void>) => void;
 }) {
+  const t = useT();
   const accounts = useAccountsStore((state) => state.accounts);
   const [open, setOpen] = useState(false);
   const [sourceAccountId, setSourceAccountId] = useState("");
@@ -640,9 +657,9 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
   const targetAccount = workbuddyAccounts.find((account) => account.id === targetAccountId) ?? null;
   const targetOptions = workbuddyAccounts.filter((account) => account.id !== sourceAccountId);
   const supported = client === "workbuddy" || client === "vscodeExt";
-  const unsupportedTitle = "当前客户端暂不支持新增关联会话";
+  const unsupportedTitle = t("sessions.add.unsupported");
   /** 弹窗文案用：来源账号的客户端称呼。 */
-  const clientAccountLabel = client === "workbuddy" ? "WorkBuddy 账号" : "CodeBuddy 插件账号";
+  const clientAccountLabel = client === "workbuddy" ? t("sessions.add.workbuddyAccount") : t("sessions.add.vscodeAccount");
 
   async function loadSessions(account: AccountMeta) {
     const id = ++requestId.current;
@@ -740,7 +757,7 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
     if (client === "vscodeExt") {
       // 运行中的写入会被 VS Code 覆盖：先走页面统一的确认框授权「关闭并重开」。
       if (await pluginNeedsRestart()) {
-        requestRestartConfirm("关闭并复制", () => copyAndLinkPlugin(true));
+        requestRestartConfirm(t("sessions.page.restartCloseAndCopy"), () => copyAndLinkPlugin(true));
         return;
       }
       await copyAndLinkPlugin(false);
@@ -760,19 +777,19 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
         sessionIds: [...selected],
         restart,
       });
-      const targetName = targetAccount ? displayName(targetAccount) : "目标账号";
+      const targetName = targetAccount ? displayName(targetAccount) : t("sessions.common.targetAccount");
       const status = String(report.status);
       const skipped = Array.isArray(report.skipped) ? report.skipped : [];
       const copiedCount = (report.report as { copied?: unknown[] } | undefined)?.copied?.length ?? 0;
       if (status === "linked") {
-        toast.success(`已复制 ${copiedCount} 个会话到「${targetName}」并建立关联`, report.restartedEditor ? { description: "已重新打开 VS Code" } : undefined);
+        toast.success(t("sessions.page.copiedToTarget", { count: copiedCount, target: targetName }), report.restartedEditor ? { description: t("sessions.page.reopenedVscode") } : undefined);
       } else if (status === "copiedUnlinked") {
-        toast.warning("会话已复制，但没有建立关联", { description: JSON.stringify(report.linkErrors ?? []) });
+        toast.warning(t("sessions.page.copiedNotLinked"), { description: JSON.stringify(report.linkErrors ?? []) });
       } else {
-        toast.error("复制并关联失败");
+        toast.error(t("sessions.page.copyFailed"));
       }
-      if (skipped.length > 0) toast.info(`有 ${skipped.length} 个会话因内容缺失被跳过`, { description: skipped.map((item) => item.error).join("；") });
-      if (report.editorError) toast.warning("VS Code 未能自动重新打开", { description: report.editorError });
+      if (skipped.length > 0) toast.info(t("sessions.page.skippedMissing", { count: skipped.length }), { description: skipped.map((item) => item.error).join(t("dialogs.common.separator")) });
+      if (report.editorError) toast.warning(t("sessions.page.vscodeReopenFailed"), { description: report.editorError });
       // 关窗换代后，结果已经提示过；不要把新打开的弹窗关掉，也不要清掉新一次执行的 busy。
       if (copyRequestId.current !== copyId) {
         if (status === "linked") onDone();
@@ -786,7 +803,7 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
       }
     } catch (error) {
       // 换代后也要报失败：请求已经发出，静默会让用户以为没执行。
-      toast.error("复制并关联失败", { description: api.asError(error) });
+      toast.error(t("sessions.page.copyFailed"), { description: api.asError(error) });
     } finally {
       if (copyRequestId.current === copyId) setBusy(false);
     }
@@ -800,19 +817,19 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
       const copied = report.copied?.length ?? 0;
       const alreadyLinked = report.alreadyLinked?.length ?? 0;
       const errors = report.errors ?? [];
-      const targetName = targetAccount ? displayName(targetAccount) : "目标账号";
+      const targetName = targetAccount ? displayName(targetAccount) : t("sessions.common.targetAccount");
       // 同一份报告可能同时含已复制、已存在与失败项：各分支各自提示，互不隐藏。
-      if (copied > 0) toast.success(`已复制 ${copied} 个会话到「${targetName}」并建立关联`);
-      if (alreadyLinked > 0) toast.info(`「${targetName}」已存在 ${alreadyLinked} 个会话的副本，未重复复制`);
+      if (copied > 0) toast.success(t("sessions.page.copiedToTarget", { count: copied, target: targetName }));
+      if (alreadyLinked > 0) toast.info(t("sessions.page.alreadyCopied", { target: targetName, count: alreadyLinked }));
       if (errors.length > 0) {
         const allFailed = copied === 0 && alreadyLinked === 0;
-        toast.error(allFailed ? "复制失败" : "部分会话复制失败", {
-          description: errors.map((item) => `${sessions.find((session) => session.id === item.id)?.title || item.id}：${item.error}`).join("；"),
+        toast.error(allFailed ? t("sessions.page.copyFailedShort") : t("sessions.page.copyPartlyFailed"), {
+          description: errors.map((item) => t("sessions.common.errorEntry", { name: sessions.find((session) => session.id === item.id)?.title || item.id, error: item.error })).join(t("dialogs.common.separator")),
         });
       }
-      if (report.needsRecovery) toast.error("会话操作待恢复", { description: "已保留恢复所需材料。" });
+      if (report.needsRecovery) toast.error(t("sessions.page.needsRecovery"), { description: t("sessions.page.needsRecoveryKeep") });
       if (copied === 0 && alreadyLinked === 0 && errors.length === 0 && !report.needsRecovery) {
-        toast.error("复制并关联失败", report.error ? { description: report.error } : undefined);
+        toast.error(t("sessions.page.copyFailed"), report.error ? { description: report.error } : undefined);
       }
       // 关窗换代后，结果已经提示过；不要把新打开的弹窗关掉，也不要清掉新一次执行的 busy。
       if (copyRequestId.current !== copyId) {
@@ -828,52 +845,52 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
       }
     } catch (error) {
       // 换代后也要报失败：请求已经发出，静默会让用户以为没执行。
-      toast.error("复制并关联失败", { description: api.asError(error) });
+      toast.error(t("sessions.page.copyFailed"), { description: api.asError(error) });
     } finally {
       if (copyRequestId.current === copyId) setBusy(false);
     }
   }
   // 页脚摘要固定带目标账号名：摘要随勾选数与目标变化，执行前就能确认去向。
   const summarySub = !sourceAccount
-    ? "先选择来源账号"
+    ? t("sessions.add.summarySelectSource")
     : !targetAccount
-      ? "再选择目标账号"
+      ? t("sessions.add.summarySelectTarget")
       : selected.size > 0
-        ? `复制并关联到「${displayName(targetAccount)}」`
-        : `勾选要复制到「${displayName(targetAccount)}」的会话`;
+        ? t("sessions.add.summaryWillCopy", { target: displayName(targetAccount) })
+        : t("sessions.add.summaryTickSessions", { target: displayName(targetAccount) });
   return <Dialog open={open} onOpenChange={openChange}>
     <span className="inline-flex" title={supported ? undefined : unsupportedTitle}>
       <DialogTrigger asChild>
-        <Button size="sm" className="shrink-0 bg-brand text-brand-foreground hover:bg-brand/90" disabled={disabled || !supported} title={supported ? "新增关联会话" : unsupportedTitle}><Link2 />新增关联会话</Button>
+        <Button size="sm" className="shrink-0 bg-brand text-brand-foreground hover:bg-brand/90" disabled={disabled || !supported} title={supported ? t("sessions.add.title") : unsupportedTitle}><Link2 />{t("sessions.add.title")}</Button>
       </DialogTrigger>
     </span>
     <DialogContent showCloseButton={!busy} onEscapeKeyDown={blockDismissWhileBusy} onPointerDownOutside={blockDismissWhileBusy} onInteractOutside={blockDismissWhileBusy} className="flex max-h-[min(90vh,calc(100vh-2rem))] min-w-0 flex-col overflow-hidden">
       <DialogHeader className="shrink-0">
-        <DialogTitle>新增关联会话</DialogTitle>
-        <DialogDescription>选择一个来源账号的会话，复制到目标账号并建立关联。</DialogDescription>
+        <DialogTitle>{t("sessions.add.title")}</DialogTitle>
+        <DialogDescription>{t("sessions.add.description")}</DialogDescription>
       </DialogHeader>
       {busy && <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 rounded-lg bg-background/85 backdrop-blur-sm">
         <Loader2 className="size-8 animate-spin text-primary" />
-        <p className="text-sm font-medium">正在复制并关联…</p>
-        <p className="max-w-xs text-center text-xs text-muted-foreground">正在处理中，请勿关闭窗口</p>
+        <p className="text-sm font-medium">{t("sessions.add.copyingTitle")}</p>
+        <p className="max-w-xs text-center text-xs text-muted-foreground">{t("sessions.add.copyingHint")}</p>
       </div>}
       <div className="flex min-h-0 flex-col gap-3 overflow-x-hidden overflow-y-auto">
-        <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium">来源账号</p>
+        <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium">{t("sessions.add.sourceAccount")}</p>
           <Select value={sourceAccountId} onValueChange={changeSource} disabled={busy}>
-            <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label="选择来源账号"><SelectValue placeholder={`选择${clientAccountLabel}`} /></SelectTrigger>
+            <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label={t("sessions.add.sourceAccountAria")}><SelectValue placeholder={t("sessions.add.sourcePlaceholder", { client: clientAccountLabel })} /></SelectTrigger>
             <SelectContent>{workbuddyAccounts.map((account) => <SelectItem key={account.id} value={account.id} className="text-xs">{displayName(account)} · {variantLabel(accountVariant(account))}</SelectItem>)}</SelectContent>
           </Select>
-          {workbuddyAccounts.length === 0 && <p className="text-xs text-muted-foreground">账号库里还没有{clientAccountLabel}。</p>}
+          {workbuddyAccounts.length === 0 && <p className="text-xs text-muted-foreground">{t("sessions.add.noAccounts", { client: clientAccountLabel })}</p>}
         </div>
-        <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium">来源会话</p>
+        <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium">{t("sessions.add.sourceSessions")}</p>
           {!sourceAccountId
-            ? <p className={`flex items-center justify-center px-3 text-center text-sm text-muted-foreground ${LINKED_TREE_MIN_H}`}>先选择来源账号，再从会话树里勾选要复制的会话。</p>
+            ? <p className={`flex items-center justify-center px-3 text-center text-sm text-muted-foreground ${LINKED_TREE_MIN_H}`}>{t("sessions.add.selectSourceFirst")}</p>
             : sessionsLoading
-              ? <div className={`flex items-center justify-center gap-2 text-sm text-muted-foreground ${LINKED_TREE_MIN_H}`}><Loader2 className="animate-spin" />正在读取会话…</div>
+              ? <div className={`flex items-center justify-center gap-2 text-sm text-muted-foreground ${LINKED_TREE_MIN_H}`}><Loader2 className="animate-spin" />{t("sessions.add.loadingSessions")}</div>
               : sessionsError
-                ? <div role="alert" className={`flex flex-col items-center justify-center gap-2 px-3 text-center ${LINKED_TREE_MIN_H}`}><p className="text-sm text-destructive">{sessionsError}</p><Button variant="outline" size="sm" onClick={() => { if (sourceAccount) void loadSessions(sourceAccount); }}>重试</Button></div>
+                ? <div role="alert" className={`flex flex-col items-center justify-center gap-2 px-3 text-center ${LINKED_TREE_MIN_H}`}><p className="text-sm text-destructive">{sessionsError}</p><Button variant="outline" size="sm" onClick={() => { if (sourceAccount) void loadSessions(sourceAccount); }}>{t("common.retry")}</Button></div>
                 : sessions.length === 0
-                  ? <p className={`flex items-center justify-center px-3 text-center text-sm text-muted-foreground ${LINKED_TREE_MIN_H}`}>{client === "vscodeExt" && dataRoot === null ? "未找到插件数据目录：请先打开 VS Code 并登录 CodeBuddy 插件。" : "该账号没有可复制的会话。"}</p>
+                  ? <p className={`flex items-center justify-center px-3 text-center text-sm text-muted-foreground ${LINKED_TREE_MIN_H}`}>{client === "vscodeExt" && dataRoot === null ? t("sessions.add.noPluginDataRoot") : t("sessions.add.noSessions")}</p>
                   : <SessionTreeList
                     sessions={sessions}
                     selected={selected}
@@ -884,21 +901,21 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
                     className={`max-h-[min(22rem,45vh)] overflow-y-auto pr-1 ${LINKED_TREE_MIN_H}`}
                   />}
         </div>
-        <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium">目标账号</p>
+        <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium">{t("sessions.common.targetAccount")}</p>
           <Select value={targetAccountId} onValueChange={setTargetAccountId} disabled={busy || !sourceAccountId || targetOptions.length === 0}>
-            <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label="选择目标账号"><SelectValue placeholder={sourceAccountId ? "选择目标账号" : "先选择来源账号"} /></SelectTrigger>
+            <SelectTrigger size="sm" className="w-full min-w-0 bg-background text-xs" aria-label={t("sessions.add.targetAccountAria")}><SelectValue placeholder={sourceAccountId ? t("sessions.add.targetPlaceholder") : t("sessions.add.summarySelectSource")} /></SelectTrigger>
             <SelectContent>{targetOptions.map((account) => <SelectItem key={account.id} value={account.id} className="text-xs">{displayName(account)} · {variantLabel(accountVariant(account))}</SelectItem>)}</SelectContent>
           </Select>
         </div>
       </div>
       <DialogFooter className="shrink-0 sm:justify-between">
         <div className="min-w-0 space-y-0.5">
-          <div className="text-sm font-medium">已选 {selected.size} 个会话</div>
+          <div className="text-sm font-medium">{t("sessions.add.selectedCount", { count: selected.size })}</div>
           <div className="text-xs text-muted-foreground">{summarySub}</div>
         </div>
         <div className="flex shrink-0 gap-2">
-          <Button variant="outline" onClick={() => openChange(false)} disabled={busy}>取消</Button>
-          <DemoAction><Button onClick={() => void copyAndLink()} disabled={busy || !sourceAccount || !targetAccountId || sourceAccount.id === targetAccountId || selected.size === 0}>{busy ? <Loader2 className="animate-spin" /> : <Link2 />}{busy ? "处理中…" : "复制并关联"}</Button></DemoAction>
+          <Button variant="outline" onClick={() => openChange(false)} disabled={busy}>{t("common.cancel")}</Button>
+          <DemoAction><Button onClick={() => void copyAndLink()} disabled={busy || !sourceAccount || !targetAccountId || sourceAccount.id === targetAccountId || selected.size === 0}>{busy ? <Loader2 className="animate-spin" /> : <Link2 />}{busy ? t("sessions.common.processing") : t("sessions.common.copyAndLink")}</Button></DemoAction>
         </div>
       </DialogFooter>
     </DialogContent>
@@ -906,55 +923,57 @@ function AddLinkedSessionDialog({ client, disabled, onDone, requestRestartConfir
 }
 
 function GroupSkeleton() {
-  return <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2" aria-label="正在加载会话组">
+  const t = useT();
+  return <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2" aria-label={t("sessions.page.loadingGroupsAria")}>
     {Array.from({ length: 4 }, (_, index) => <Card key={index} className="gap-3 rounded-xl py-3 shadow-none"><CardContent className="space-y-3 px-3"><Skeleton className="h-4 w-2/3" /><Skeleton className="h-3 w-1/2" /><Skeleton className="h-7 w-full" /></CardContent></Card>)}
   </div>;
 }
 
 function SessionGroupCard({ group, selected, onSelect, onRequestDelete }: { group: SessionGroupSummary; selected: boolean; onSelect: () => void; onRequestDelete: () => void }) {
+  const t = useT();
   // 「…」不能嵌在整卡按钮里（button 不能嵌套 button），所以绝对定位到卡片右上角。
   return <div className="relative min-w-0">
     <button type="button" onClick={onSelect} aria-pressed={selected} className={`w-full min-w-0 cursor-pointer rounded-lg border bg-card px-4 py-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? "border-brand shadow-sm" : "border-border hover:border-brand/50"}`}>
-      <div className="flex min-w-0 items-center justify-between gap-2 pr-7 text-xs text-muted-foreground"><span className="flex min-w-0 items-center gap-2"><Folder className="size-4 shrink-0" /><span className="truncate" title={group.projectLabel}>{group.projectLabel || "未标记项目"}</span></span><span className="shrink-0" title={formatDate(group.latestActivityAt)}>{relativeDate(group.latestActivityAt)}</span></div>
+      <div className="flex min-w-0 items-center justify-between gap-2 pr-7 text-xs text-muted-foreground"><span className="flex min-w-0 items-center gap-2"><Folder className="size-4 shrink-0" /><span className="truncate" title={group.projectLabel}>{group.projectLabel || t("sessions.group.noProject")}</span></span><span className="shrink-0" title={formatDate(group.latestActivityAt)}>{relativeDate(t, group.latestActivityAt)}</span></div>
       <h3 className="my-3 truncate text-base font-semibold" title={group.title}>{group.title}</h3>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground"><span className="flex items-center gap-2" title={group.accountNames.join("、")}><MessageCircle className="size-4" />{group.memberCount} 个账号</span><span className="flex min-w-0 items-center gap-2 text-xs"><span className={`size-2 shrink-0 rounded-full ${group.summaryStatus === "latest" ? "bg-brand" : group.summaryStatus === "behind" ? "bg-amber-500" : group.summaryStatus === "diverge" ? "bg-destructive" : "bg-muted-foreground"}`} /><span className="truncate" title={group.summaryText}>{{ latest: "内容一致", behind: "待同步", diverge: "有分歧", missing: "内容缺失", unknown: "无法确认" }[group.summaryStatus]}</span></span></div>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground"><span className="flex items-center gap-2" title={group.accountNames.join(t("sessions.common.listSeparator"))}><MessageCircle className="size-4" />{t("sessions.group.accountCount", { count: group.memberCount })}</span><span className="flex min-w-0 items-center gap-2 text-xs"><span className={`size-2 shrink-0 rounded-full ${group.summaryStatus === "latest" ? "bg-brand" : group.summaryStatus === "behind" ? "bg-amber-500" : group.summaryStatus === "diverge" ? "bg-destructive" : "bg-muted-foreground"}`} /><span className="truncate" title={group.summaryText}>{t(SUMMARY_STATUS_KEY[group.summaryStatus])}</span></span></div>
     </button>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="absolute right-2 top-2.5 size-6 text-muted-foreground hover:text-foreground" aria-label={`${group.title} 的操作`} title="更多操作"><Ellipsis className="size-3.5" /></Button>
+        <Button variant="ghost" size="icon" className="absolute right-2 top-2.5 size-6 text-muted-foreground hover:text-foreground" aria-label={t("sessions.group.actionsAria", { title: group.title })} title={t("sessions.group.moreActions")}><Ellipsis className="size-3.5" /></Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-36">
-        <DropdownMenuItem onSelect={onRequestDelete}><Trash2 />删除关联</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onRequestDelete}><Trash2 />{t("sessions.group.deleteLink")}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   </div>;
 }
 
-function relativeDate(timestamp: number): string {
+function relativeDate(t: Translate, timestamp: number): string {
   if (!timestamp) return "—";
   const minutes = Math.floor((Date.now() - timestamp) / 60000);
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes}分钟前`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}小时前`;
+  if (minutes < 1) return t("sessions.relative.justNow");
+  if (minutes < 60) return t("sessions.relative.minutesAgo", { count: minutes });
+  if (minutes < 1440) return t("sessions.relative.hoursAgo", { count: Math.floor(minutes / 60) });
   return formatDate(timestamp);
 }
 
 function formatDate(timestamp: number): string {
   if (!timestamp) return "—";
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(timestamp);
+  return new Intl.DateTimeFormat(intlLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(timestamp);
 }
 
-function notifyResult(report: { synced?: unknown[]; skipped?: unknown[]; errors?: { error: string }[]; needsRecovery?: boolean; temporaryFiles?: { reason: string }[]; restartedVariants?: WbVariant[]; restartedEditor?: boolean; editorError?: string }, targetName?: string) {
+function notifyResult(t: Translate, report: { synced?: unknown[]; skipped?: unknown[]; errors?: { error: string }[]; needsRecovery?: boolean; temporaryFiles?: { reason: string }[]; restartedVariants?: WbVariant[]; restartedEditor?: boolean; editorError?: string }, targetName?: string) {
   const synced = report.synced?.length ?? 0;
   const skipped = report.skipped?.length ?? 0;
   const errors = report.errors ?? [];
-  const restartHint = report.restartedVariants?.length
-    ? `，已重新打开 ${report.restartedVariants.map(variantLabel).join("、")}`
-    : report.restartedEditor ? "，已重新打开 VS Code" : "";
-  if (synced > 0) toast.success(targetName ? `已同步到「${targetName}」` : `已同步 ${synced} 个会话`, { description: `完成 ${synced} 项${restartHint}` });
-  if (skipped > 0) toast.warning(`有 ${skipped} 项跳过`, { description: "预览过期或复核后不再符合安全条件的项不会计为成功。" });
-  if (errors.length > 0) toast.error("部分会话同步失败", { description: errors.map((item) => item.error).join("；") });
-  if (report.needsRecovery) toast.error("会话操作待恢复", { description: report.temporaryFiles?.map((item) => item.reason).join("；") || "已保留恢复所需材料。" });
-  if (report.editorError) toast.warning("VS Code 未能自动重新打开", { description: report.editorError });
-  if (synced === 0 && skipped === 0 && errors.length === 0 && !report.needsRecovery) toast.info("当前没有需要同步的副本");
+  const done = report.restartedVariants?.length
+    ? t("sessions.page.syncDoneVariants", { count: synced, variants: report.restartedVariants.map(variantLabel).join(t("sessions.common.listSeparator")) })
+    : report.restartedEditor ? t("sessions.page.syncDoneEditor", { count: synced }) : t("sessions.page.syncDone", { count: synced });
+  if (synced > 0) toast.success(targetName ? t("sessions.page.syncedTo", { target: targetName }) : t("sessions.page.syncedCount", { count: synced }), { description: done });
+  if (skipped > 0) toast.warning(t("sessions.page.skippedCount", { count: skipped }), { description: t("sessions.page.skippedDescription") });
+  if (errors.length > 0) toast.error(t("sessions.page.syncPartlyFailed"), { description: errors.map((item) => item.error).join(t("dialogs.common.separator")) });
+  if (report.needsRecovery) toast.error(t("sessions.page.needsRecovery"), { description: report.temporaryFiles?.map((item) => item.reason).join(t("dialogs.common.separator")) || t("sessions.page.needsRecoveryKeep") });
+  if (report.editorError) toast.warning(t("sessions.page.vscodeReopenFailed"), { description: report.editorError });
+  if (synced === 0 && skipped === 0 && errors.length === 0 && !report.needsRecovery) toast.info(t("sessions.page.nothingToSync"));
 }

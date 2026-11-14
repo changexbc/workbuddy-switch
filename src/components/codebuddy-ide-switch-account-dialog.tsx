@@ -19,6 +19,7 @@ import type { SessionLinksMeta } from "@/components/session-link-shared";
 import { VscodeSessionSyncSection } from "@/components/vscode-session-sync-section";
 import * as api from "@/lib/api";
 import { displayName } from "@/lib/account-display";
+import { useT, type Translate } from "@/lib/i18n";
 import type {
   AccountMeta,
   CodeBuddyCnIdeStatus,
@@ -69,6 +70,7 @@ function tabCount(count: number) {
  * - 复制默认沿用会话 id，仅目标已有同 id 时改用新 id（后端决定，前端只提交引用）。
  */
 export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, variant, ideStatus, onDone }: Props) {
+  const t = useT();
   /** 国际版档位：会话列表 / 关联预览 / 切换接口都走 `codebuddy-ide` 通道。 */
   const intl = variantUsesIntlCodebuddyIde(variant);
   const [sessions, setSessions] = useState<VscodeSession[]>([]);
@@ -188,52 +190,72 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
       const syncedItems = syncReport?.synced ?? [];
       const skippedItems = syncReport?.skipped ?? [];
       const syncErrors = syncReport?.errors ?? [];
-      const restartHint = res.message || "已重启 CodeBuddy IDE";
-      const copiedHint = copied > 0 ? `已复制 ${copied} 个会话` : null;
-      const syncedHint = syncedItems.length > 0 ? `已同步 ${syncedItems.length} 个会话` : null;
+      const restartHint = res.message || t("dialogs.codebuddyIde.restarted");
+      const copiedHint = copied > 0 ? t("dialogs.common.copiedCount", { count: copied }) : null;
+      const syncedHint =
+        syncedItems.length > 0 ? t("dialogs.common.syncedCount", { count: syncedItems.length }) : null;
       const requestedSync = syncSelections.length > 0;
 
       if (errors.length > 0) {
-        toast.warning(`已切换至「${nickname}」，但部分会话未复制`, {
+        toast.warning(t("dialogs.common.switchedPartialCopy", { name: nickname }), {
           description: [
-            `已复制 ${copied} 个会话`,
-            `${errors.length} 个失败：${errors.map((e) => e.error).join("；")}`,
+            t("dialogs.common.copiedCount", { count: copied }),
+            t("dialogs.common.failedCount", {
+              count: errors.length,
+              errors: errors.map((e) => e.error).join(t("dialogs.common.separator")),
+            }),
             restartHint,
-          ].join("；"),
+          ].join(t("dialogs.common.separator")),
         });
       } else {
-        toast.success(`已切换至「${nickname}」`, {
-          description: [copiedHint, syncedHint, restartHint].filter(Boolean).join("；"),
+        toast.success(t("dialogs.common.switchedTo", { name: nickname }), {
+          description: [copiedHint, syncedHint, restartHint]
+            .filter(Boolean)
+            .join(t("dialogs.common.separator")),
         });
       }
       // 复制成功但登记失败：复制本身有效，必须提示「未建立关联」而不是当成完整成功。
       if (linkErrors.length > 0) {
-        toast.warning("部分会话已复制但未建立关联", {
+        toast.warning(t("dialogs.common.linkPartialFailed"), {
           description: [
-            ...linkErrors.map((item) => `${item.conversationId ?? "会话"}：${item.error}`),
-            "未建立关联的会话不会出现在「关联会话」列表里。",
-          ].join("；"),
+            ...linkErrors.map((item) =>
+              t("dialogs.common.itemError", {
+                label: item.conversationId ?? t("dialogs.common.sessionFallback"),
+                error: item.error,
+              }),
+            ),
+            t("dialogs.common.unlinkedNotListed"),
+          ].join(t("dialogs.common.separator")),
         });
       }
       // 同步结果：成功、跳过、失败都要能看到，不能只显示成功数。
       const groupLabel = (groupId: string) =>
         syncGroups.find((group) => group.groupId === groupId)?.title || groupId;
       const syncIssues = [
-        ...syncErrors.map(
-          (item) => `${item.groupId ? groupLabel(item.groupId) : "全部会话"}：${item.error}`,
+        ...syncErrors.map((item) =>
+          t("dialogs.common.itemError", {
+            label: item.groupId ? groupLabel(item.groupId) : t("dialogs.common.allSessions"),
+            error: item.error,
+          }),
         ),
         // 预览过期/前置条件变化一律跳过并给出原因，绝不显示成已同步。
-        ...skippedItems.map((item) => `${groupLabel(item.groupId)}：${item.message}`),
+        ...skippedItems.map((item) =>
+          t("dialogs.common.itemError", { label: groupLabel(item.groupId), error: item.message }),
+        ),
       ];
       if (syncIssues.length > 0) {
         if (syncErrors.length > 0) {
-          toast.error("部分关联会话没有同步（失败或已跳过）", { description: syncIssues.join("；") });
+          toast.error(t("dialogs.common.syncPartialFailedLinked"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         } else {
-          toast.warning("有关联会话没有同步（已跳过）", { description: syncIssues.join("；") });
+          toast.warning(t("dialogs.common.syncSkippedLinked"), {
+            description: syncIssues.join(t("dialogs.common.separator")),
+          });
         }
       } else if (requestedSync && !syncReport) {
-        toast.warning("关联会话未同步", {
-          description: "没有收到同步结果：当前版本可能不支持同步关联会话；账号已切换，但会话没有同步。",
+        toast.warning(t("dialogs.common.syncNotRunLinked"), {
+          description: t("dialogs.common.syncNotRunLinkedDescription"),
         });
       }
       onOpenChange(false);
@@ -255,48 +277,45 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
   const running = ideStatus?.running === true;
   const summaryMain =
     copyCount > 0 && syncCount > 0
-      ? `将复制 ${copyCount} 个、同步 ${syncCount} 个关联会话`
+      ? t("dialogs.common.summaryCopyAndSync", { copy: copyCount, sync: syncCount })
       : copyCount > 0
-        ? `将复制 ${copyCount} 个会话`
+        ? t("dialogs.common.summaryCopy", { count: copyCount })
         : syncCount > 0
-          ? `将同步 ${syncCount} 个关联会话`
-          : "本次仅切换账号";
+          ? t("dialogs.common.summarySync", { count: syncCount })
+          : t("dialogs.common.summarySwitchOnly");
   // 国际版不再有独立确认框，不勾选时由底部摘要承担「将重启 IDE」的说明。
   // 国内版文案保持原句，不在这里改。
   const summarySub =
     overwriteCount > 0
-      ? `其中 ${overwriteCount} 个会替换目标账号的完整内容`
+      ? t("dialogs.common.summaryOverwrite", { count: overwriteCount })
       : copyCount === 0 && syncCount === 0
         ? intl
           ? running
-            ? "未选择复制或同步会话，确认后将关闭并重启 IDE"
-            : "未选择复制或同步会话，确认后将打开 IDE"
-          : "未选择复制或同步会话"
+            ? t("dialogs.codebuddyIde.summaryRestart")
+            : t("dialogs.codebuddyIde.summaryOpen")
+          : t("dialogs.common.summaryNoneSelected")
         : copyCount === 0
-          ? "未选择复制会话"
+          ? t("dialogs.common.summaryNoCopy")
           : syncCount === 0
-            ? "未选择同步会话"
+            ? t("dialogs.common.summaryNoSync")
             : null;
   /** IDE 未登录（`loggedIn === false`）：按新登录写入，仅影响提示文案。 */
   const notLoggedIn = ideStatus?.loggedIn === false;
   /** 未登录时的追加说明（tooltip 第二段）。 */
-  const notLoggedInHint = notLoggedIn
-    ? "未检测到 CodeBuddy IDE 登录态，将按新登录写入；切换后打开 IDE 即登录为目标账号。"
-    : undefined;
-  const emptyHint = emptyStateHint(ideStatus, loadingSessions, sourceUid, dataRoot, hasCopyable);
+  const notLoggedInHint = notLoggedIn ? t("dialogs.codebuddyIde.notLoggedInHint") : undefined;
+  const emptyHint = emptyStateHint(ideStatus, loadingSessions, sourceUid, dataRoot, hasCopyable, t);
   /** 标题行状态图标：三态提示收进 tooltip，仅以图标色调区分正常/警告。 */
   const statusNotice = running
     ? {
         icon: <RefreshCw className="size-4" />,
-        title: "将自动关闭并重开 CodeBuddy IDE",
-        description:
-          "将先关闭 CodeBuddy IDE（未保存内容由 IDE 自身提示保护），写入凭证后自动重新打开。",
+        title: t("dialogs.codebuddyIde.restartTitle"),
+        description: t("dialogs.codebuddyIde.restartDescription"),
         warning: false,
       }
     : {
         icon: <CircleCheck className="size-4" />,
-        title: "CodeBuddy IDE 未运行，可直接切换",
-        description: "写入凭证后自动打开 CodeBuddy IDE，即为目标账号。",
+        title: t("dialogs.codebuddyIde.notRunningTitle"),
+        description: t("dialogs.codebuddyIde.notRunningDescription"),
         warning: false,
       };
 
@@ -339,7 +358,9 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
         <DialogHeader className="shrink-0">
           <div className="flex items-center gap-3">
             <DialogTitle className="min-w-0 flex-1">
-              切换到「{account ? displayName(account) : "该账号"}」
+              {t("dialogs.common.switchTitle", {
+                name: account ? displayName(account) : t("dialogs.common.targetAccount"),
+              })}
             </DialogTitle>
             {/* 提示收进图标 tooltip；mr-6 为右上角关闭按钮留空位。 */}
             <div className="mr-6 flex shrink-0 items-center gap-2">
@@ -366,9 +387,7 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
               </Tooltip>
             </div>
           </div>
-          <DialogDescription>
-            将把所选账号写入 CodeBuddy IDE；可选把当前账号的会话复制过去，并把关联会话的新内容同步过去。
-          </DialogDescription>
+          <DialogDescription>{t("dialogs.codebuddyIde.description")}</DialogDescription>
         </DialogHeader>
 
         {busy && (
@@ -376,13 +395,13 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
             <Loader2 className="size-8 animate-spin text-primary" />
             <p className="text-sm font-medium">
               {copyCount > 0
-                ? "正在关闭 CodeBuddy IDE 并复制会话…"
+                ? t("dialogs.codebuddyIde.busyCopying")
                 : syncCount > 0
-                  ? "正在关闭 CodeBuddy IDE 并同步会话…"
-                  : "正在关闭 CodeBuddy IDE 并写入凭证…"}
+                  ? t("dialogs.codebuddyIde.busySyncing")
+                  : t("dialogs.codebuddyIde.busyClosing")}
             </p>
             <p className="max-w-xs text-center text-xs text-muted-foreground">
-              若 IDE 弹出保存提示请先处理（最长等待 60 秒）
+              {t("dialogs.codebuddyIde.savePromptHint")}
             </p>
           </div>
         )}
@@ -396,11 +415,11 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
             >
               <TabsList className="h-auto w-full shrink-0 justify-start gap-5 rounded-none border-b border-border bg-transparent p-0">
                 <TabsTrigger value="links" className={TAB_TRIGGER_CLASS}>
-                  关联会话
+                  {t("dialogs.common.linkedSessions")}
                   {tabCount(linksMeta?.groupCount ?? 0)}
                 </TabsTrigger>
                 <TabsTrigger value="copy" className={TAB_TRIGGER_CLASS}>
-                  复制会话
+                  {t("dialogs.common.copySessions")}
                   {tabCount(copyCount)}
                 </TabsTrigger>
               </TabsList>
@@ -428,7 +447,7 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
                       ? api.codebuddyIntlIdeSessionLinksPreview
                       : api.codebuddyIdeSessionLinksPreview
                   }
-                  loggedOutHint="未检测到 CodeBuddy IDE 当前登录账号，请先在 CodeBuddy IDE 中登录后再切换。"
+                  loggedOutHint={t("dialogs.codebuddyIde.loggedOutHint")}
                   onChange={(state) => {
                     setSyncSelections(state.selections);
                     setSyncGroups(state.groups);
@@ -455,14 +474,14 @@ export function CodebuddyIdeSwitchAccountDialog({ open, onOpenChange, account, v
           </div>
           <div className="flex shrink-0 gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              取消
+              {t("common.cancel")}
             </Button>
             {/* 勾了复制却没选会话时仍然拦住；只要还有同步项可执行就允许确认。 */}
             <Button
               onClick={doSwitch}
               disabled={busy || (copyEnabled && copyCount === 0 && syncCount === 0)}
             >
-              {busy ? "切换中…" : "确认切换"}
+              {busy ? t("dialogs.common.switching") : t("dialogs.common.confirmSwitch")}
             </Button>
           </div>
         </DialogFooter>
@@ -478,11 +497,12 @@ function emptyStateHint(
   sourceUid: string | null,
   dataRoot: string | null | undefined,
   hasCopyable: boolean,
+  t: Translate,
 ): string {
-  if (loading) return "正在加载会话…";
-  if (status && !status.installed) return "未检测到 CodeBuddy IDE，请先安装并登录";
-  if (dataRoot === null) return "未找到 CodeBuddy IDE 数据目录，请先打开 IDE 并登录一次";
-  if (!sourceUid) return "未检测到 CodeBuddy IDE 当前登录账号，请先在 IDE 中登录";
-  if (!hasCopyable) return "当前账号暂无可复制的会话（无含正文的历史）";
-  return "将当前账号勾选的会话复制给目标账号（沿用会话 id，目标已有同 id 时自动改用新 id）";
+  if (loading) return t("dialogs.common.loadingSessions");
+  if (status && !status.installed) return t("dialogs.codebuddyIde.emptyNotInstalled");
+  if (dataRoot === null) return t("dialogs.codebuddyIde.emptyNoDataRoot");
+  if (!sourceUid) return t("dialogs.codebuddyIde.emptyNoLogin");
+  if (!hasCopyable) return t("dialogs.common.noCopyableSessions");
+  return t("dialogs.codebuddyIde.copyHint");
 }

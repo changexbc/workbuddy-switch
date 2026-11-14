@@ -46,6 +46,7 @@ import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import { VscodeSwitchAccountDialog } from "@/components/vscode-switch-account-dialog";
 import * as api from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
 import {
   accountVariant,
@@ -164,6 +165,7 @@ async function fetchTravelMap(
 }
 
 export default function AccountsPage() {
+  const t = useT();
   const {
     accounts,
     variant,
@@ -244,7 +246,9 @@ export default function AccountsPage() {
   /** 旅行 chip 与旅行状态轮询只在自动旅行开启后生效（配置未读到 = 未开启）。 */
   const autoTravelEnabled = travelAvailable && autoTravelConfig?.enabled === true;
   /** 刷新按钮文案：国际版没有签到接口，只刷新积分。 */
-  const refreshCreditsLabel = checkinAvailable ? "刷新全部账号积分并签到（仅在签到时间段内签到；忽略已关闭自动签到的账号）" : "刷新全部账号积分";
+  const refreshCreditsLabel = checkinAvailable
+    ? t("accounts.list.refreshCreditsAndCheckin")
+    : t("accounts.list.refreshCredits");
   /** 关闭自动签到的账号 id（配置未读到/读取失败 = 空名单）。 */
   const excludedCheckinIds = useMemo(
     () => new Set(autoCheckinConfig?.excluded_account_ids ?? []),
@@ -569,8 +573,8 @@ export default function AccountsPage() {
 
   /** 导出完成提示（含安全提醒）。 */
   function onExported(count: number) {
-    const text = `已导出 ${count} 个账号。文件含登录 token，等同密码，请勿上传网盘或发送给他人。`;
-    toast.success("导出成功", { description: text });
+    const text = t("accounts.toast.exportedDescription", { count });
+    toast.success(t("accounts.toast.exported"), { description: text });
   }
 
   /** 导入完成提示：计数 + token 可能过期提醒（含加密凭据能力限制），并刷新列表。 */
@@ -581,13 +585,21 @@ export default function AccountsPage() {
     encrypted: number;
   }) {
     void fetchAll();
-    const overwriteText = result.overwritten > 0 ? `（覆盖 ${result.overwritten} 个）` : "";
+    const overwriteText =
+      result.overwritten > 0 ? t("accounts.toast.importedOverwritten", { count: result.overwritten }) : "";
     const encryptedText =
       result.encrypted > 0
-        ? `其中 ${result.encrypted} 个为加密凭据，仅可用于切换，签到/积分不可用。`
+        ? t("accounts.toast.importedEncrypted", { count: result.encrypted })
         : "";
-    const text = `已导入 ${result.imported} 个${overwriteText}，跳过 ${result.skipped} 个。${encryptedText}token 可能已过期，切换后可能需要重新登录。`;
-    toast.success("导入成功", { description: text });
+    const text = [
+      t("accounts.toast.importedDescription", { imported: result.imported, skipped: result.skipped }),
+      overwriteText,
+      encryptedText,
+      t("accounts.toast.importedTokenWarning"),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    toast.success(t("accounts.toast.imported"), { description: text });
   }
 
   async function onDelete(a: AccountMeta) {
@@ -601,9 +613,9 @@ export default function AccountsPage() {
     setDeleteTarget(null);
     try {
       await deleteAccount(a.id);
-      toast.success("账号已删除");
+      toast.success(t("accounts.toast.deleted"));
     } catch (e) {
-      toast.error("删除失败", { description: api.asError(e) });
+      toast.error(t("accounts.toast.deleteFailed"), { description: api.asError(e) });
     }
   }
 
@@ -612,11 +624,13 @@ export default function AccountsPage() {
       const res = await api.checkin(a.id);
       const label =
         res.result === "success"
-          ? "签到成功"
+          ? t("accounts.toast.checkinSuccess")
           : res.result === "already"
-            ? "今天已签到"
-            : "签到失败";
-      const description = `${displayName(a)}${res.error ? `：${res.error}` : ""}`;
+            ? t("accounts.toast.checkinAlready")
+            : t("accounts.toast.checkinFailed");
+      const description = res.error
+        ? t("accounts.toast.accountError", { account: displayName(a), error: res.error })
+        : displayName(a);
       if (res.result === "error") toast.error(label, { description });
       else toast.success(label, { description });
       // 手动签到已完成状态核验，直接使用回执，避免为已关闭账号再触发展示查询。
@@ -627,7 +641,7 @@ export default function AccountsPage() {
       // 签到成功/已签到会带来积分变动，force 刷新该账号积分
       if (res.result !== "error") void refreshCredits([a.id]);
     } catch (e) {
-      toast.error("签到失败", { description: api.asError(e) });
+      toast.error(t("accounts.toast.checkinFailed"), { description: api.asError(e) });
     }
   }
 
@@ -636,13 +650,17 @@ export default function AccountsPage() {
       const res = await api.refreshAccountToken(a.id);
       const label = displayName(a);
       if (res.needsRelogin) {
-        toast.error("Token 刷新失败", { description: `${label}：需重新登录${res.needsReloginReason ? `（${res.needsReloginReason}）` : ""}` });
+        toast.error(t("accounts.toast.tokenRefreshFailed"), {
+          description: res.needsReloginReason
+            ? t("accounts.toast.needsReloginWithReason", { account: label, reason: res.needsReloginReason })
+            : t("accounts.toast.needsRelogin", { account: label }),
+        });
       } else {
-        toast.success("Token 已刷新", { description: label });
+        toast.success(t("accounts.toast.tokenRefreshed"), { description: label });
       }
       void fetchAll();
     } catch (e) {
-      toast.error("Token 刷新失败", { description: api.asError(e) });
+      toast.error(t("accounts.toast.tokenRefreshFailed"), { description: api.asError(e) });
     }
   }
 
@@ -653,7 +671,7 @@ export default function AccountsPage() {
     const ids = visibleAccounts.map((account) => account.id);
     let summary = "";
     let notify = toast.success;
-    let title = "积分到期情况已刷新";
+    let title = t("accounts.toast.creditsRefreshed");
     try {
       if (checkinAvailable) {
         try {
@@ -666,15 +684,15 @@ export default function AccountsPage() {
           const skipped = entries.filter((e) => e.result === "skipped" && e.reason === "auto_checkin_disabled").length;
           const outsideWindow = entries.filter((e) => e.result === "skipped" && e.reason === "outside_checkin_window").length;
           const parts: string[] = [];
-          if (success > 0) parts.push(`${success} 个签到成功`);
-          if (already > 0) parts.push(`${already} 个已签到`);
-          if (inactive > 0) parts.push(`${inactive} 个未开放签到`);
-          if (failed > 0) parts.push(`${failed} 个失败`);
-          if (skipped > 0) parts.push(`已忽略 ${skipped} 个关闭自动签到的账号`);
-          if (outsideWindow > 0) parts.push(`${outsideWindow} 个未到签到时间段`);
+          if (success > 0) parts.push(t("accounts.toast.checkinPartSuccess", { count: success }));
+          if (already > 0) parts.push(t("accounts.toast.checkinPartAlready", { count: already }));
+          if (inactive > 0) parts.push(t("accounts.toast.checkinPartInactive", { count: inactive }));
+          if (failed > 0) parts.push(t("accounts.toast.checkinPartFailed", { count: failed }));
+          if (skipped > 0) parts.push(t("accounts.toast.checkinPartSkipped", { count: skipped }));
+          if (outsideWindow > 0) parts.push(t("accounts.toast.checkinPartOutsideWindow", { count: outsideWindow }));
           summary = res.status === "skipped" && res.reason === "already_running"
-            ? "签到任务正在进行，本次仅刷新积分"
-            : parts.length > 0 ? parts.join("，") : "无账号需要签到";
+            ? t("accounts.toast.checkinRunning")
+            : parts.length > 0 ? parts.join(", ") : t("accounts.toast.checkinNone");
           const allFailed = entries.length > 0 && failed === entries.length;
           const allSkippedOrInactive =
             res.status === "skipped" ||
@@ -683,7 +701,7 @@ export default function AccountsPage() {
           if (allFailed) {
             // 全部失败：没有成功、已签、未开放或忽略的账号。
             notify = toast.error;
-            title = "积分已刷新，签到出现错误";
+            title = t("accounts.toast.creditsRefreshedCheckinError");
           } else if (allSkippedOrInactive) {
             // 全部被跳过或官方未开放签到活动：既不算成功也不算失败，不呈现为绿色成功。
             notify = toast.info;
@@ -695,7 +713,7 @@ export default function AccountsPage() {
           }
         } catch (e) {
           notify = toast.error;
-          title = "积分已刷新，签到出现错误";
+          title = t("accounts.toast.creditsRefreshedCheckinError");
           summary = api.asError(e);
         }
       }
@@ -717,19 +735,22 @@ export default function AccountsPage() {
     if (!account || codebuddyCliSwitchingId !== null) return;
     setCliSwitchTarget(null);
     setCodebuddyCliSwitchingId(account.id);
-    const toastId = toast.loading("正在切换 CodeBuddy CLI…", {
-      description: `正在将默认账号设为 ${displayName(account)}`,
+    const toastId = toast.loading(t("accounts.toast.cliSwitching"), {
+      description: t("accounts.toast.cliSwitchingDescription", { account: displayName(account) }),
     });
     try {
       // 后端一律先关闭正在运行的 CLI 再写状态（`closeRunningCli` 入参已废弃）。
       const result = await api.switchCodebuddyCliAccount(account.id);
       await refreshCodebuddyCliStatus();
-      toast.success("CodeBuddy CLI 默认账号已更新", {
+      toast.success(t("accounts.toast.cliSwitchSuccess"), {
         id: toastId,
-        description: `${displayName(account)}：${result.message || "配置已更新"}`,
+        description: t("accounts.toast.cliSwitchDescription", {
+          account: displayName(account),
+          message: result.message || t("accounts.toast.configUpdated"),
+        }),
       });
     } catch (error) {
-      toast.error("CodeBuddy CLI 切换失败", {
+      toast.error(t("accounts.toast.cliSwitchFailed"), {
         id: toastId,
         description: api.asError(error),
       });
@@ -755,10 +776,10 @@ export default function AccountsPage() {
     setInstallingCodebuddyCli(true);
     try {
       const result = await api.installCodebuddyCliHelper();
-      toast.success("CodeBuddy CLI 接入已更新", { description: result.message });
+      toast.success(t("accounts.toast.cliInstallSuccess"), { description: result.message });
       await refreshCodebuddyCliStatus();
     } catch (error) {
-      toast.error("CodeBuddy CLI 接入失败", { description: api.asError(error) });
+      toast.error(t("accounts.toast.cliInstallFailed"), { description: api.asError(error) });
     } finally {
       setInstallingCodebuddyCli(false);
     }
@@ -793,40 +814,40 @@ export default function AccountsPage() {
       : undefined;
   const cliCurrentAccountId = codebuddyCli?.activeAccountId;
   const cliSwitchAccountLabel = cliSwitchTarget ? displayName(cliSwitchTarget) : "";
-  const workbuddyCurrentName = current ? displayName(current) : "未登录";
+  const workbuddyCurrentName = current ? displayName(current) : t("accounts.status.signedOut");
   const codebuddyCurrentName = codebuddyCli?.configured
-    ? codebuddyCli.activeAccountName || "未检测到"
-    : "尚未接入";
+    ? codebuddyCli.activeAccountName || t("accounts.status.notFound")
+    : t("accounts.status.notConnected");
   const cnIdeCurrentAccountId = codebuddyCnIde?.activeAccountId;
   const cnIdeCurrentName = codebuddyCnIde?.installed
-    ? codebuddyCnIde.activeAccountName || "未检测到"
-    : "未安装";
+    ? codebuddyCnIde.activeAccountName || t("accounts.status.notFound")
+    : t("accounts.status.notInstalled");
   const vscodeExtCurrentAccountId = vscodeExt?.activeAccountId;
   const vscodeExtCurrentName = vscodeExt?.installed
-    ? vscodeExt.activeAccountName || "未检测到"
-    : "未接入";
+    ? vscodeExt.activeAccountName || t("accounts.status.notFound")
+    : t("accounts.status.notConnected");
   const jetbrainsCurrentAccountId = jetbrains?.activeAccountId;
   const jetbrainsCurrentName = jetbrains?.installed
-    ? jetbrains.activeAccountName || "未检测到"
-    : "未接入";
+    ? jetbrains.activeAccountName || t("accounts.status.notFound")
+    : t("accounts.status.notConnected");
   const codebuddyUsesSettingsEnv = codebuddyCli?.authMode === "settings-env";
   return (
     <div className="mx-auto w-full max-w-[1180px] px-6 py-8 sm:px-8 sm:py-9">
       <header className="mb-6">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-[28px] font-semibold tracking-tight">账号管理</h1>
+            <h1 className="text-[28px] font-semibold tracking-tight">{t("accounts.page.title")}</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              统一管理 WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号、积分和签到状态。
+              {t("accounts.page.description")}
             </p>
             <Tabs
               className="mt-4 gap-0"
               value={variant}
               onValueChange={(value) => setVariant(normalizeVariant(value))}
             >
-              <TabsList aria-label="WorkBuddy 档位">
-                <TabsTrigger value="cn">国内版</TabsTrigger>
-                <TabsTrigger value="ai">国际版</TabsTrigger>
+              <TabsList aria-label={t("accounts.page.variantTabsLabel")}>
+                <TabsTrigger value="cn">{variantLabel("cn")}</TabsTrigger>
+                <TabsTrigger value="ai">{variantLabel("ai")}</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
@@ -844,7 +865,11 @@ export default function AccountsPage() {
                   {variant === "ai" ? <WorkBuddyAiMark size={28} /> : <WorkBuddyMark size={28} />}
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  {appName}：{status?.running ? "运行中" : "未运行"} · 当前账号：{workbuddyCurrentName}
+                  {t("accounts.status.tooltip", {
+                    product: appName,
+                    state: status?.running ? t("accounts.status.running") : t("accounts.status.notRunning"),
+                    account: workbuddyCurrentName,
+                  })}
                 </span>
               </span>
             )}
@@ -864,7 +889,15 @@ export default function AccountsPage() {
                   )}
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  {variantCodebuddyIdeName(variant)}：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
+                  {t("accounts.status.tooltip", {
+                    product: variantCodebuddyIdeName(variant),
+                    state: codebuddyCnIde?.installed
+                      ? codebuddyCnIde.running
+                        ? t("accounts.status.running")
+                        : t("accounts.status.connected")
+                      : t("accounts.status.notConnected"),
+                    account: cnIdeCurrentName,
+                  })}
                 </span>
               </span>
             )}
@@ -880,7 +913,17 @@ export default function AccountsPage() {
                   <VscodeExtMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  VS Code CodeBuddy 插件：{!vscodeExt?.installed ? "未检测到 VS Code" : !vscodeExt.extensionInstalled ? "未安装插件" : vscodeExt.running ? "运行中" : "已接入"} · 当前账号：{vscodeExtCurrentName}
+                  {t("accounts.status.tooltip", {
+                    product: t("accounts.status.vscodeProduct"),
+                    state: !vscodeExt?.installed
+                      ? t("accounts.status.vscodeMissing")
+                      : !vscodeExt.extensionInstalled
+                        ? t("accounts.status.extensionMissing")
+                        : vscodeExt.running
+                          ? t("accounts.status.running")
+                          : t("accounts.status.connected"),
+                    account: vscodeExtCurrentName,
+                  })}
                 </span>
               </span>
             )}
@@ -896,7 +939,17 @@ export default function AccountsPage() {
                   <JetbrainsMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  JetBrains IDE 插件：{!jetbrains?.installed ? "未检测到 JetBrains IDE" : !jetbrains.pluginInstalled ? "未安装插件" : jetbrains.running ? "运行中" : "已接入"} · 当前账号：{jetbrainsCurrentName}
+                  {t("accounts.status.tooltip", {
+                    product: t("accounts.status.jetbrainsProduct"),
+                    state: !jetbrains?.installed
+                      ? t("accounts.status.jetbrainsMissing")
+                      : !jetbrains.pluginInstalled
+                        ? t("accounts.status.extensionMissing")
+                        : jetbrains.running
+                          ? t("accounts.status.running")
+                          : t("accounts.status.connected"),
+                    account: jetbrainsCurrentName,
+                  })}
                 </span>
               </span>
             )}
@@ -912,7 +965,15 @@ export default function AccountsPage() {
                   <CodeBuddyMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  CodeBuddy CLI：{codebuddyCli?.migrationRequired ? "需升级" : codebuddyCli?.configured ? "已接入" : "未接入"} · 当前账号：{codebuddyCurrentName}
+                  {t("accounts.status.tooltip", {
+                    product: "CodeBuddy CLI",
+                    state: codebuddyCli?.migrationRequired
+                      ? t("accounts.status.upgradeRequired")
+                      : codebuddyCli?.configured
+                        ? t("accounts.status.connected")
+                        : t("accounts.status.notConnected"),
+                    account: codebuddyCurrentName,
+                  })}
                 </span>
               </span>
             )}
@@ -927,11 +988,11 @@ export default function AccountsPage() {
         </div>
         <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
           <div className="min-w-[190px] flex-1">
-            <h2 className="text-sm font-semibold text-foreground">添加与迁移账号</h2>
+            <h2 className="text-sm font-semibold text-foreground">{t("accounts.add.title")}</h2>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
               {variant === "ai"
-                ? "快速接入国际版账号，或从已有环境恢复"
-                : "快速接入新账号，或从已有环境恢复"}
+                ? t("accounts.add.descriptionInternational")
+                : t("accounts.add.description")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
@@ -941,19 +1002,19 @@ export default function AccountsPage() {
                 onClick={() => setOauthOpen(true)}
               >
                 {variant === "ai" ? <ExternalLink /> : <QrCode />}
-                {variant === "ai" ? "OAuth 登录" : "OAuth 扫码添加"}
+                {variant === "ai" ? t("accounts.add.oauthLogin") : t("accounts.add.oauthQr")}
               </Button>
             </DemoAction>
           </div>
           <div className="flex items-center gap-1">
             <DemoAction>
-              <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setImportOpen(true)} title="从备份文件导入账号">
-                <FileUp />导入备份
+              <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setImportOpen(true)} title={t("accounts.add.importTitle")}>
+                <FileUp />{t("accounts.add.import")}
               </Button>
             </DemoAction>
             <DemoAction>
-              <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setExportOpen(true)} disabled={visibleAccounts.length === 0} title="导出账号备份">
-                <FileDown />导出
+              <Button variant="ghost" size="sm" className="h-9 px-2.5" onClick={() => setExportOpen(true)} disabled={visibleAccounts.length === 0} title={t("accounts.add.exportTitle")}>
+                <FileDown />{t("accounts.add.export")}
               </Button>
             </DemoAction>
           </div>
@@ -962,7 +1023,7 @@ export default function AccountsPage() {
 
       {error && (
         <Alert variant="destructive" className="mb-4">
-          <AlertTitle>加载失败</AlertTitle>
+          <AlertTitle>{t("accounts.page.loadFailed")}</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
@@ -975,24 +1036,24 @@ export default function AccountsPage() {
           codebuddyCli.syncInProgress) && (
         <Alert className="mb-4">
           <Terminal />
-          <AlertTitle>CodeBuddy CLI 接入</AlertTitle>
+          <AlertTitle>{t("accounts.cli.title")}</AlertTitle>
           <AlertDescription>
             <p>
               {codebuddyUsesSettingsEnv
                 ? codebuddyCli.environmentOverride
-                  ? "检测到进程环境变量 CODEBUDDY_AUTH_TOKEN。它会覆盖 settings.json；请先从 Windows 用户或系统环境变量中删除它，再重启本应用与 CodeBuddy CLI。"
+                  ? t("accounts.cli.envOverride")
                   : codebuddyCli.syncPending
-                    ? "Windows CLI 认证配置与当前账号 Token 已脱节。点击更新认证后写入最新 Token；当前运行会话不会切换，请由 ACP 重新加载会话或重启 CLI 后生效。"
+                    ? t("accounts.cli.syncPending")
                     : codebuddyCli.syncInProgress
-                      ? "保活刷新已更新账号 Token，正在同步到 CodeBuddy CLI 认证配置。稍候会自动完成，无需操作。"
+                      ? t("accounts.cli.syncInProgress")
                       : codebuddyCli.migrationRequired
-                        ? "检测到旧版 Windows helper 配置。接入后会改用 settings.json 的 env.CODEBUDDY_AUTH_TOKEN，不再执行 helper。"
-                        : "Windows 使用 CodeBuddy settings.json 中的认证 Token。保活刷新只更新后续启动使用的 Token；切换账号会先关闭正在运行的 CodeBuddy CLI，重新打开 CLI 后即用新账号。"
+                        ? t("accounts.cli.migrationSettingsEnv")
+                        : t("accounts.cli.settingsEnvInfo")
                 : codebuddyCli.migrationRequired
-                  ? "检测到旧版 helper，请先升级；升级前不会将 CLI 切换显示为已验证。"
+                  ? t("accounts.cli.migrationHelper")
                   : codebuddyCli.configured
-                    ? "当前 helper 仍按旧索引读取账号；升级后将按账号 ID 独立切换，账号增删也不会错位。"
-                    : "WorkBuddy 账号与积分功能可正常使用；如需从这里切换 CodeBuddy CLI 账号，点击下方按钮一键接入。"}
+                    ? t("accounts.cli.indexedHelper")
+                    : t("accounts.cli.notConfigured")}
             </p>
             {/* 同步进行中是正常的中间态：给状态说明但不逼用户点按钮，
                 否则用户会在刷新未完成时重复触发写入。 */}
@@ -1007,8 +1068,8 @@ export default function AccountsPage() {
                 >
                   {installingCodebuddyCli && <Loader2 className="animate-spin" />}
                   {codebuddyUsesSettingsEnv
-                    ? codebuddyCli.configured ? "更新 CLI 认证" : "接入 CLI"
-                    : codebuddyCli.configured || codebuddyCli.migrationRequired ? "升级 CLI helper" : "接入 CLI"}
+                    ? codebuddyCli.configured ? t("accounts.cli.updateAuth") : t("accounts.cli.connect")
+                    : codebuddyCli.configured || codebuddyCli.migrationRequired ? t("accounts.cli.upgradeHelper") : t("accounts.cli.connect")}
                 </Button>
               </DemoAction>
             )}
@@ -1018,11 +1079,11 @@ export default function AccountsPage() {
       <section className="mt-7 min-w-0" aria-labelledby="accounts-list-title">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <h2 id="accounts-list-title" className="text-base font-semibold tracking-tight">账号</h2>
+            <h2 id="accounts-list-title" className="text-base font-semibold tracking-tight">{t("accounts.list.title")}</h2>
             <Badge
               variant="secondary"
               className="h-6 min-w-6 rounded-full border-0 px-1.5 text-[11px] tabular-nums text-muted-foreground shadow-none"
-              aria-label={`${visibleAccounts.length} 个${variantLabel(variant)}账号`}
+              aria-label={t("accounts.list.countLabel", { count: visibleAccounts.length, variant: variantLabel(variant) })}
             >
               {visibleAccounts.length}
             </Badge>
@@ -1036,12 +1097,12 @@ export default function AccountsPage() {
                     size="icon"
                     className={cn("size-9 rounded-lg", compact && "bg-accent text-accent-foreground")}
                     onClick={toggleCompact}
-                    aria-label={compact ? "切换为宽松模式" : "切换为紧凑模式"}
+                    aria-label={compact ? t("accounts.list.comfortable") : t("accounts.list.compact")}
                   >
                     {compact ? <Rows3 /> : <Columns3 />}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="top">{compact ? "切换为宽松模式" : "切换为紧凑模式"}</TooltipContent>
+                <TooltipContent side="top">{compact ? t("accounts.list.comfortable") : t("accounts.list.compact")}</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1060,7 +1121,7 @@ export default function AccountsPage() {
                     </DemoAction>
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="top">{api.isDemoMode() ? "演示模式下不可操作" : refreshCreditsLabel}</TooltipContent>
+                <TooltipContent side="top">{api.isDemoMode() ? t("accounts.list.demoDisabled") : refreshCreditsLabel}</TooltipContent>
               </Tooltip>
             </div>
           </TooltipProvider>
@@ -1068,20 +1129,22 @@ export default function AccountsPage() {
         {loading && visibleAccounts.length === 0 ? (
           <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
             <Loader2 className="animate-spin" />
-            加载账号…
+            {t("accounts.list.loading")}
           </div>
         ) : visibleAccounts.length === 0 ? (
           <div className="rounded-xl border border-dashed px-4 py-16 text-center text-sm text-muted-foreground">
             {variant === "ai" ? (
               <>
-                <p>暂无国际版账号。</p>
+                <p>{t("accounts.empty.internationalTitle")}</p>
                 <p className="mt-2 text-xs leading-5">
-                  点击上方「OAuth 登录」添加账号；本机已登录的账号也请一并添加，以便随时切回。
-                  切换前请确认本机已安装 {appName}（客户端下载域名 {variantDownloadDomain(variant)}）。
+                  {t("accounts.empty.internationalHint", {
+                    app: appName,
+                    domain: variantDownloadDomain(variant),
+                  })}
                 </p>
               </>
             ) : (
-              "暂无账号。点击上方「OAuth 扫码添加」接入账号；本机已登录的账号也请一并添加，以便随时切回。"
+              t("accounts.empty.domestic")
             )}
           </div>
         ) : (
@@ -1212,35 +1275,38 @@ export default function AccountsPage() {
           <DialogHeader>
             <DialogTitle>
               {codebuddyUsesSettingsEnv
-                ? "更新 CodeBuddy CLI 认证"
+                ? t("accounts.dialog.installUpdateAuthTitle")
                 : codebuddyCli?.configured || codebuddyCli?.migrationRequired
-                  ? "升级 CodeBuddy CLI helper"
-                  : "接入 CodeBuddy CLI"}
+                  ? t("accounts.dialog.installUpgradeHelperTitle")
+                  : t("accounts.dialog.installConnectTitle")}
             </DialogTitle>
             <DialogDescription>
               {codebuddyUsesSettingsEnv ? (
                 <>
-                  将把当前账号的认证 Token 写入
+                  {t("accounts.dialog.settingsEnvLead")}
                   <code className="mx-1 rounded bg-muted px-1">~/.codebuddy/settings.json</code>
-                  的 <code className="mx-1 rounded bg-muted px-1">env.CODEBUDDY_AUTH_TOKEN</code>。
-                  其他配置会保留；更新只影响后续加载的会话，当前运行会话不会切换。是否继续？
+                  {t("accounts.dialog.settingsEnvMiddle")}
+                  <code className="mx-1 rounded bg-muted px-1">env.CODEBUDDY_AUTH_TOKEN</code>
+                  {t("accounts.dialog.settingsEnvTail")}
                 </>
               ) : (
                 <>
-                  {codebuddyCli?.configured || codebuddyCli?.migrationRequired ? "升级" : "接入"}会自动写入
+                  {codebuddyCli?.configured || codebuddyCli?.migrationRequired
+                    ? t("accounts.dialog.helperLeadUpgrade")
+                    : t("accounts.dialog.helperLeadConnect")}
                   <code className="mx-1 rounded bg-muted px-1">~/.codebuddy-rotate/helper.cjs</code>
-                  并更新
+                  {t("accounts.dialog.helperMiddle")}
                   <code className="mx-1 rounded bg-muted px-1">~/.codebuddy/settings.json</code>
-                  的 apiKeyHelper 配置，是否继续？
+                  {t("accounts.dialog.helperTail")}
                 </>
               )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setInstallConfirmOpen(false)}>
-              取消
+              {t("common.cancel")}
             </Button>
-            <Button onClick={() => void confirmInstallCodebuddyCli()}>继续</Button>
+            <Button onClick={() => void confirmInstallCodebuddyCli()}>{t("accounts.dialog.continue")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1249,18 +1315,17 @@ export default function AccountsPage() {
       <Dialog open={cliSwitchTarget !== null} onOpenChange={(open) => !open && setCliSwitchTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>切换 CodeBuddy CLI</DialogTitle>
+            <DialogTitle>{t("accounts.dialog.cliSwitchTitle")}</DialogTitle>
             <DialogDescription>
-              将把 CodeBuddy CLI 默认账号设为「{cliSwitchAccountLabel}」。
-              确认后会关闭正在运行的 CodeBuddy CLI 会话，当前会话会中断；重新打开 CLI 后新账号才会生效。
+              {t("accounts.dialog.cliSwitchDescription", { account: cliSwitchAccountLabel })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCliSwitchTarget(null)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button onClick={() => void confirmSwitchCodebuddyCli()}>
-              关闭 CLI 并切换
+              {t("accounts.dialog.cliSwitchConfirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1270,18 +1335,19 @@ export default function AccountsPage() {
       <Dialog open={deleteTarget !== null} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>删除账号</DialogTitle>
+            <DialogTitle>{t("accounts.card.deleteAccount")}</DialogTitle>
             <DialogDescription>
-              确定删除账号「{deleteTarget ? displayName(deleteTarget) : ""}」？
-              此操作不可撤销。
+              {t("accounts.dialog.deleteDescription", {
+                account: deleteTarget ? displayName(deleteTarget) : "",
+              })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button variant="destructive" onClick={() => void confirmDelete()}>
-              删除
+              {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

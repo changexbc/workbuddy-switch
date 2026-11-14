@@ -15,6 +15,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyMark } from "@/components/product-marks";
 import { useT, type Translate } from "@/lib/i18n";
+import { intlLocale } from "@/lib/i18n/format";
 import type { ToolId } from "@/lib/supported-tools";
 import { cn } from "@/lib/utils";
 import { accountIdentity, displayName } from "@/lib/account-display";
@@ -25,7 +26,7 @@ import type { AccountMeta, CreditExpiry, CreditResource, RateLimitEntry, TravelS
 
 function formatCredits(value: number): string {
   if (!Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(intlLocale(), { maximumFractionDigits: 2 }).format(value);
 }
 
 /** 积分包到期时刻（精确到分）。行内不再带「到期」后缀：区块标题已表达，带后缀会把名称列挤到截断。 */
@@ -42,7 +43,7 @@ function formatFullDateTime(ts: number | null): string {
   if (!ts) return "—";
   const date = new Date(ts);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("zh-CN", {
+  return date.toLocaleString(intlLocale(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -796,14 +797,14 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
                   const resource = visibleResources[index];
                   // 一条积分都没有时，第一槽位显示空态提示，第二槽位仍是纯占位（不再重复"暂无其他积分包"）
                   if (!resource && index === 0 && visibleResources.length === 0) {
-                    return <div key="credit-empty" className="py-1 text-[11px] text-muted-foreground">暂无可用积分</div>;
+                    return <div key="credit-empty" className="py-1 text-[11px] text-muted-foreground">{t("accounts.credits.empty")}</div>;
                   }
                   return (
                     <CreditResourceRow
                       key={resource ? `${resource.packageCode ?? "resource"}-${resource.expireAt ?? "none"}-${index}` : `credit-slot-${index}`}
                       resource={resource}
                       compact={compact}
-                      placeholderLabel={visibleResources.length > 0 ? "暂无其他积分包" : undefined}
+                      placeholderLabel={visibleResources.length > 0 ? t("accounts.credits.noOtherPackages") : undefined}
                     />
                   );
                 })
@@ -817,41 +818,41 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
         <footer className="flex flex-wrap items-center gap-2.5 border-t px-5 py-2.5">
           {toolEnabled("workbuddy") && (workbuddyActive ? <ProductCurrentState product="workbuddy" compact /> : demoModeEnabled ? (
             <DemoAction>
-              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="设为 WorkBuddy 当前账号">
-                <WorkBuddyMark size={18} /><span>设为当前</span>
+              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label={t("accounts.card.setWorkbuddyCurrent")}>
+                <WorkBuddyMark size={18} /><span>{t("accounts.card.setCurrent")}</span>
               </Button>
             </DemoAction>
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !onSwitch} onClick={() => onSwitch?.(account)} aria-label="设为 WorkBuddy 当前账号">
-                  <WorkBuddyMark size={18} /><span>设为当前</span>
+                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !onSwitch} onClick={() => onSwitch?.(account)} aria-label={t("accounts.card.setWorkbuddyCurrent")}>
+                  <WorkBuddyMark size={18} /><span>{t("accounts.card.setCurrent")}</span>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">设为 WorkBuddy 当前账号（会重启 WorkBuddy）</TooltipContent>
+              <TooltipContent side="top">{t("accounts.card.setWorkbuddyCurrentHint")}</TooltipContent>
             </Tooltip>
           ))}
           {toolEnabled("codebuddyIde") && (codebuddyCnIdeActive ? <ProductCurrentState product="codebuddy-cn" compact /> : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy} onClick={() => onSwitchCodebuddyCnIde?.(account)} aria-label={codebuddyCnIdeLoading ? "正在切换 CodeBuddy IDE" : "切换到 CodeBuddy IDE"} aria-busy={codebuddyCnIdeLoading}>
-                  {codebuddyCnIdeLoading ? <Loader2 className="size-4 animate-spin" /> : <CodeBuddyCnIdeMark size={18} />}<span>{codebuddyCnIdeLoading ? "切换中…" : "IDE"}</span>
+                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCnIdeAvailable || !onSwitchCodebuddyCnIde || codebuddyCnIdeBusy} onClick={() => onSwitchCodebuddyCnIde?.(account)} aria-label={codebuddyCnIdeLoading ? t("accounts.card.switchingCodebuddyIde") : t("accounts.card.switchCodebuddyIde")} aria-busy={codebuddyCnIdeLoading}>
+                  {codebuddyCnIdeLoading ? <Loader2 className="size-4 animate-spin" /> : <CodeBuddyCnIdeMark size={18} />}<span>{codebuddyCnIdeLoading ? t("accounts.card.switching") : "IDE"}</span>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">{codebuddyCnIdeAvailable ? "切换到 CodeBuddy IDE（会重启 IDE）" : "未检测到 CodeBuddy IDE"}</TooltipContent>
+              <TooltipContent side="top">{codebuddyCnIdeAvailable ? t("accounts.card.switchCodebuddyIdeHint") : t("accounts.card.codebuddyIdeMissing")}</TooltipContent>
             </Tooltip>
           ))}
           {toolEnabled("vscodeExt") && (vscodeExtActive ? <ProductCurrentState product="vscode-ext" compact /> : demoModeEnabled ? (
             <DemoAction>
-              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="切换到 VS Code CodeBuddy 插件（可复制会话）">
+              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label={t("accounts.card.switchVscode")}>
                 <VscodeExtMark size={18} /><span>VS Code</span>
               </Button>
             </DemoAction>
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !vscodeExtAvailable || !onSwitchVscodeExt || vscodeExtBusy} onClick={() => onSwitchVscodeExt?.(account)} aria-label="切换到 VS Code CodeBuddy 插件（可复制会话）" aria-busy={vscodeExtLoading}>
-                  {vscodeExtLoading ? <Loader2 className="size-4 animate-spin" /> : <VscodeExtMark size={18} />}<span>{vscodeExtLoading ? "切换中…" : "VS Code"}</span>
+                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !vscodeExtAvailable || !onSwitchVscodeExt || vscodeExtBusy} onClick={() => onSwitchVscodeExt?.(account)} aria-label={t("accounts.card.switchVscode")} aria-busy={vscodeExtLoading}>
+                  {vscodeExtLoading ? <Loader2 className="size-4 animate-spin" /> : <VscodeExtMark size={18} />}<span>{vscodeExtLoading ? t("accounts.card.switching") : "VS Code"}</span>
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">{vscodeExtTooltip(vscodeExtInstalled, vscodeExtExtensionInstalled, t)}</TooltipContent>
@@ -859,15 +860,15 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
           ))}
           {toolEnabled("jetbrains") && (jetbrainsActive ? <ProductCurrentState product="jetbrains" compact /> : demoModeEnabled ? (
             <DemoAction>
-              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label="切换到 JetBrains IDE CodeBuddy 插件">
+              <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" aria-label={t("accounts.card.switchJetbrains")}>
                 <JetbrainsMark size={18} /><span>JetBrains</span>
               </Button>
             </DemoAction>
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !jetbrainsAvailable || !onSwitchJetbrains || jetbrainsBusy} onClick={() => onSwitchJetbrains?.(account)} aria-label="切换到 JetBrains IDE CodeBuddy 插件" aria-busy={jetbrainsLoading}>
-                  {jetbrainsLoading ? <Loader2 className="size-4 animate-spin" /> : <JetbrainsMark size={18} />}<span>{jetbrainsLoading ? "切换中…" : "JetBrains"}</span>
+                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !jetbrainsAvailable || !onSwitchJetbrains || jetbrainsBusy} onClick={() => onSwitchJetbrains?.(account)} aria-label={t("accounts.card.switchJetbrains")} aria-busy={jetbrainsLoading}>
+                  {jetbrainsLoading ? <Loader2 className="size-4 animate-spin" /> : <JetbrainsMark size={18} />}<span>{jetbrainsLoading ? t("accounts.card.switching") : "JetBrains"}</span>
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">{jetbrainsTooltip(jetbrainsInstalled, jetbrainsPluginInstalled, t)}</TooltipContent>
@@ -876,11 +877,11 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
           {toolEnabled("codebuddyCli") && (codebuddyCliActive ? <ProductCurrentState product="codebuddy" compact /> : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCliConfigured || !onSwitchCodebuddyCli || codebuddyCliBusy} onClick={() => onSwitchCodebuddyCli?.(account)} aria-label={codebuddyCliLoading ? "正在切换 CodeBuddy CLI 当前账号" : "设为 CodeBuddy CLI 当前账号"} aria-busy={codebuddyCliLoading}>
-                  {codebuddyCliLoading ? <Loader2 className="size-4 animate-spin" /> : <CodeBuddyMark size={18} />}<span>{codebuddyCliLoading ? "切换中…" : "CLI 当前"}</span>
+                <Button variant="outline" size="sm" className="h-7 rounded-full px-2.5 pr-3.5 text-xs" disabled={featuresDisabled || !codebuddyCliConfigured || !onSwitchCodebuddyCli || codebuddyCliBusy} onClick={() => onSwitchCodebuddyCli?.(account)} aria-label={codebuddyCliLoading ? t("accounts.card.switchingCodebuddyCli") : t("accounts.card.setCodebuddyCliCurrent")} aria-busy={codebuddyCliLoading}>
+                  {codebuddyCliLoading ? <Loader2 className="size-4 animate-spin" /> : <CodeBuddyMark size={18} />}<span>{codebuddyCliLoading ? t("accounts.card.switching") : t("accounts.card.cliCurrent")}</span>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">{codebuddyCliConfigured ? "设为 CodeBuddy CLI 当前账号" : "请先接入 CodeBuddy CLI"}</TooltipContent>
+              <TooltipContent side="top">{codebuddyCliConfigured ? t("accounts.card.setCodebuddyCliCurrent") : t("accounts.card.connectCodebuddyCliFirst")}</TooltipContent>
             </Tooltip>
           ))}
         </footer>
@@ -890,11 +891,11 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
       <Dialog open={resourcesOpen} onOpenChange={setResourcesOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>全部积分包</DialogTitle>
-            <DialogDescription>{name} · 共 {allResources.length} 个积分包</DialogDescription>
+            <DialogTitle>{t("accounts.credits.allPackagesTitle")}</DialogTitle>
+            <DialogDescription>{t("accounts.credits.allPackagesDescription", { account: name, count: allResources.length })}</DialogDescription>
           </DialogHeader>
           {allResources.length === 0 ? (
-            <div className="px-1 py-6 text-center text-sm text-muted-foreground">当前没有可展示的资源包。</div>
+            <div className="px-1 py-6 text-center text-sm text-muted-foreground">{t("accounts.credits.allPackagesEmpty")}</div>
           ) : (
             <div className="max-h-[60vh] min-w-0 overflow-y-auto divide-y divide-border/60">
               {allResources.map((resource, index) => {
@@ -903,14 +904,18 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, onShowInf
                   <div key={`${resource.packageCode || resource.packageName || "resource"}-${index}`} className="min-w-0 py-3 first:pt-0 last:pb-0">
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{creditResourceName(resource, "未命名资源包")}</div>
+                        <div className="truncate text-sm font-medium">{creditResourceName(resource, t("accounts.credits.unnamedPackage"))}</div>
                         <div className="mt-1 text-[11px] text-muted-foreground">
-                          {resource.expired ? "已到期" : resource.expireAt ? `到期 ${formatFullDateTime(resource.expireAt)}` : "长期有效"}
+                          {resource.expired
+                            ? t("accounts.credits.expired")
+                            : resource.expireAt
+                              ? t("accounts.credits.expiresAt", { date: formatFullDateTime(resource.expireAt) })
+                              : t("accounts.credits.noExpiry")}
                         </div>
                       </div>
                       <div className="shrink-0 text-right text-xs">
                         <div className="font-medium">{formatCredits(resource.remaining)} / {formatCredits(resource.total)}</div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">已用 {formatCredits(resource.used)}</div>
+                        <div className="mt-1 text-[11px] text-muted-foreground">{t("accounts.credits.used", { amount: formatCredits(resource.used) })}</div>
                       </div>
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">

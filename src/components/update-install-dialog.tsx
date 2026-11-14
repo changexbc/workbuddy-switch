@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import * as api from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { GITHUB_RELEASE_URL, openReleaseUrl } from "@/lib/update";
 import { useUpdateState } from "@/lib/use-update-state";
 
@@ -28,15 +29,16 @@ interface UpdateInstallDialogProps {
  * 持有——关掉弹窗再打开，看到的仍是同一阶段与进度。
  */
 export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogProps) {
+  const t = useT();
   const snapshot = useUpdateState();
   const [restarting, setRestarting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const phase = snapshot.phase;
-  const targetVersion = snapshot.latest ?? "新版本";
+  const targetVersion = snapshot.latest ?? t("dialogs.update.newVersion");
   const percent = snapshot.percent;
   const busy = phase === "checking" || phase === "downloading";
-  const error = actionError ?? snapshot.message ?? "未知更新错误";
+  const error = actionError ?? snapshot.message ?? t("dialogs.update.unknownError");
 
   useEffect(() => {
     if (!open) return;
@@ -50,7 +52,7 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
     try {
       await api.updateDownload();
     } catch (e) {
-      setActionError(`下载更新失败：${api.asError(e)}`);
+      setActionError(t("dialogs.update.downloadFailed", { error: api.asError(e) }));
     }
   }
 
@@ -64,10 +66,10 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
     try {
       const result = await api.checkUpdate(undefined, true);
       if (!result.ok) {
-        setActionError(result.message || result.error || "检查更新失败");
+        setActionError(result.message || result.error || t("dialogs.update.checkFailed"));
       }
     } catch (e) {
-      setActionError(`检查更新失败：${api.asError(e)}`);
+      setActionError(t("dialogs.update.checkFailedWithError", { error: api.asError(e) }));
     }
   }
 
@@ -78,7 +80,7 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
       await api.updateRestart();
     } catch (e) {
       setRestarting(false);
-      setActionError(`重启失败：${api.asError(e)}`);
+      setActionError(t("dialogs.update.restartFailed", { error: api.asError(e) }));
     }
   }
 
@@ -101,36 +103,35 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
       <DialogContent showCloseButton={!busy && !restarting}>
         <DialogHeader>
           <DialogTitle>
-            {phase === "checking" && "正在检查更新"}
-            {phase === "downloading" && `正在升级到 v${targetVersion}`}
-            {(phase === "idle" || phase === "upToDate") && "当前已是最新版本"}
-            {phase === "available" && "发现新版本"}
-            {phase === "readyToRestart" && "更新已就绪"}
-            {phase === "error" && "拉取更新失败"}
+            {phase === "checking" && t("dialogs.update.titleChecking")}
+            {phase === "downloading" &&
+              t("dialogs.update.titleDownloading", { version: targetVersion })}
+            {(phase === "idle" || phase === "upToDate") && t("dialogs.update.titleUpToDate")}
+            {phase === "available" && t("dialogs.update.titleAvailable")}
+            {phase === "readyToRestart" && t("dialogs.update.titleReady")}
+            {phase === "error" && t("dialogs.update.titleError")}
           </DialogTitle>
           <DialogDescription>
-            {phase === "checking" && "正在检查 GitHub Release 中的签名更新包，请稍候。"}
-            {phase === "downloading" &&
-              "请不要关闭应用，更新包下载完成后由你决定何时重启安装。"}
-            {(phase === "idle" || phase === "upToDate") &&
-              "没有发现高于当前版本的签名更新包。"}
+            {phase === "checking" && t("dialogs.update.descriptionChecking")}
+            {phase === "downloading" && t("dialogs.update.descriptionDownloading")}
+            {(phase === "idle" || phase === "upToDate") && t("dialogs.update.descriptionUpToDate")}
             {phase === "available" &&
-              `发现新版本 v${targetVersion}，下载后由你决定何时重启安装。`}
-            {phase === "readyToRestart" && "更新包已下载，重启应用后完成安装并生效。"}
-            {phase === "error" && "自动更新未完成，你仍然可以从 GitHub Release 页面手动下载。"}
+              t("dialogs.update.descriptionAvailable", { version: targetVersion })}
+            {phase === "readyToRestart" && t("dialogs.update.descriptionReady")}
+            {phase === "error" && t("dialogs.update.descriptionError")}
           </DialogDescription>
         </DialogHeader>
 
         {phase === "checking" && (
           <div className="flex items-center gap-2 rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            正在连接公开 Release 更新源…
+            {t("dialogs.update.connecting")}
           </div>
         )}
 
         {phase === "available" && (
           <div className="rounded-md border p-3 text-sm">
-            v{targetVersion} 已确认可升级。点击下方按钮开始下载；下载在后台进行，可随时从托盘查看进度。
+            {t("dialogs.update.availableHint", { version: targetVersion })}
           </div>
         )}
 
@@ -139,10 +140,10 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
             <div className="flex items-center justify-between text-sm">
               <span className="flex items-center gap-2">
                 <Loader2 className="size-4 animate-spin text-primary" />
-                下载更新包
+                {t("dialogs.update.progressLabel")}
               </span>
               <span className="font-mono text-xs text-muted-foreground">
-                {percent === null ? "下载中…" : `${percent}%`}
+                {percent === null ? t("dialogs.update.downloading") : `${percent}%`}
               </span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -156,7 +157,7 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
 
         {phase === "readyToRestart" && (
           <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-800">
-            v{targetVersion} 已准备完成，重启应用后生效。
+            {t("dialogs.update.readyHint", { version: targetVersion })}
           </div>
         )}
 
@@ -171,12 +172,12 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
           {phase === "available" && (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
-                关闭
+                {t("common.close")}
               </Button>
               <DemoAction>
                 <Button onClick={() => void startDownload()}>
                   <Download />
-                  下载更新包
+                  {t("dialogs.update.download")}
                 </Button>
               </DemoAction>
             </>
@@ -184,12 +185,12 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
           {phase === "readyToRestart" && (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={restarting}>
-                立即关闭
+                {t("dialogs.update.closeNow")}
               </Button>
               <DemoAction>
                 <Button onClick={() => void restartApp()} disabled={restarting}>
                   {restarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                  {restarting ? "正在重启…" : "重启以完成升级"}
+                  {restarting ? t("dialogs.update.restarting") : t("dialogs.update.restart")}
                 </Button>
               </DemoAction>
             </>
@@ -198,19 +199,19 @@ export function UpdateInstallDialog({ open, onOpenChange }: UpdateInstallDialogP
             <>
               <Button variant="outline" onClick={() => void openRelease()}>
                 <ExternalLink />
-                打开 GitHub Release
+                {t("dialogs.update.openRelease")}
               </Button>
               <DemoAction>
                 <Button onClick={() => void retry()}>
                   <RefreshCw />
-                  重试
+                  {t("common.retry")}
                 </Button>
               </DemoAction>
             </>
           )}
           {(phase === "idle" || phase === "upToDate") && (
             <Button variant="default" onClick={() => onOpenChange(false)}>
-              关闭
+              {t("common.close")}
             </Button>
           )}
         </DialogFooter>

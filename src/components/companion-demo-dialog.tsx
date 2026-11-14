@@ -8,6 +8,7 @@ import {
   buildCompanionDemoSnapshot,
   postCompanionDemoSnapshot,
 } from "@/lib/companion-demo-script";
+import { useT } from "@/lib/i18n";
 
 /** Reported by the rail when the visitor tries something only the desktop app owns. */
 interface CompanionDemoFrameMessage {
@@ -16,9 +17,6 @@ interface CompanionDemoFrameMessage {
   action?: "open-session" | "close-monitoring";
   text?: string;
 }
-
-const BLOCKED_FALLBACK = "该操作仅在桌面版可用";
-const ACTIVATE_CLIENT_NOTICE = "演示不会打开真实会话";
 
 /**
  * The upstream demo build of the rail; `BASE_URL` keeps it valid under any
@@ -41,6 +39,7 @@ interface CompanionDemoDialogProps {
  * component, and the frame itself refuses session links and the close command.
  */
 export function CompanionDemoDialog({ open, onOpenChange }: CompanionDemoDialogProps) {
+  const t = useT();
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
   const generationRef = useRef(0);
@@ -100,10 +99,10 @@ export function CompanionDemoDialog({ open, onOpenChange }: CompanionDemoDialogP
         return;
       }
       if (message.type === "blocked") {
-        setNotice(message.text || BLOCKED_FALLBACK);
+        setNotice(message.text || t("dialogs.companion.blockedFallback"));
         return;
       }
-      if (message.type === "activate-client") setNotice(ACTIVATE_CLIENT_NOTICE);
+      if (message.type === "activate-client") setNotice(t("dialogs.companion.activateClientNotice"));
       // `drag` is the grip of a real window; the overlay has no window to move.
     };
 
@@ -112,22 +111,20 @@ export function CompanionDemoDialog({ open, onOpenChange }: CompanionDemoDialogP
       window.removeEventListener("message", onMessage);
       stopPlayback();
     };
-  }, [open, startPlayback, stopPlayback]);
+  }, [open, startPlayback, stopPlayback, t]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-3 sm:max-w-[492px]">
         <DialogHeader>
-          <DialogTitle>会话悬浮窗</DialogTitle>
-          <DialogDescription>
-            悬浮栏的真实形态，演示数据自动轮播，不会读取或打开本机任何会话。
-          </DialogDescription>
+          <DialogTitle>{t("dialogs.companion.title")}</DialogTitle>
+          <DialogDescription>{t("dialogs.companion.description")}</DialogDescription>
         </DialogHeader>
         <div className="mx-auto h-[520px] max-h-[70vh] w-[420px] max-w-full overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-muted/50 to-background">
           <iframe
             ref={frameRef}
             src={RAIL_SRC}
-            title="Agent Companion 会话悬浮栏演示"
+            title={t("dialogs.companion.frameTitle")}
             // Keep the frame out of the dialog's initial tab order: Radix would
             // otherwise autofocus it and swallow Escape, leaving the overlay
             // closable only by its close button or the backdrop.
@@ -136,7 +133,7 @@ export function CompanionDemoDialog({ open, onOpenChange }: CompanionDemoDialogP
           />
         </div>
         <p className="min-h-5 text-xs leading-5 text-muted-foreground" role="status">
-          {notice ?? "演示数据自动循环：工作中 → 待确认 → 已完成 → 出错。"}
+          {notice ?? t("dialogs.companion.defaultNotice")}
         </p>
       </DialogContent>
     </Dialog>
