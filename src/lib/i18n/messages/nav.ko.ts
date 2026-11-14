@@ -1,0 +1,26 @@
+import type { navEn } from "./nav.en";
+
+export const navKo: Partial<Record<keyof typeof navEn, string>> = {
+  "nav.ariaLabel": "주요 탐색",
+  "nav.accounts": "계정",
+  "nav.sessions": "세션 연결",
+  "nav.tokenStats": "토큰 통계",
+  "nav.creditStats": "크레딧 통계",
+  "nav.settings": "설정",
+  "nav.demoBadge": "데모 모드",
+  "nav.rail.title": "세션 레일",
+  "nav.rail.enabledToast": "세션 레일을 켰습니다",
+  "nav.rail.disabledToast": "세션 레일을 껐습니다",
+  "nav.rail.toggleFailed": "세션 레일 설정을 변경하지 못했습니다",
+  "nav.rail.settingsFailed": "세션 레일 설정을 열지 못했습니다",
+  "nav.rail.hintOn": "끄면 레일이 숨겨지고 wb-switch의 세션 모니터링도 중지됩니다.",
+  "nav.rail.hintOff": "켜면 레일이 표시되고 세션 상태 모니터링이 시작됩니다.",
+  "nav.rail.settings": "레일 설정",
+  "nav.rail.demo": "레일 데모 보기",
+  "nav.update.label": "업데이트",
+  "nav.update.downloading": "업데이트를 내려받는 중…",
+  "nav.update.downloadingPercent": "업데이트를 내려받는 중 {percent}%",
+  "nav.update.restart": "재시작하여 업데이트 완료",
+  "nav.update.failed": "업데이트에 실패했습니다. 클릭하여 다시 시도하세요.",
+  "nav.update.checking": "확인 중…",
+};

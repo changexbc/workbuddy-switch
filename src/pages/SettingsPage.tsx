@@ -33,6 +33,8 @@ import { TimePicker } from "@/components/ui/time-picker";
 import { displayName } from "@/lib/account-display";
 import * as api from "@/lib/api";
 import { canPersistErrorLog } from "@/lib/error-report";
+import { useLocale, useSetLocale, useT } from "@/lib/i18n";
+import { isLocale, LOCALE_OPTIONS } from "@/lib/i18n/locale";
 import { setSessionsNavEnabled, useSessionsNavEnabled } from "@/lib/nav-prefs";
 import { setDefaultArchiveSyncEnabled, useDefaultArchiveSyncEnabled } from "@/lib/sync-prefs";
 import { getThemePreference, setThemePreference, type ThemePreference } from "@/lib/theme";
@@ -1804,6 +1806,9 @@ function ErrorLogCard() {
 }
 
 function AppearanceCard() {
+  const t = useT();
+  const locale = useLocale();
+  const setLocale = useSetLocale();
   const [theme, setTheme] = useState<ThemePreference>(getThemePreference);
   const sessionsNavEnabled = useSessionsNavEnabled();
   const defaultArchiveSyncEnabled = useDefaultArchiveSyncEnabled();
@@ -1817,9 +1822,32 @@ function AppearanceCard() {
   return (
     <SettingsGroup
       id="settings-appearance"
-      title="外观"
+      title={t("settings.appearance.title")}
     >
       <CardContent className="space-y-0 p-0">
+        <SettingsFieldRow
+          label={t("settings.appearance.language")}
+          description={t("settings.appearance.languageDescription")}
+          htmlFor="appearance-language"
+        >
+          <Select
+            value={locale}
+            onValueChange={(value) => {
+              if (isLocale(value)) setLocale(value);
+            }}
+          >
+            <SelectTrigger id="appearance-language" size="sm" className="w-full sm:w-40" aria-label={t("settings.appearance.language")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {LOCALE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingsFieldRow>
         <SettingsFieldRow
           label="主题"
           description="选择浅色、深色，或跟随系统外观自动切换"

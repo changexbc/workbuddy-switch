@@ -21,6 +21,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import companionTrayIcon from "@/assets/agent-companion-tray.png";
 import { DEMO_UNAVAILABLE_MESSAGE, demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
+import { useT } from "@/lib/i18n";
 import { useSessionsNavEnabled } from "@/lib/nav-prefs";
 import { changeCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
@@ -40,6 +41,7 @@ const COMPANION_MENU_CONTENT = { side: "top", align: "start", sideOffset: 8, cla
 
 function CompanionFooter() {
   const { enabled, busy } = useCompanionEnabled();
+  const t = useT();
   /** 面板打开时收起 hover tooltip——两者都朝上弹，同时出现会叠在一起。 */
   const [menuOpen, setMenuOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
@@ -48,9 +50,9 @@ function CompanionFooter() {
     if (enabled === null) return;
     try {
       const confirmed = await changeCompanionEnabled(!enabled);
-      toast.success(confirmed ? "已启用 Agent Companion 悬浮窗" : "已关闭 Agent Companion 悬浮窗");
+      toast.success(confirmed ? t("nav.rail.enabledToast") : t("nav.rail.disabledToast"));
     } catch (cause) {
-      toast.error("悬浮窗设置失败", { description: api.asError(cause) });
+      toast.error(t("nav.rail.toggleFailed"), { description: api.asError(cause) });
     }
   }
 
@@ -58,7 +60,7 @@ function CompanionFooter() {
     try {
       await api.openCompanionSettings();
     } catch (cause) {
-      toast.error("打开悬浮窗设置失败", { description: api.asError(cause) });
+      toast.error(t("nav.rail.settingsFailed"), { description: api.asError(cause) });
     }
   }
 
@@ -67,12 +69,12 @@ function CompanionFooter() {
       <Tooltip open={tipOpen && !menuOpen} onOpenChange={setTipOpen}>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗" disabled={enabled === null || busy}>
+            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label={t("nav.rail.title")} disabled={enabled === null || busy}>
               <img src={companionTrayIcon} alt="" className={cn("size-6 object-contain transition-all", !enabled && "grayscale opacity-55")} />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">会话悬浮窗</TooltipContent>
+        <TooltipContent side="top">{t("nav.rail.title")}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent {...COMPANION_MENU_CONTENT}>
         {/* 整行即开关（方向键 / Enter 同语义）；行尾 Switch 只作视觉，点击穿透到行上，避免出现两个焦点。 */}
@@ -85,15 +87,15 @@ function CompanionFooter() {
             void onToggle();
           }}
         >
-          <span className="min-w-0 flex-1">会话悬浮窗</span>
+          <span className="min-w-0 flex-1">{t("nav.rail.title")}</span>
           <Switch checked={Boolean(enabled)} tabIndex={-1} aria-hidden className="pointer-events-none" />
         </DropdownMenuItem>
         <p className="px-2.5 pb-1 text-xs leading-4 text-muted-foreground">
-          {enabled ? "关闭后悬浮栏将隐藏，并停止 wb-switch 中的会话监听。" : "开启后会显示悬浮栏，并开始监听会话状态。"}
+          {enabled ? t("nav.rail.hintOn") : t("nav.rail.hintOff")}
         </p>
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={enabled === null || busy || !enabled} onSelect={() => void openSettings()}>
-          <Settings />悬浮窗设置
+          <Settings />{t("nav.rail.settings")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -106,6 +108,7 @@ function CompanionFooter() {
  * 多一条「查看悬浮栏演示」，打开只读演示浮层。
  */
 function CompanionDemoFooter() {
+  const t = useT();
   const [open, setOpen] = useState(false);
   /** 面板打开时收起 hover tooltip，与正式版同一处理。 */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -122,26 +125,26 @@ function CompanionDemoFooter() {
       <Tooltip open={tipOpen && !menuOpen} onOpenChange={setTipOpen}>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗">
+            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label={t("nav.rail.title")}>
               <img src={companionTrayIcon} alt="" className="size-6 object-contain" />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">会话悬浮窗</TooltipContent>
+        <TooltipContent side="top">{t("nav.rail.title")}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent {...COMPANION_MENU_CONTENT}>
         <DropdownMenuItem className="gap-3" onSelect={unavailable}>
-          <span className="min-w-0 flex-1">会话悬浮窗</span>
+          <span className="min-w-0 flex-1">{t("nav.rail.title")}</span>
           <Switch checked tabIndex={-1} aria-hidden className="pointer-events-none" />
         </DropdownMenuItem>
-        <p className="px-2.5 pb-1 text-xs leading-4 text-muted-foreground">关闭后悬浮栏将隐藏，并停止 wb-switch 中的会话监听。</p>
+        <p className="px-2.5 pb-1 text-xs leading-4 text-muted-foreground">{t("nav.rail.hintOn")}</p>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={unavailable}>
-          <Settings />悬浮窗设置
+          <Settings />{t("nav.rail.settings")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => setOpen(true)}>
-          <Play />查看悬浮栏演示
+          <Play />{t("nav.rail.demo")}
         </DropdownMenuItem>
       </DropdownMenuContent>
       <CompanionDemoDialog open={open} onOpenChange={setOpen} />
@@ -150,6 +153,7 @@ function CompanionDemoFooter() {
 }
 
 function UpdateCenter({ running }: { running: boolean | undefined }) {
+  const t = useT();
   const version = useAccountsStore((s) => s.status?.version);
   const snapshot = useUpdateState();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -168,15 +172,15 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
   const updateHint =
     snapshot.phase === "downloading"
       ? snapshot.percent === null
-        ? "正在下载更新…"
-        : `正在下载更新 ${snapshot.percent}%`
+        ? t("nav.update.downloading")
+        : t("nav.update.downloadingPercent", { percent: snapshot.percent })
       : snapshot.phase === "readyToRestart"
-        ? "重启以完成升级"
+        ? t("nav.update.restart")
         : snapshot.phase === "error"
-          ? "更新失败，点击重试"
+          ? t("nav.update.failed")
           : snapshot.phase === "checking"
-            ? "正在检查…"
-            : "更新";
+            ? t("nav.update.checking")
+            : t("nav.update.label");
 
   return (
     <>
@@ -219,6 +223,7 @@ function UpdateCenter({ running }: { running: boolean | undefined }) {
 }
 
 function Layout() {
+  const t = useT();
   const running = useAccountsStore((s) => s.status?.running);
   const hasUnifiedTitleBar =
     api.isDesktop() && typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
@@ -256,12 +261,12 @@ function Layout() {
             </div>
             {demoModeEnabled && (
               <Badge variant="secondary" className="mt-1 h-5 border-0 px-1.5 text-[10px] text-sidebar-foreground/60 shadow-none">
-                演示模式
+                {t("nav.demoBadge")}
               </Badge>
             )}
           </div>
         </div>
-        <nav className="flex min-h-0 flex-1 flex-col gap-0.5" aria-label="主导航">
+        <nav className="flex min-h-0 flex-1 flex-col gap-0.5" aria-label={t("nav.ariaLabel")}>
           <NavLink
             to="/"
             end
@@ -275,7 +280,7 @@ function Layout() {
             }
           >
             <User className="size-4" />
-            账号管理
+            {t("nav.accounts")}
           </NavLink>
           {sessionsNavEnabled && (
             <NavLink
@@ -290,10 +295,10 @@ function Layout() {
               }
             >
               <Link2 className="size-4" />
-              关联会话
+              {t("nav.sessions")}
             </NavLink>
           )}
-          <NavLink to="/token-stats" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><MessagesSquare className="size-4" />Token 统计</NavLink>
+          <NavLink to="/token-stats" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><MessagesSquare className="size-4" />{t("nav.tokenStats")}</NavLink>
           <NavLink
             to="/credit-stats"
             className={({ isActive }) =>
@@ -306,7 +311,7 @@ function Layout() {
             }
           >
             <Sparkles className="size-4" />
-            积分统计
+            {t("nav.creditStats")}
           </NavLink>
           <NavLink
             to="/settings"
@@ -320,7 +325,7 @@ function Layout() {
             }
           >
             <Settings className="size-4" />
-            设置
+            {t("nav.settings")}
           </NavLink>
         </nav>
         {api.isWebui() && !demoModeEnabled ? null : <UpdateCenter running={running} />}
