@@ -36,7 +36,7 @@ jobs:
           all_platforms = [
               {
                   "name": "mac-arm64",
-                  "os": "macos-14",
+                  "os": "macos-latest",
                   "target": "aarch64-apple-darwin",
                   "cli_bin": "wb-switch-darwin-arm64",
                   "platform_tag": "darwin-arm64",
@@ -48,7 +48,7 @@ jobs:
               },
               {
                   "name": "mac-x64",
-                  "os": "macos-14",
+                  "os": "macos-latest",
                   "target": "x86_64-apple-darwin",
                   "cli_bin": "wb-switch-darwin-x64",
                   "platform_tag": "darwin-x64",
