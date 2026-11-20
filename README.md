@@ -145,6 +145,16 @@ workbuddy-switch status       # 终端查看当前账号
 
 界面与桌面 App 一致，功能覆盖上方全部模块，但不提供会话悬浮窗（桌面版专属）。webui 模式下的 macOS 权限由启动服务的终端进程决定；若终端已授权完全磁盘访问则无需额外操作。
 
+默认监听 `127.0.0.1:57890`，可用 `--host` / `--port`（或环境变量 `WB_SWITCH_HOST` / `WB_SWITCH_PORT`）自定义：
+
+```bash
+workbuddy-switch serve --port 8080            # 自定义端口
+workbuddy-switch serve --host 0.0.0.0         # 监听所有网卡，局域网可访问
+WB_SWITCH_HOST=0.0.0.0 WB_SWITCH_PORT=8080 workbuddy-switch   # 环境变量写法
+```
+
+注意：接口无鉴权，改成非回环地址（如 `0.0.0.0`）后账号 Token 等敏感数据将暴露给局域网 / 外网，请配合防火墙或 SSH 端口转发使用。
+
 ## 致谢
 
 感谢 [Linux.do](https://linux.do) 社区。

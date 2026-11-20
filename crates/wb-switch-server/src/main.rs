@@ -2,18 +2,27 @@
 //!
 //! ```bash
 //! workbuddy-switch              # 启动本地服务 + 打开浏览器 webui
-//! workbuddy-switch serve        # 只起服务不开浏览器（--port / --no-open）
+//! workbuddy-switch serve        # 只起服务不开浏览器（--host / --port / --no-open）
 //! workbuddy-switch status       # 终端输出当前账号
 //! workbuddy-switch version      # 版本号
 //! ```
+//!
+//! 监听地址可用 `--host <IP>` / `--port <端口>` 自定义（支持 `--key=value` 写法），
+//! 也可用环境变量 `WB_SWITCH_HOST` / `WB_SWITCH_PORT` 兜底；默认 127.0.0.1:57890。
 
 mod api;
+
+use std::net::IpAddr;
 
 use serde_json::json;
 
 use wb_switch_core::modules::{
     account, auth_file, checkin, config, process, rotate, travel, update, variant::WbVariant,
 };
+
+fn default_host() -> IpAddr {
+    IpAddr::from([127, 0, 0, 1])
+}
 
 fn default_port() -> u16 {
     57890
@@ -99,6 +108,83 @@ fn variant_arg(args: &[String]) -> WbVariant {
     WbVariant::parse(raw.as_deref())
 }
 
+/// 通用开关取值：`--key value` / `--key=value`，与 `variant_arg` 同款写法。
+/// 值缺失（开关是最后一个参数）时返回空串，由调用方按未提供处理。
+fn flag_value(args: &[String], key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    args.iter().enumerate().find_map(|(index, arg)| {
+        if let Some(value) = arg.strip_prefix(&prefix) {
+            return Some(value.to_string());
+        }
+        arg.eq(key)
+            .then(|| args.get(index + 1).cloned().unwrap_or_default())
+    })
+}
+
+/// serve 的监听参数：CLI `--host` / `--port` 优先，其次环境变量
+/// `WB_SWITCH_HOST` / `WB_SWITCH_PORT`，最后默认 127.0.0.1:57890。
+/// 显式提供的值非法时直接报错，避免静默回落默认值让用户误以为生效。
+fn resolve_listen_args(args: &[String]) -> Result<(IpAddr, u16), String> {
+    let host = match flag_value(args, "--host") {
+        Some(raw) if !raw.is_empty() => raw.parse::<IpAddr>().map_err(|_| {
+            format!("--host 值无效: {raw}。请使用 IP 地址（如 127.0.0.1 / 0.0.0.0 / ::）")
+        })?,
+        _ => match std::env::var("WB_SWITCH_HOST") {
+            Ok(raw) if !raw.trim().is_empty() => raw.trim().parse::<IpAddr>().map_err(|_| {
+                format!("环境变量 WB_SWITCH_HOST 值无效: {raw}。请使用 IP 地址（如 127.0.0.1 / 0.0.0.0 / ::）")
+            })?,
+            _ => default_host(),
+        },
+    };
+
+    let port = match flag_value(args, "--port") {
+        Some(raw) if !raw.is_empty() => {
+            let port = raw
+                .parse::<u16>()
+                .map_err(|_| format!("--port 值无效: {raw}。端口范围 1-65535"))?;
+            if port == 0 {
+                return Err("--port 值无效: 0。端口范围 1-65535".to_string());
+            }
+            port
+        }
+        _ => match std::env::var("WB_SWITCH_PORT") {
+            Ok(raw) if !raw.trim().is_empty() => {
+                let port = raw.trim().parse::<u16>().map_err(|_| {
+                    format!("环境变量 WB_SWITCH_PORT 值无效: {raw}。端口范围 1-65535")
+                })?;
+                if port == 0 {
+                    return Err("环境变量 WB_SWITCH_PORT 值无效: 0。端口范围 1-65535".to_string());
+                }
+                port
+            }
+            _ => default_port(),
+        },
+    };
+
+    Ok((host, port))
+}
+
+/// 地址展示串：IPv6 需要方括号（如 `[::1]:57890`），同时兼容 TcpListener::bind 的解析。
+fn socket_display(host: IpAddr, port: u16) -> String {
+    if host.is_ipv6() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// 浏览器打开用的地址：绑定通配地址（0.0.0.0 / ::）时换成回环地址才能访问。
+fn browser_host(host: IpAddr) -> IpAddr {
+    if !host.is_unspecified() {
+        return host;
+    }
+    if host.is_ipv4() {
+        IpAddr::from([127, 0, 0, 1])
+    } else {
+        IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])
+    }
+}
+
 fn print_status(variant: WbVariant) {
     let auth = auth_file::read_auth_file(variant);
     let current = auth.as_ref().map(|a| {
@@ -140,30 +226,40 @@ async fn main() {
 }
 
 async fn serve(args: &[String]) {
-    let mut port = default_port();
-    if let Some(i) = args.iter().position(|a| a == "--port") {
-        if let Some(p) = args.get(i + 1).and_then(|p| p.parse::<u16>().ok()) {
-            port = p;
+    let (host, port) = match resolve_listen_args(args) {
+        Ok(pair) => pair,
+        Err(message) => {
+            eprintln!("启动失败: {message}");
+            std::process::exit(1);
         }
-    }
+    };
 
     let app = api::router();
-    let addr = format!("127.0.0.1:{port}");
+    let addr = socket_display(host, port);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("启动失败: 端口 {port} 被占用或不可用（{e}）。可用 --port 指定其他端口。");
+            eprintln!("启动失败: {addr} 绑定失败，端口可能被占用或地址不可用（{e}）。可用 --host / --port 指定其他地址与端口。");
             std::process::exit(1);
         }
     };
 
     println!("workbuddy-switch v{}", update::APP_VERSION);
     println!("webui: http://{addr}");
+    if !host.is_loopback() {
+        eprintln!(
+            "警告: 服务绑定在非回环地址 {host}，账号 Token 等敏感数据将可被局域网 / 外网访问，且接口无鉴权。\
+             请确认网络安全，或改用 SSH 端口转发。"
+        );
+    }
     println!("按 Ctrl+C 停止服务。");
 
     let no_open = args.iter().any(|a| a == "--no-open");
     if !no_open {
-        open_browser(&addr);
+        open_browser(&format!(
+            "http://{}",
+            socket_display(browser_host(host), port)
+        ));
     }
 
     spawn_background_loops();
@@ -195,7 +291,8 @@ fn open_browser(addr: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::variant_arg;
+    use super::{browser_host, resolve_listen_args, socket_display, variant_arg};
+    use std::net::IpAddr;
     use wb_switch_core::modules::variant::WbVariant;
 
     fn args(items: &[&str]) -> Vec<String> {
@@ -232,6 +329,79 @@ mod tests {
         assert_eq!(
             variant_arg(&args(&["--variant=ai", "status"])),
             WbVariant::Ai
+        );
+    }
+
+    /// 不传 --host / --port 时回落默认 127.0.0.1:57890。
+    #[test]
+    fn listen_args_default_to_loopback() {
+        let (host, port) = resolve_listen_args(&args(&[])).unwrap();
+        assert_eq!(host, IpAddr::from([127, 0, 0, 1]));
+        assert_eq!(port, 57890);
+        let (host, port) = resolve_listen_args(&args(&["serve", "--no-open"])).unwrap();
+        assert_eq!(host, IpAddr::from([127, 0, 0, 1]));
+        assert_eq!(port, 57890);
+    }
+
+    /// --host / --port 支持空格与等号两种写法，并可任意组合。
+    #[test]
+    fn listen_args_read_space_and_equals_forms() {
+        let (host, port) =
+            resolve_listen_args(&args(&["serve", "--host", "0.0.0.0", "--port", "8080"])).unwrap();
+        assert_eq!(host, IpAddr::from([0, 0, 0, 0]));
+        assert_eq!(port, 8080);
+
+        let (host, port) =
+            resolve_listen_args(&args(&["--host=192.168.1.10", "--port=6100"])).unwrap();
+        assert_eq!(host, IpAddr::from([192, 168, 1, 10]));
+        assert_eq!(port, 6100);
+
+        let (host, _) = resolve_listen_args(&args(&["--host", "::1"])).unwrap();
+        assert_eq!(host, IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]));
+
+        // 只给一个参数时另一个仍回落默认值。
+        let (host, port) = resolve_listen_args(&args(&["--port", "7000"])).unwrap();
+        assert_eq!(host, IpAddr::from([127, 0, 0, 1]));
+        assert_eq!(port, 7000);
+    }
+
+    /// 显式提供的非法值必须报错，而不是静默回落默认值。
+    #[test]
+    fn listen_args_reject_invalid_values() {
+        // 域名不支持：绑定需要 IP 地址。
+        assert!(resolve_listen_args(&args(&["--host", "localhost"])).is_err());
+        assert!(resolve_listen_args(&args(&["--host", "192.168.1.256"])).is_err());
+        assert!(resolve_listen_args(&args(&["--port", "99999"])).is_err());
+        assert!(resolve_listen_args(&args(&["--port", "abc"])).is_err());
+        assert!(resolve_listen_args(&args(&["--port", "0"])).is_err());
+    }
+
+    #[test]
+    fn socket_display_brackets_ipv6() {
+        assert_eq!(
+            socket_display(IpAddr::from([127, 0, 0, 1]), 57890),
+            "127.0.0.1:57890"
+        );
+        assert_eq!(
+            socket_display(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]), 80),
+            "[::1]:80"
+        );
+    }
+
+    /// 通配地址开浏览器时换回环地址；其余原样返回。
+    #[test]
+    fn browser_host_maps_unspecified_to_loopback() {
+        assert_eq!(
+            browser_host(IpAddr::from([0, 0, 0, 0])),
+            IpAddr::from([127, 0, 0, 1])
+        );
+        assert_eq!(
+            browser_host(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 0])),
+            IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])
+        );
+        assert_eq!(
+            browser_host(IpAddr::from([192, 168, 1, 10])),
+            IpAddr::from([192, 168, 1, 10])
         );
     }
 }

@@ -9,7 +9,7 @@
     "dev:demo": "node scripts/prepare-companion-demo.mjs dev && VITE_DEMO_MODE=1 vite",
     "dev:screenshot": "node scripts/prepare-companion-demo.mjs dev && VITE_DEMO_MODE=1 vite",
     "tauri:dev:screenshot": "WB_SWITCH_SCREENSHOT_DEMO=1 VITE_DEMO_MODE=1 tauri dev",
-    "build": "node scripts/prepare-companion-demo.mjs clean && tsc && vite build",
+    "build": "node scripts/prepare-companion-demo.mjs clean && tsc && vite build && node scripts/gzip-dist.mjs",
     "build:desktop": "node scripts/prepare-agent-companion.mjs build && npm run build && node scripts/prepare-agent-companion.mjs copy",
     "build:demo": "node scripts/prepare-companion-demo.mjs build && tsc && VITE_DEMO_MODE=1 VITE_PAGES_DEMO=1 vite build && node scripts/prepare-companion-demo.mjs copy",
     "test": "vitest run",

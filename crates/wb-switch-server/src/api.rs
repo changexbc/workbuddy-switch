@@ -1,7 +1,7 @@
 //! HTTP API 层：把 wb-switch-core 暴露为本地 REST 接口，供 webui（浏览器）调用。
 //!
-//! 路由设计对应 Python 版 server.py 与桌面端 commands.rs。仅绑定 127.0.0.1，
-//! token 不出本机。
+//! 路由设计对应 Python 版 server.py 与桌面端 commands.rs。默认仅绑定 127.0.0.1，
+//! token 不出本机；CLI 可用 --host 改绑其他地址，但接口无鉴权，非回环绑定需自行评估风险。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{Query, RawQuery};
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -1635,7 +1635,12 @@ fn content_type(path: &str) -> &'static str {
     }
 }
 
-async fn static_handler(uri: Uri) -> Response {
+/// 静态资源响应。两件对慢链路（Tailscale DERP 中继等）重要的事：
+/// 1. Accept-Encoding 含 gzip 且存在构建期预压缩的 `.gz` 时优先返回压缩体：
+///    1.2MB 的主 JS 包压到约 1/4，避免 10 秒启动兜底被传输时间误触发；
+/// 2. 按 URL 特征下发 Cache-Control：带内容哈希的 `assets/` 长缓存 immutable，
+///    index.html `no-cache`（升级后立即拿到新入口，不会引用到已不存在的旧哈希资源）。
+async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
     let mut path = uri.path().trim_start_matches('/').to_string();
     if path.is_empty() || path == "index.html" {
         path = "index.html".to_string();
@@ -1654,11 +1659,38 @@ async fn static_handler(uri: Uri) -> Response {
             }
         },
     };
-    Response::builder()
+
+    let accepts_gzip = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_ascii_lowercase().contains("gzip"))
+        .unwrap_or(false);
+    let precompressed = if accepts_gzip {
+        Assets::get(&format!("{served}.gz"))
+    } else {
+        None
+    };
+
+    let cache_control = if served == "index.html" {
+        "no-cache"
+    } else if served.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=3600"
+    };
+
+    let builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type(&served))
-        .body(Body::from(data.data.into_owned()))
-        .unwrap()
+        .header(header::CACHE_CONTROL, cache_control)
+        .header(header::VARY, "Accept-Encoding");
+    match precompressed {
+        Some(gz) => builder
+            .header(header::CONTENT_ENCODING, "gzip")
+            .body(Body::from(gz.data.into_owned()))
+            .unwrap(),
+        None => builder.body(Body::from(data.data.into_owned())).unwrap(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1695,16 +1727,36 @@ async fn api_clear_notifications() -> Response {
 #[cfg(test)]
 mod tests {
     use super::{body_variant, checkin_status_item, query_variant, static_handler};
-    use axum::http::{header, StatusCode, Uri};
+    use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
     use serde_json::json;
     use wb_switch_core::modules::variant::WbVariant;
+
+    /// 取某个嵌入资源的实际文件名（构建产物带内容哈希，名字会变）。
+    fn first_asset_path() -> String {
+        super::Assets::iter()
+            .find(|p| p.starts_with("assets/") && p.ends_with(".js"))
+            .expect("dist 应已随构建嵌入,至少有一个 JS 入口")
+            .to_string()
+    }
+
+    fn resp_headers(resp: &axum::response::Response) -> std::collections::HashMap<String, String> {
+        resp.headers()
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.as_str().to_string(),
+                    v.to_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
+    }
 
     /// SPA 回退必须按**命中的文件**给 Content-Type：`/sessions` 这类前端路由曾按请求路径
     /// 被标成 application/octet-stream，浏览器直接当文件下载、页面打不开（真机验收发现）。
     #[tokio::test]
     async fn spa_fallback_serves_html_content_type() {
         for path in ["/", "/sessions", "/accounts"] {
-            let resp = static_handler(Uri::from_static(path)).await;
+            let resp = static_handler(Uri::from_static(path), HeaderMap::new()).await;
             assert_eq!(resp.status(), StatusCode::OK, "{path}");
             let content_type = resp
                 .headers()
@@ -1716,6 +1768,75 @@ mod tests {
                 "{path} 的 Content-Type 应为 text/html，实际 {content_type}"
             );
         }
+    }
+
+    /// 客户端接受 gzip 且存在预压缩副本时,必须返回压缩体并带上 Content-Encoding。
+    #[tokio::test]
+    async fn static_serves_precompressed_gzip_when_accepted() {
+        let asset = first_asset_path();
+        if super::Assets::get(&format!("{asset}.gz")).is_none() {
+            // dist 未跑 gzip 步骤时本测试不可判定,直接跳过
+            return;
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+        let resp = static_handler(
+            Uri::from_maybe_shared(format!("/{asset}")).unwrap(),
+            headers,
+        )
+        .await;
+        let got = resp_headers(&resp);
+        assert_eq!(
+            got.get(header::CONTENT_ENCODING.as_str())
+                .map(String::as_str),
+            Some("gzip")
+        );
+        assert_eq!(
+            got.get(header::CONTENT_TYPE.as_str()).map(String::as_str),
+            Some("text/javascript")
+        );
+        // 压缩体必须真的更小
+        use axum::body::HttpBody;
+        let body = resp.into_body();
+        let body_len = body.size_hint().exact().unwrap_or_default() as usize;
+        let raw = super::Assets::get(&asset).unwrap();
+        assert!(body_len < raw.data.len(), "gzip 体应小于原始体");
+    }
+
+    /// 客户端不接受 gzip 时绝不能返回压缩体（否则浏览器解不了,页面同样起不来）。
+    #[tokio::test]
+    async fn static_skips_gzip_when_not_accepted() {
+        let asset = first_asset_path();
+        let resp = static_handler(
+            Uri::from_maybe_shared(format!("/{asset}")).unwrap(),
+            HeaderMap::new(),
+        )
+        .await;
+        let got = resp_headers(&resp);
+        assert!(!got.contains_key(header::CONTENT_ENCODING.as_str()));
+    }
+
+    /// 缓存策略：index.html 不缓存（升级立即生效）,带哈希的 assets/ 长缓存。
+    #[tokio::test]
+    async fn static_sets_cache_control() {
+        let asset = first_asset_path();
+        let resp = static_handler(
+            Uri::from_maybe_shared(format!("/{asset}")).unwrap(),
+            HeaderMap::new(),
+        )
+        .await;
+        let got = resp_headers(&resp);
+        assert_eq!(
+            got.get(header::CACHE_CONTROL.as_str()).map(String::as_str),
+            Some("public, max-age=31536000, immutable")
+        );
+
+        let resp = static_handler(Uri::from_static("/"), HeaderMap::new()).await;
+        let got = resp_headers(&resp);
+        assert_eq!(
+            got.get(header::CACHE_CONTROL.as_str()).map(String::as_str),
+            Some("no-cache")
+        );
     }
 
     /// 缺省档位必须与改造前一致（不传 variant 即国内版）。

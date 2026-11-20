@@ -106,6 +106,11 @@
           var root = document.getElementById("root");
           if (!root) return;
 
+          // webui（浏览器访问本地服务 / 服务器 webui）没有托盘与更新通道，文案按环境区分。
+          var isDesktop =
+            typeof window.__TAURI_INTERNALS__ !== "undefined" ||
+            typeof window.__TAURI__ !== "undefined";
+
           var wrap = document.createElement("div");
           wrap.className = "wb-boot";
 
@@ -115,8 +120,9 @@
 
           var text = document.createElement("div");
           text.className = "wb-boot-text";
-          text.textContent =
-            "界面未能正常加载。可以先点「重新加载」再试一次；如果一直失败，可从托盘菜单「检查更新」升级到最新版本。";
+          text.textContent = isDesktop
+            ? "界面未能正常加载。可以先点「重新加载」再试一次；如果一直失败，可从托盘菜单「检查更新」升级到最新版本。"
+            : "界面未能正常加载，通常是资源加载太慢或被中断。可以先点「重新加载」再试一次；仍失败请检查与服务器之间的网络连通性后重试。";
 
           var actions = document.createElement("div");
           actions.className = "wb-boot-actions";
@@ -129,15 +135,19 @@
             window.location.reload();
           });
 
-          var link = document.createElement("a");
-          link.className = "wb-boot-link";
-          link.href = releaseUrl;
-          link.target = "_blank";
-          link.rel = "noreferrer noopener";
-          link.textContent = "前往 GitHub 下载最新版本";
-
           actions.appendChild(reload);
-          actions.appendChild(link);
+
+          // 「前往 GitHub 下载最新版本」只对桌面端有意义。
+          if (isDesktop) {
+            var link = document.createElement("a");
+            link.className = "wb-boot-link";
+            link.href = releaseUrl;
+            link.target = "_blank";
+            link.rel = "noreferrer noopener";
+            link.textContent = "前往 GitHub 下载最新版本";
+            actions.appendChild(link);
+          }
+
           wrap.appendChild(title);
           wrap.appendChild(text);
           wrap.appendChild(actions);
