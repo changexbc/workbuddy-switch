@@ -100,7 +100,9 @@ fn script_body(events: &Path) -> String {
     .join("\n")
 }
 
-/// MSYS 风格路径：`C:\a\b` → `/c/a/b`（PortableGit bash 的原生形态，与插件 hook 一致）。
+/// MSYS 风格路径：`C:\a\b` → `/c/a/b`（PortableGit bash 的原生形态）。
+///
+/// 仅用于识别 2026-11 之前注册的旧命令；新命令不再使用该形态（见 [`script_arg`]）。
 fn msys_path(script: &Path) -> String {
     let s = script.to_string_lossy().replace('\\', "/");
     let mut chars = s.chars();
@@ -111,28 +113,44 @@ fn msys_path(script: &Path) -> String {
     }
 }
 
-/// 注册命令里的脚本路径**实参形态**：Windows 走 MSYS 路径，其余平台原样。
+/// 注册命令里的脚本路径**实参形态**：Windows 走正斜杠的绝对路径，其余平台原样。
+///
+/// Windows 不再用 `/c/...`：那是 PortableGit bash 的挂载形态，而 hook 执行器用的
+/// `bash` 取决于客户端的 PATH（MinGW bash 不认 `/c`，2026-11-20 实证报
+/// `can't open ''/c/...''`）；`C:/...` 两种 bash 都能直接打开。
 ///
 /// marker 与注册命令都用它拼装，保证两侧逐字节一致。
 fn script_arg(script: &Path) -> String {
     if cfg!(windows) {
-        msys_path(script)
+        script.to_string_lossy().replace('\\', "/")
     } else {
         script.to_string_lossy().to_string()
     }
 }
 
-/// 单引号包裹 shell 参数（路径可能含空格 / 中文 / 单引号）。
+/// POSIX 单引号包裹（脚本正文里的重定向用：`sh` / `bash` 执行，路径可能含空格 / 引号）。
 ///
-/// 单引号按 POSIX 写法转义为 `'\''`：这是 marker 与注册命令共用的唯一形态。
+/// 单引号按 POSIX 写法转义为 `'\''`。
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// 注册命令里参数的引用形态：Windows 用双引号，其余平台用 POSIX 单引号。
+///
+/// Windows 的 hook 执行器按 cmd.exe 规则切分命令行，单引号不是引号 ——
+/// `bash '/c/...'` 会把引号原样交给 bash，报 `can't open ''/c/...''`（2026-11-20 实证）。
+fn quote_arg(value: &str) -> String {
+    if cfg!(windows) {
+        format!("\"{value}\"")
+    } else {
+        shell_quote(value)
+    }
 }
 
 /// hook 脚本的启动命令（写进三处 `settings.json` 的 `command`）。
 fn hook_command(script: &Path) -> String {
     let interpreter = if cfg!(windows) { "bash" } else { "sh" };
-    format!("{interpreter} {}", shell_quote(&script_arg(script)))
+    format!("{interpreter} {}", quote_arg(&script_arg(script)))
 }
 
 // ---------------------------------------------------------------------------
@@ -205,24 +223,34 @@ impl HookLayout {
         Self::under(&home_dir())
     }
 
-    /// 配置里的 marker：注册命令中脚本路径的**原样形态**（含 [`shell_quote`] 的引号）。
+    /// 配置里的 marker：注册命令中脚本路径的**原样形态**（含 [`quote_arg`] 的引号）。
     ///
-    /// 必须与写进配置的 command 逐字节一致：否则含单引号 / 空格的路径会让
+    /// 必须与写进配置的 command 逐字节一致：否则含引号 / 空格的路径会让
     /// `contains(marker)` 失配 —— 判定为「未注册」后每次启动都会再追加一条条目。
-    /// Windows 的注册命令是 `bash '/c/...'`，marker 同样取 MSYS 形态。
+    /// Windows 的注册命令是 `bash "C:/..."`，marker 同样取该形态。
     fn marker(&self) -> String {
-        shell_quote(&script_arg(&self.script))
+        quote_arg(&script_arg(&self.script))
     }
 
-    /// 旧版 `hook.cmd` 注册命令里使用的本工具脚本绝对路径。
+    /// 旧版注册命令里使用的本工具脚本形态（只用于清理 / 迁移，不参与「已注册」判定）。
     ///
-    /// 迁移时只能按这条具体路径识别旧条目，不能用 `.wb-switch` / `hook.cmd`
-    /// 等宽泛片段认领第三方命令。
-    fn legacy_marker(&self) -> String {
-        self.script
-            .with_file_name(LEGACY_CMD_NAME)
-            .to_string_lossy()
-            .to_string()
+    /// 迁移时只能按这几条具体形态识别旧条目，不能用 `.wb-switch` / `hook.cmd`
+    /// 等宽泛片段认领第三方命令：
+    /// - 旧版 `hook.cmd` 的绝对路径（2026-09-18 弃用）；
+    /// - Windows 旧命令形态 `bash '/c/.../hook.sh'`（2026-11-20 起改为
+    ///   `bash "C:/.../hook.sh"`：cmd.exe 规则下单引号是字面量，且 PATH 上的
+    ///   非 PortableGit bash 不认 `/c` 挂载）。
+    fn legacy_markers(&self) -> Vec<String> {
+        let mut markers = vec![
+            self.script
+                .with_file_name(LEGACY_CMD_NAME)
+                .to_string_lossy()
+                .to_string(),
+        ];
+        if cfg!(windows) {
+            markers.push(shell_quote(&msys_path(&self.script)));
+        }
+        markers
     }
 
     /// 是否至少存在一处可接入的客户端（存在的数据根）。
@@ -310,9 +338,9 @@ fn read_settings(path: &Path) -> Option<Value> {
 
 /// 条目是否属于本工具：嵌套格式里任一 command hook 的命令包含当前脚本路径。
 ///
-/// `legacy_marker` 只在清理时传入，且必须是本工具旧 `hook.cmd` 的绝对路径；
+/// `legacy_markers` 只在清理 / 迁移时传入，且必须是本工具旧形态的具体路径；
 /// 存在性判定不认旧形态，否则旧条目会挡住新脚本的自动迁移 —— 2026-09-18 实证。
-fn entry_is_ours(entry: &Value, marker: &str, legacy_marker: Option<&str>) -> bool {
+fn entry_is_ours(entry: &Value, marker: &str, legacy_markers: &[String]) -> bool {
     entry
         .get("hooks")
         .and_then(Value::as_array)
@@ -324,7 +352,7 @@ fn entry_is_ours(entry: &Value, marker: &str, legacy_marker: Option<&str>) -> bo
                         .and_then(Value::as_str)
                         .is_some_and(|command| {
                             command.contains(marker)
-                                || legacy_marker.is_some_and(|legacy| command.contains(legacy))
+                                || legacy_markers.iter().any(|legacy| command.contains(legacy))
                         })
             })
         })
@@ -339,7 +367,7 @@ fn config_has_marker(root: &Value, marker: &str) -> bool {
                 hooks
                     .get(*event)
                     .and_then(Value::as_array)
-                    .is_some_and(|entries| entries.iter().any(|e| entry_is_ours(e, marker, None)))
+                    .is_some_and(|entries| entries.iter().any(|e| entry_is_ours(e, marker, &[])))
             })
         })
 }
@@ -374,10 +402,10 @@ fn upsert_event(
     event: &str,
     command: &str,
     marker: &str,
-    legacy_marker: Option<&str>,
+    legacy_markers: &[String],
 ) -> Result<(), String> {
     let entries = event_entries(root, event)?;
-    entries.retain(|entry| !entry_is_ours(entry, marker, legacy_marker));
+    entries.retain(|entry| !entry_is_ours(entry, marker, legacy_markers));
     entries.push(json!({
         "matcher": "",
         "hooks": [{ "type": "command", "command": command }],
@@ -386,7 +414,7 @@ fn upsert_event(
 }
 
 /// 移除本工具在全部已注册事件下的条目；空数组 / 空 `hooks` 对象一并摘掉。
-fn remove_event_entries(root: &mut Value, marker: &str, legacy_marker: Option<&str>) {
+fn remove_event_entries(root: &mut Value, marker: &str, legacy_markers: &[String]) {
     let Some(object) = root.as_object_mut() else {
         return;
     };
@@ -397,7 +425,7 @@ fn remove_event_entries(root: &mut Value, marker: &str, legacy_marker: Option<&s
         let Some(list) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
             continue;
         };
-        list.retain(|entry| !entry_is_ours(entry, marker, legacy_marker));
+        list.retain(|entry| !entry_is_ours(entry, marker, legacy_markers));
         if list.is_empty() {
             hooks.remove(event);
         }
@@ -503,14 +531,14 @@ fn install_at(layout: &HookLayout) -> Result<Value, String> {
     write_script(layout)?;
     let command = hook_command(&layout.script);
     let marker = layout.marker();
-    let legacy_marker = layout.legacy_marker();
+    let legacy_markers = layout.legacy_markers();
     let mut errors = Vec::new();
     for target in &layout.targets {
         // 只对**存在**的客户端写配置：不存在的数据根不创建目录 / 空 settings.json。
         if !target.exists() {
             continue;
         }
-        if let Err(error) = install_target(layout, target, &command, &marker, &legacy_marker) {
+        if let Err(error) = install_target(layout, target, &command, &marker, &legacy_markers) {
             errors.push(format!("{}：{error}", target.settings.display()));
         }
     }
@@ -550,7 +578,7 @@ fn install_target(
     target: &HookTarget,
     command: &str,
     marker: &str,
-    legacy_marker: &str,
+    legacy_markers: &[String],
 ) -> Result<(), String> {
     let original = std::fs::read_to_string(&target.settings).ok();
     let current = match &original {
@@ -564,7 +592,7 @@ fn install_target(
     let baseline = match &current {
         Some(root) => {
             let mut clean = root.clone();
-            remove_event_entries(&mut clean, marker, Some(legacy_marker));
+            remove_event_entries(&mut clean, marker, legacy_markers);
             clean
         }
         None => json!({}),
@@ -575,12 +603,12 @@ fn install_target(
         original.as_deref(),
         &baseline,
         marker,
-        legacy_marker,
+        legacy_markers,
     )?;
 
     let mut root = current.unwrap_or_else(|| json!({}));
     for event in HOOK_EVENTS {
-        upsert_event(&mut root, event, command, marker, Some(legacy_marker))?;
+        upsert_event(&mut root, event, command, marker, legacy_markers)?;
     }
     let content = pretty(&root);
     if original.as_deref() == Some(content.as_str()) {
@@ -600,7 +628,7 @@ fn refresh_backup(
     original: Option<&str>,
     baseline: &Value,
     marker: &str,
-    legacy_marker: &str,
+    legacy_markers: &[String],
 ) -> Result<(), String> {
     let backup = layout.backup_path(target);
     if let Some(parent) = backup.parent() {
@@ -616,7 +644,8 @@ fn refresh_backup(
             }
         }
         Some(text) => {
-            let raw_is_clean = !text.contains(marker) && !text.contains(legacy_marker);
+            let raw_is_clean =
+                !text.contains(marker) && !legacy_markers.iter().any(|legacy| text.contains(legacy));
             if let Ok(existing) = std::fs::read_to_string(&backup) {
                 let same = serde_json::from_str::<Value>(&existing).ok().as_ref() == Some(baseline);
                 if same {
@@ -654,10 +683,10 @@ fn uninstall_and_opt_out(layout: &HookLayout, config_path: &Path) -> Result<Valu
 
 fn uninstall_at(layout: &HookLayout) -> Result<Value, String> {
     let marker = layout.marker();
-    let legacy_marker = layout.legacy_marker();
+    let legacy_markers = layout.legacy_markers();
     let mut errors = Vec::new();
     for target in &layout.targets {
-        if let Err(error) = uninstall_target(layout, target, &marker, &legacy_marker) {
+        if let Err(error) = uninstall_target(layout, target, &marker, &legacy_markers) {
             errors.push(format!("{}：{error}", target.settings.display()));
         }
     }
@@ -685,7 +714,7 @@ fn uninstall_target(
     layout: &HookLayout,
     target: &HookTarget,
     marker: &str,
-    legacy_marker: &str,
+    legacy_markers: &[String],
 ) -> Result<(), String> {
     let Some(original) = std::fs::read_to_string(&target.settings).ok() else {
         return Ok(());
@@ -694,7 +723,7 @@ fn uninstall_target(
         // 损坏的配置不动：宁可留着 marker，也不覆盖用户（或客户端）写坏的内容。
         return Ok(());
     };
-    remove_event_entries(&mut root, marker, Some(legacy_marker));
+    remove_event_entries(&mut root, marker, legacy_markers);
     let cleaned = pretty(&root);
 
     if let Ok(bytes) = std::fs::read_to_string(layout.backup_path(target)) {
@@ -824,17 +853,23 @@ mod tests {
     fn hook_command_quotes_the_script_path() {
         let interpreter = if cfg!(windows) { "bash" } else { "sh" };
         let path = Path::new("/Users/a b/.wb-switch/hook.sh");
-        assert_eq!(
-            hook_command(path),
+        // 含空格的路径必须被引号包住；Windows 用双引号（cmd.exe 不认单引号），
+        // 其余平台用 POSIX 单引号。
+        let expected = if cfg!(windows) {
+            format!("{interpreter} \"/Users/a b/.wb-switch/hook.sh\"")
+        } else {
             format!("{interpreter} '/Users/a b/.wb-switch/hook.sh'")
-        );
-        // 单引号路径按 POSIX 写法转义 —— 裸拼会破坏引号配对，事件被静默丢弃
-        // （2026-09-20 审查反例）。
-        let quoted = Path::new("/Users/o'brien/.wb-switch/hook.sh");
-        assert_eq!(
-            hook_command(quoted),
-            format!("{interpreter} '/Users/o'\\''brien/.wb-switch/hook.sh'")
-        );
+        };
+        assert_eq!(hook_command(path), expected);
+        if cfg!(unix) {
+            // 单引号路径按 POSIX 写法转义 —— 裸拼会破坏引号配对，事件被静默丢弃
+            // （2026-09-20 审查反例）。
+            let quoted = Path::new("/Users/o'brien/.wb-switch/hook.sh");
+            assert_eq!(
+                hook_command(quoted),
+                format!("{interpreter} '/Users/o'\\''brien/.wb-switch/hook.sh'")
+            );
+        }
     }
 
     /// marker 必须与注册命令里的路径形态逐字节一致：否则含引号的路径会判定为「未注册」，
@@ -851,17 +886,24 @@ mod tests {
         cleanup(&layout);
     }
 
-    /// Windows 的注册命令用 bash + MSYS 路径（与插件 hook 同款）；
-    /// `cmd /c` 在 HookExecutor 的 bash 环境里静默失败（2026-09-18 探针实证）。
+    /// Windows 的注册命令用 bash + 正斜杠绝对路径 + 双引号。
+    ///
+    /// 不能用 `bash '/c/...'`：执行器按 cmd.exe 规则切分命令行，单引号是字面量
+    /// （bash 收到带引号的路径，报 `can't open ''/c/...''`），且 PATH 上的 bash
+    /// 未必是 PortableGit（MinGW bash 不认 `/c` 挂载）—— 2026-11-20 实证。
     #[test]
     #[cfg(windows)]
     fn hook_command_uses_bash_on_windows() {
         let path = Path::new(r"C:\Users\a b\.wb-switch\hook.sh");
-        assert_eq!(hook_command(path), "bash '/c/Users/a b/.wb-switch/hook.sh'");
+        assert_eq!(
+            hook_command(path),
+            "bash \"C:/Users/a b/.wb-switch/hook.sh\""
+        );
+        // 双引号形态下路径里的单引号无需转义（Windows 路径也不允许双引号）。
         let quoted = Path::new(r"C:\Users\o'brien\.wb-switch\hook.sh");
         assert_eq!(
             hook_command(quoted),
-            "bash '/c/Users/o'\\''brien/.wb-switch/hook.sh'"
+            "bash \"C:/Users/o'brien/.wb-switch/hook.sh\""
         );
     }
 
@@ -1004,7 +1046,7 @@ mod tests {
     fn legacy_migration_only_removes_the_current_tools_hook_command() {
         let layout = layout();
         let codebuddy = target(&layout, "codebuddy");
-        let legacy = format!("cmd /c \"{}\"", layout.legacy_marker());
+        let legacy = format!("cmd /c \"{}\"", layout.legacy_markers()[0]);
         let current = hook_command(&layout.script);
         let third_party = format!(
             "cmd /c \"{}-third-party/hook.cmd\"",
@@ -1038,6 +1080,41 @@ mod tests {
             stop.iter()
                 .any(|entry| entry["hooks"][0]["command"].as_str() == Some(current.as_str())),
             "本工具旧 hook 应替换为当前命令"
+        );
+
+        cleanup(&layout);
+    }
+
+    /// Windows 旧命令形态 `bash '/c/.../hook.sh'` 安装时必须被替换成当前命令：
+    /// 旧条目在执行器里必然失败（cmd.exe 下引号是字面量、bash 不认 `/c`），
+    /// 留着只会让 Stop hook 每轮都报错。
+    #[cfg(windows)]
+    #[test]
+    fn windows_msys_command_is_migrated_to_the_current_form() {
+        let layout = layout();
+        let codebuddy = target(&layout, "codebuddy");
+        let legacy = format!("bash {}", shell_quote(&msys_path(&layout.script)));
+        let current = hook_command(&layout.script);
+        write_settings(
+            &codebuddy.settings,
+            &json!({
+                "hooks": {
+                    "Stop": [
+                        { "matcher": "", "hooks": [{ "type": "command", "command": legacy }] },
+                    ]
+                }
+            })
+            .to_string(),
+        );
+
+        install_at(&layout).expect("安装必须成功");
+
+        let root = read_settings(&codebuddy.settings).expect("配置");
+        let stop = root["hooks"]["Stop"].as_array().expect("Stop 数组");
+        assert_eq!(stop.len(), 1, "旧命令应被替换而不是并存：{stop:?}");
+        assert_eq!(
+            stop[0]["hooks"][0]["command"].as_str(),
+            Some(current.as_str())
         );
 
         cleanup(&layout);
