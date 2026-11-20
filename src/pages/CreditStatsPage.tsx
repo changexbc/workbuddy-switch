@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
 import {
   ArrowUpDown,
@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/chart";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import * as api from "@/lib/api";
+import { buildCreditExpirySchedule } from "@/lib/credit-expiry-schedule";
 import { creditResourceName } from "@/lib/credit-package-names";
 import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
@@ -44,6 +45,7 @@ import type {
   CreditOfficialUsageAccount,
   CreditOfficialUsageModel,
   CreditOfficialUsageRequest,
+  CreditResource,
   CreditStatsAccount,
   CreditStatsDailyPoint,
   CreditStatsEvent,
@@ -1046,6 +1048,204 @@ function ModelBreakdown({
   );
 }
 
+/** 到期日程的窗口选项；默认 30 天，与趋势图默认口径一致。 */
+const EXPIRY_RANGE_OPTIONS: { key: number; label: string }[] = [
+  { key: 7, label: "7 天" },
+  { key: 30, label: "30 天" },
+  { key: 90, label: "90 天" },
+];
+
+/**
+ * config 键 `expiring` 只用来注入 `--color-expiring`（ChartContainer 的职责）；
+ * Bar 的 dataKey 是 `credits`，即 CreditExpiryDay 的字段名。
+ */
+const EXPIRY_CHART_CONFIG: ChartConfig = {
+  expiring: { label: "到期积分", color: "var(--data-series-amber)" },
+};
+
+/**
+ * 「每日到期积分」卡片：按资源包到期日汇总剩余积分。
+ * 数据全部来自已有的 creditMap，不新增接口，也不依赖官方用量是否可用。
+ */
+function CreditExpiryScheduleCard({
+  accounts,
+  creditMap,
+  creditLoadingMap,
+}: {
+  accounts: CreditStatsAccount[];
+  creditMap: Record<string, CreditExpiry>;
+  creditLoadingMap: Record<string, boolean>;
+}) {
+  /** null = 所有账号汇总；本卡片独立，不影响其他卡片 */
+  const [accountFilter, setAccountFilter] = useState<string | null>(null);
+  /** 本卡片独立的窗口天数，不影响其他卡片 */
+  const [rangeDays, setRangeDays] = useState<number>(30);
+
+  // 只有取到资源包的账号才可选，避免筛出一个必然空白的图表
+  const filterAccounts = accounts.filter((account) => creditMap[account.accountId]?.ok === true);
+  const activeFilterAccount =
+    accountFilter && filterAccounts.some((account) => account.accountId === accountFilter)
+      ? filterAccounts.find((account) => account.accountId === accountFilter)
+      : undefined;
+  const effectiveFilter = activeFilterAccount?.accountId ?? null;
+
+  // 选中账号时只看该账号，否则汇总当前档位下的全部账号
+  const visibleAccounts = effectiveFilter
+    ? accounts.filter((account) => account.accountId === effectiveFilter)
+    : accounts;
+
+  const resources: CreditResource[] = [];
+  let updatedAt: number | null = null;
+  let hasCreditEntry = false;
+  let hasOkCredit = false;
+  let anyLoading = false;
+  for (const account of visibleAccounts) {
+    if (creditLoadingMap[account.accountId]) anyLoading = true;
+    const credit = creditMap[account.accountId];
+    if (!credit) continue;
+    hasCreditEntry = true;
+    if (!credit.ok) continue;
+    hasOkCredit = true;
+    resources.push(...(credit.resources ?? []));
+    if (typeof credit.updatedAt === "number" && (updatedAt === null || credit.updatedAt > updatedAt)) {
+      updatedAt = credit.updatedAt;
+    }
+  }
+
+  // 资源包数量有限，直接计算：避免 useMemo 跨零点后仍沿用昨天的窗口
+  const schedule = buildCreditExpirySchedule(resources, rangeDays);
+
+  let body: ReactNode;
+  if (!hasCreditEntry) {
+    body = anyLoading ? (
+      <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        正在加载资源包…
+      </div>
+    ) : (
+      <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+        尚未采集积分资源包；点击「刷新统计」后展示到期日程。
+      </div>
+    );
+  } else if (!hasOkCredit) {
+    body = (
+      <div className="flex items-start gap-2 py-8 text-sm text-destructive">
+        <CircleAlert className="mt-0.5 size-4 shrink-0" />
+        <span>积分资源包暂不可用，刷新后重试。</span>
+      </div>
+    );
+  } else if (schedule.total === 0) {
+    body = (
+      <div className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+        未来 {rangeDays} 天内没有积分到期。
+        {schedule.nextExpireAt !== null && (
+          <span className="mt-1 block text-xs">最近到期 {formatExpiryDateTime(schedule.nextExpireAt)}</span>
+        )}
+      </div>
+    );
+  } else {
+    body = (
+      <>
+        <ChartContainer config={EXPIRY_CHART_CONFIG} className="h-48 w-full">
+          <BarChart data={schedule.days} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <XAxis
+              dataKey="date"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              minTickGap={16}
+              tickFormatter={(value) => formatChartDate(String(value))}
+            />
+            <YAxis tickLine={false} axisLine={false} width={42} tickFormatter={(value) => formatCredits(value)} />
+            <ChartTooltip
+              cursor={{ fill: "var(--muted)", opacity: 0.4 }}
+              content={
+                <ChartTooltipContent
+                  labelFormatter={(_, payload) => {
+                    const item = Array.isArray(payload) ? payload[0] : payload;
+                    return `${formatChartDate(String(item?.payload?.date ?? ""))} 到期`;
+                  }}
+                />
+              }
+            />
+            <Bar
+              dataKey="credits"
+              name="到期积分"
+              fill="var(--color-expiring)"
+              radius={[4, 4, 0, 0]}
+              maxBarSize={28}
+              isAnimationActive={false}
+            />
+          </BarChart>
+        </ChartContainer>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            未来 {rangeDays} 天合计 {formatCredits(schedule.total)} 积分
+          </span>
+          <span>
+            {schedule.nextExpireAt !== null
+              ? `最近到期 ${formatExpiryDateTime(schedule.nextExpireAt)}`
+              : "暂无到期计划"}
+          </span>
+        </div>
+        <p className="sr-only">
+          {schedule.days
+            .filter((point) => point.credits > 0)
+            .map((point) => `${point.date} 到期 ${formatCredits(point.credits)} 积分（${point.packages} 个资源包）`)
+            .join("；")}
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <section className="min-w-0 space-y-2.5" aria-labelledby="credit-expiry-title">
+      <div className="px-1">
+        <h2 id="credit-expiry-title" className="text-[13px] font-medium leading-5">
+          每日到期积分
+        </h2>
+      </div>
+      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
+        <CardHeader className="gap-0 px-4 pt-3 pb-0 sm:px-5">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <CardDescription className="min-w-0 text-xs">
+              按资源包到期日汇总剩余积分；到期后积分不可再用。
+              {updatedAt !== null ? ` · 数据更新于 ${formatDateTime(updatedAt)}` : ""}
+            </CardDescription>
+            <div className="flex max-w-full flex-wrap items-center gap-1.5">
+              <AccountFilterMenu
+                accounts={filterAccounts}
+                accountFilter={effectiveFilter}
+                onAccountFilterChange={setAccountFilter}
+                ariaLabel="按账号筛选到期积分"
+              />
+              <div className="flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1" aria-label="到期统计范围">
+                {EXPIRY_RANGE_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`cursor-pointer rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                      rangeDays === option.key
+                        ? "bg-background font-medium text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setRangeDays(option.key)}
+                    aria-pressed={rangeDays === option.key}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="min-w-0 px-4 pt-3 pb-4 sm:px-5">{body}</CardContent>
+      </Card>
+    </section>
+  );
+}
+
 function AccountUsageShare({
   stats,
   officialUsage,
@@ -1952,6 +2152,12 @@ export default function CreditStatsPage() {
                   officialUsage={official}
                 />
               )}
+
+              <CreditExpiryScheduleCard
+                accounts={filteredStats.accounts}
+                creditMap={creditMap}
+                creditLoadingMap={creditLoadingMap}
+              />
 
               {/* 与下方「积分明细」重复，先隐藏。
               <AccountTable stats={stats} officialUsage={officialUsage} selectedId={selectedId} onSelect={setSelectedId} />
