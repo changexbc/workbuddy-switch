@@ -70,8 +70,26 @@ fn main() {
         std::process::exit(1);
     }
 }
+/// Hook commands are stored in a JSON settings file and later run by the host
+/// with `shell: true`. On Windows that shell is `cmd.exe`, which does not treat
+/// `'` as a quote, so the Windows form uses double quotes and forward slashes;
+/// both the executable and `--home` then survive cmd's parsing unchanged.
 fn quote_path(p: &Path) -> String {
-    format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"))
+    quote_path_for(p, cfg!(windows))
+}
+/// The single-quote form written before Windows was supported. Those commands
+/// never ran there; matching them during install replaces the dead entry
+/// instead of leaving it behind next to the working one.
+fn legacy_quote_path(p: &Path) -> String {
+    quote_path_for(p, false)
+}
+fn quote_path_for(p: &Path, windows: bool) -> String {
+    let text = p.to_string_lossy();
+    if windows {
+        format!("\"{}\"", text.replace('\\', "/"))
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
 }
 /// One raw hook payload from a user-configured third-party tool. The source is
 /// the `--integration` argument, never the payload, and stdout stays empty so a
@@ -105,10 +123,24 @@ fn custom_hook() -> Result<(), String> {
     Ok(())
 }
 fn hook_command(binary: &Path, home: &Path, source: &str, edition: Option<&str>) -> String {
+    build_hook_command(quote_path, binary, home, source, edition)
+}
+/// The same command spelled with the pre-Windows quoting, for recognizing
+/// entries an older runtime installed.
+fn legacy_hook_command(binary: &Path, home: &Path, source: &str, edition: Option<&str>) -> String {
+    build_hook_command(legacy_quote_path, binary, home, source, edition)
+}
+fn build_hook_command(
+    quote: fn(&Path) -> String,
+    binary: &Path,
+    home: &Path,
+    source: &str,
+    edition: Option<&str>,
+) -> String {
     let mut command = format!(
         "{} hook --home {} --source {}",
-        quote_path(binary),
-        quote_path(home),
+        quote(binary),
+        quote(home),
         source
     );
     if let Some(edition) = edition {
@@ -532,5 +564,44 @@ mod recovery_tests {
         assert!(collector.hub.snapshot()["sessions"].as_array().unwrap().is_empty());
         assert!(!home.join(".agent-studio/codex-recovery-v1.json").exists());
         std::fs::remove_dir_all(home).unwrap();
+    }
+}
+#[cfg(test)]
+mod hook_command_tests {
+    use super::*;
+    fn windows_command(binary: &Path, home: &Path, source: &str) -> String {
+        build_hook_command(|p| quote_path_for(p, true), binary, home, source, None)
+    }
+    // cmd.exe strips double quotes and keeps forward slashes; single quotes are
+    // literal characters, so the old spelling named an executable starting
+    // with `'` and never ran.
+    #[test]
+    fn windows_commands_are_quoted_for_cmd() {
+        let binary = Path::new(r"C:\Users\me\.agent-studio\bin\agent-studio-runtime-v1.exe");
+        let home = Path::new(r"C:\Users\me");
+        assert_eq!(
+            quote_path_for(binary, true),
+            r#""C:/Users/me/.agent-studio/bin/agent-studio-runtime-v1.exe""#
+        );
+        assert_eq!(
+            windows_command(binary, home, "codebuddy-ide"),
+            r#""C:/Users/me/.agent-studio/bin/agent-studio-runtime-v1.exe" hook --home "C:/Users/me" --source codebuddy-ide"#
+        );
+        assert!(!windows_command(binary, home, "codebuddy-ide").contains('\''));
+    }
+    #[test]
+    fn posix_commands_keep_their_single_quote_escaping() {
+        assert_eq!(quote_path_for(Path::new("/tmp/it's"), false), r#"'/tmp/it'\''s'"#);
+    }
+    // Install-time matching compares whole strings; the legacy spelling must be
+    // reproducible so a fixed runtime removes the entries it can never run.
+    #[test]
+    fn the_legacy_spelling_is_the_pre_windows_command() {
+        let binary = Path::new(r"C:\Users\me\bin\runtime.exe");
+        let home = Path::new(r"C:\Users\me");
+        assert_eq!(
+            legacy_hook_command(binary, home, "workbuddy", Some("domestic")),
+            r#"'C:\Users\me\bin\runtime.exe' hook --home 'C:\Users\me' --source workbuddy --edition domestic"#
+        );
     }
 }

@@ -1,6 +1,7 @@
 // Hook-driven sources never report their own exit. The poll loop therefore
-// probes the macOS host app directly; a missing main process is the only
-// reliable signal that a force-quit happened without a SessionEnd hook.
+// probes the host app directly; a missing main process is the only reliable
+// signal that a force-quit happened without a SessionEnd hook. macOS/Linux read
+// `ps`, Windows walks the process snapshot.
 use crate::{hub::Hub, now, text};
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -33,6 +34,88 @@ pub fn match_host(stdout: &str, bundles: &[&str]) -> bool {
     })
 }
 
+/// Windows image names (without `.exe`). Every renderer/extension helper shares
+/// the main image name, so "any hit" is the right granularity: helpers exit with
+/// the app, and a lone helper can only delay the exit by one miss.
+pub fn host_images(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "workbuddy" => &["WorkBuddy", "WorkBuddyAI"],
+        "codebuddy-ide" => &["CodeBuddy", "CodeBuddy CN"],
+        // The VS Code family shares the plugin hook payload client=vscode; any
+        // one live member keeps that host kind alive.
+        "vscode" => &[
+            "Code",
+            "Code - Insiders",
+            "VSCodium",
+            "Cursor",
+            "Windsurf",
+        ],
+        _ => &[],
+    }
+}
+
+/// One image name per line, or the first field of a `tasklist /FO CSV` row.
+fn image_name(row: &str) -> Option<&str> {
+    let row = row.trim();
+    if let Some(rest) = row.strip_prefix('"') {
+        let end = rest.find('"')?;
+        return (!rest[..end].is_empty()).then_some(&rest[..end]);
+    }
+    (!row.is_empty()).then_some(row)
+}
+
+pub fn match_windows_images(stdout: &str, images: &[&str]) -> bool {
+    stdout.lines().filter_map(image_name).any(|name| {
+        let stem = name
+            .strip_suffix(".exe")
+            .or_else(|| name.strip_suffix(".EXE"))
+            .unwrap_or(name);
+        images.iter().any(|image| image.eq_ignore_ascii_case(stem))
+    })
+}
+
+/// Walk the process snapshot for the image names, one per line. `tasklist`
+/// takes the better part of a second here and the poll runs every few seconds,
+/// so the Win32 snapshot (a few milliseconds) is used instead.
+#[cfg(target_os = "windows")]
+fn windows_process_names() -> Result<String, String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let mut names = String::new();
+    // SAFETY: the snapshot handle is owned here and closed before returning;
+    // every entry call receives the `dwSize` the API requires.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err("进程快照不可用".into());
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut present = Process32FirstW(snapshot, &mut entry) != 0;
+        while present {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(entry.szExeFile.len());
+            names.push_str(&String::from_utf16_lossy(&entry.szExeFile[..end]));
+            names.push('\n');
+            present = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    Ok(names)
+}
+
+#[cfg(target_os = "windows")]
+pub fn default_ps() -> Result<String, String> {
+    windows_process_names()
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn default_ps() -> Result<String, String> {
     let output = std::process::Command::new("ps")
         .args(["-axo", "comm="])
@@ -86,7 +169,11 @@ impl HostPresence {
             last_check: None,
             ttl,
             min_misses,
-            supported: cfg!(any(target_os = "macos", target_os = "linux")),
+            supported: cfg!(any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "windows"
+            )),
             runner,
         }
     }
@@ -116,7 +203,12 @@ impl HostPresence {
                 return Presence::Unknown;
             }
         };
-        if match_host(&output, host_bundles(&self.kind)) {
+        let alive = if cfg!(windows) {
+            match_windows_images(&output, host_images(&self.kind))
+        } else {
+            match_host(&output, host_bundles(&self.kind))
+        };
+        if alive {
             self.seen_alive = true;
             self.misses = 0;
             self.cached = Presence::Alive;
@@ -314,7 +406,11 @@ mod tests {
     }
 
     // 不支持的平台必须返回 Unknown 而不是猜——探测不跑，也不能假装看过。
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows"
+    )))]
     #[test]
     fn unsupported_platforms_report_unknown_and_never_run_the_probe() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -335,6 +431,37 @@ mod tests {
             0,
             "unsupported platforms must not shell out"
         );
+    }
+
+    // The probe must actually walk the snapshot, not just parse fixtures.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_windows_probe_lists_running_images() {
+        let names = default_ps().unwrap();
+        assert!(
+            names.lines().any(|name| name.eq_ignore_ascii_case("svchost.exe")),
+            "{names}"
+        );
+    }
+
+    // Windows has no bundle path to anchor on: image names are the whole signal,
+    // and each host kind must stay separate.
+    #[test]
+    fn windows_image_names_match_their_own_host_kind() {
+        let running = "Code.exe\nCode.exe\ncrashpad_handler.exe\nWorkBuddy.exe\nWorkBuddyAI.exe\nCodeBuddy.exe\nCodeBuddy CN.exe\n";
+        for kind in ["workbuddy", "codebuddy-ide", "vscode"] {
+            assert!(match_windows_images(running, host_images(kind)), "{kind}");
+        }
+        assert!(!match_windows_images("crashpad_handler.exe\n", host_images("vscode")));
+        assert!(!match_windows_images("CodeBuddy.exe\n", host_images("vscode")));
+        assert!(!match_windows_images("WorkBuddyAI.exe\n", host_images("codebuddy-ide")));
+        assert!(!match_windows_images("Code.exe\n", host_images("codebuddy-ide")));
+        // `tasklist /FO CSV` rows are accepted too, in case the probe changes.
+        assert!(match_windows_images(
+            "\"Code.exe\",\"1234\",\"Console\",\"1\",\"99,000 K\"\n",
+            host_images("vscode")
+        ));
+        assert!(!match_windows_images("", host_images("vscode")));
     }
 
     #[test]

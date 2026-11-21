@@ -1,6 +1,7 @@
 // Hook-driven sources never report their own exit. The poll loop therefore
-// probes the macOS host app directly; a missing main process is the only
-// reliable signal that a force-quit happened without a SessionEnd hook.
+// probes the host app directly; a missing main process is the only reliable
+// signal that a force-quit happened without a SessionEnd hook. macOS/Linux read
+// `ps`, Windows reads image names from `tasklist`.
 import { execFile } from 'node:child_process';
 
 const TERMINAL = new Set(['done', 'error', 'aborted']);
@@ -15,14 +16,42 @@ export const HOST_BUNDLES = {
   vscode: ['Visual Studio Code.app', 'Code - Insiders.app', 'VSCodium.app', 'Cursor.app', 'Windsurf.app'],
 };
 
+// Windows image names (without `.exe`). Every renderer/extension helper shares
+// the main image name, so "any hit" is the right granularity: helpers exit with
+// the app, and a lone helper can only delay the exit by one miss.
+export const HOST_IMAGES = {
+  workbuddy: ['WorkBuddy', 'WorkBuddyAI'],
+  'codebuddy-ide': ['CodeBuddy', 'CodeBuddy CN'],
+  vscode: ['Code', 'Code - Insiders', 'VSCodium', 'Cursor', 'Windsurf'],
+};
+
 export function matchHost(stdout, bundles) {
   const lines = String(stdout || '').split('\n');
   return bundles.some(bundle => lines.some(line => line.includes(`/${bundle}/Contents/MacOS/`)));
 }
 
+/** One image name per line, or the first field of a `tasklist /FO CSV` row. */
+function imageName(line) {
+  const row = String(line || '').trim();
+  if (!row.startsWith('"')) return row;
+  const end = row.indexOf('"', 1);
+  return end < 0 ? '' : row.slice(1, end);
+}
+
+export function matchImages(stdout, images) {
+  return String(stdout || '').split('\n').some(line => {
+    const stem = imageName(line).replace(/\.exe$/i, '');
+    return stem !== '' && images.some(image => image.toLowerCase() === stem.toLowerCase());
+  });
+}
+
 export function runPs() {
+  // `tasklist` output is the Windows counterpart of `ps -axo comm=`.
+  const [program, args] = process.platform === 'win32'
+    ? ['tasklist', ['/FO', 'CSV', '/NH']]
+    : ['ps', ['-axo', 'comm=']];
   return new Promise((resolve, reject) => {
-    execFile('ps', ['-axo', 'comm='], { timeout: 1000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+    execFile(program, args, { timeout: 1500, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => {
       if (error) reject(error); else resolve(String(stdout));
     });
   });
@@ -42,13 +71,15 @@ export class HostPresence {
     if (this.cached === 'gone') this.lastCheck = -Infinity;
   }
   async observe() {
-    if (!['darwin', 'linux'].includes(this.platform)) return 'unknown';
+    if (!['darwin', 'linux', 'win32'].includes(this.platform)) return 'unknown';
     if (this.now() - this.lastCheck < this.ttlMs) return this.cached;
     this.lastCheck = this.now();
     let output;
     try { output = await this.run(); } catch { this.cached = 'unknown'; return 'unknown'; }
     const bundles = HOST_BUNDLES[this.source] || [];
-    if (matchHost(output, bundles)) {
+    // The two shapes cannot collide: bundle paths only come from `ps`, image
+    // names only from `tasklist`, so either matcher may run on either platform.
+    if (matchHost(output, bundles) || matchImages(output, HOST_IMAGES[this.source] || [])) {
       this.seenAlive = true; this.misses = 0; this.declared = false;
       this.cached = 'alive'; return 'alive';
     }

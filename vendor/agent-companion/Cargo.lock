@@ -19,6 +19,7 @@ dependencies = [
  "serde_json",
  "tungstenite",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

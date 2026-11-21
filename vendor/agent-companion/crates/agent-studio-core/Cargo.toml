@@ -12,3 +12,10 @@ ureq = { version = "2", default-features = false, features = ["json"] }
 tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
 base64 = "0.22"
 fs2 = "0.4"
+# Host presence probing on Windows: walking the process snapshot is far cheaper
+# than `tasklist`, which the poll loop would otherwise run every few seconds.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+] }

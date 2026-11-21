@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::process::Stdio;
 
 const VSCODE_APP: &str = "Visual Studio Code.app";
 const VSCODE_BUNDLE: &str = "com.microsoft.VSCode";
@@ -143,6 +145,23 @@ fn vscode_history_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+/// The same layout under `%APPDATA%`; the plugin writes the workspace bucket as
+/// a forward-slash path, which `decode_bucket_folder` already understands.
+#[cfg(target_os = "windows")]
+fn vscode_history_roots() -> Vec<PathBuf> {
+    let Some(roaming) = std::env::var_os("APPDATA") else {
+        return Vec::new();
+    };
+    let base = PathBuf::from(roaming);
+    ["Code", "Code - Insiders"]
+        .into_iter()
+        .map(|name| {
+            base.join(name)
+                .join("User/globalStorage/tencent-cloud.coding-copilot/genie-history")
+        })
+        .collect()
+}
+
 /// The bucket whose `conversations/<session>` entry exists, or `None` when the
 /// session is not archived under this root. Read-only, and silent on any error.
 fn bucket_for_session(root: &Path, session: &str) -> Option<String> {
@@ -218,6 +237,25 @@ fn bucket_matches_folder(bucket: &str, folder: &str) -> bool {
     } else {
         encoded == bucket
     }
+}
+
+/// The same window can reach this code as `d:\work` (a hook's `cwd`) while the
+/// plugin archived it as `d:/work`, or the other way around. Both spellings name
+/// one folder, so either may reproduce the bucket.
+fn folder_matches_bucket(bucket: &str, folder: &Path) -> bool {
+    let text = folder.to_string_lossy();
+    if bucket_matches_folder(bucket, &text) {
+        return true;
+    }
+    let flipped: String = text
+        .chars()
+        .map(|ch| match ch {
+            '\\' => '/',
+            '/' => '\\',
+            other => other,
+        })
+        .collect();
+    flipped != text && bucket_matches_folder(bucket, &flipped)
 }
 
 /// The base64 texts a bucket name may stand for: the trailing `_` as padding
@@ -334,7 +372,7 @@ fn resolve_vscode_folder(
             // same bucket is still that window's own folder.
             BucketFolder::Unknown => {
                 cwd.filter(|path| usable_folder(path))
-                    .filter(|path| sanitize_workspace_id(&path.to_string_lossy()) == bucket)
+                    .filter(|path| folder_matches_bucket(&bucket, path))
                     .map(Path::to_path_buf)
             }
         };
@@ -420,12 +458,137 @@ fn open_session_target(target: SessionTarget) -> Result<(), String> {
     }
 }
 
+/// Launching a GUI app must not wait for it: a cold VS Code becomes the process
+/// we started, so `output()` would block until the editor quits.
+#[cfg(target_os = "windows")]
+fn spawn_detached(command: &mut Command) -> Result<(), String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("无法启动应用：{e}"))
+}
+
+/// Console tools (`where`, `reg`) must not flash a window when the host runs
+/// without a console.
+#[cfg(target_os = "windows")]
+fn hidden_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new(program);
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    command
+}
+
+/// The install directory named by the `code` shim on PATH. VS Code can be
+/// installed anywhere (`D:\Program Files\...` included), so this beats guessing
+/// a fixed location.
+#[cfg(target_os = "windows")]
+fn vscode_install_from_path() -> Option<PathBuf> {
+    let output = hidden_command("where.exe").arg("code").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines().find_map(|line| {
+        let shim = PathBuf::from(line.trim());
+        let install = shim.parent()?.parent()?;
+        let exe = install.join("Code.exe");
+        exe.is_file().then_some(exe)
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn default_vscode_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(PathBuf::from(local).join("Programs/Microsoft VS Code/Code.exe"));
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(base) = std::env::var_os(key) {
+            paths.push(PathBuf::from(base).join("Microsoft VS Code/Code.exe"));
+        }
+    }
+    paths
+}
+
+/// `App Paths` is what `start code` resolves, and it also covers installs that
+/// skipped the "add to PATH" option.
+#[cfg(target_os = "windows")]
+fn vscode_executable_from_registry() -> Option<PathBuf> {
+    for hive in ["HKCU", "HKLM"] {
+        let key = format!(r"{hive}\Software\Microsoft\Windows\CurrentVersion\App Paths\Code.exe");
+        let Ok(output) = hidden_command("reg.exe")
+            .args(["query", &key, "/ve"])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let Some((_, value)) = line.split_once("REG_SZ") else {
+                continue;
+            };
+            let path = PathBuf::from(value.trim().trim_matches('"'));
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn vscode_executable() -> Option<PathBuf> {
+    vscode_install_from_path()
+        .or_else(|| {
+            default_vscode_paths()
+                .into_iter()
+                .find(|path| path.is_file())
+        })
+        .or_else(vscode_executable_from_registry)
+}
+
+/// Opens a folder (or just the editor) through the executable itself, so VS
+/// Code's single-instance logic focuses the window that already holds it.
+#[cfg(target_os = "windows")]
+fn open_vscode_folder(folder: Option<&Path>) -> Result<(), String> {
+    let exe = vscode_executable().ok_or("未找到 VS Code 可执行文件，请确认已安装并加入 PATH")?;
+    let mut command = Command::new(exe);
+    if let Some(folder) = folder {
+        command.arg(folder);
+    }
+    spawn_detached(&mut command)
+}
+
+#[cfg(target_os = "windows")]
+fn open_scheme(scheme: &str) -> Result<(), String> {
+    let url = format!("{scheme}://file/");
+    run_command(Command::new("rundll32.exe").args(["url.dll", "FileProtocolHandler", &url]))
+}
+
 #[cfg(target_os = "windows")]
 fn open_session_target(target: SessionTarget) -> Result<(), String> {
-    let SessionTarget::Link(target) = target else {
-        return Err("当前平台尚不支持仅唤起应用".into());
-    };
-    run_command(Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", target.as_str()]))
+    match target {
+        SessionTarget::Link(target) => run_command(
+            Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", target.as_str()]),
+        ),
+        SessionTarget::VSCode { session, cwd } => open_vscode_folder(
+            resolve_vscode_folder(&vscode_history_roots(), &session, cwd.as_deref()).as_deref(),
+        ),
+        // Windows has no bundle identifiers: VS Code is launched by path, the
+        // CodeBuddy apps only through the scheme their installer registered.
+        SessionTarget::App(id) => match id {
+            VSCODE_BUNDLE => open_vscode_folder(None),
+            "com.tencent.codebuddy" => open_scheme("codebuddy"),
+            "com.tencent.codebuddycn" => open_scheme("codebuddycn"),
+            _ => Err("当前平台尚不支持仅唤起该应用".into()),
+        },
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -514,12 +677,48 @@ mod tests {
     /// A scratch root under `/tmp`, kept deliberately short: the truncation
     /// cases below need the 48-byte base64 prefix of a long path to fall inside
     /// a name rather than on a temp-directory boundary. The caller removes it.
+    #[cfg(not(target_os = "windows"))]
     fn scratch(name: &str) -> PathBuf {
         let path = PathBuf::from("/tmp").join(format!("ast-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
     }
+    // Windows reaches this code with either separator: the hook's `cwd` comes
+    // from the editor, the bucket from the plugin's own encoder.
+    #[test]
+    fn either_separator_matches_the_bucket_the_plugin_wrote() {
+        let bucket = sanitize_workspace_id("d:/work/app");
+        assert!(folder_matches_bucket(&bucket, Path::new("d:/work/app")));
+        assert!(folder_matches_bucket(&bucket, Path::new(r"d:\work\app")));
+        assert!(!folder_matches_bucket(&bucket, Path::new(r"d:\work\other")));
+        // A cut-at-64 bucket still compares as a prefix of the same folder.
+        let long = format!("d:/{}", "a".repeat(80));
+        let cut = sanitize_workspace_id(&long);
+        assert_eq!(cut.len(), 64);
+        assert!(folder_matches_bucket(&cut, Path::new(&long.replace('/', "\\"))));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_history_roots_live_under_appdata() {
+        let Some(roaming) = std::env::var_os("APPDATA") else {
+            return;
+        };
+        let roots = vscode_history_roots();
+        assert!(!roots.is_empty());
+        assert!(roots.iter().all(|root| root.starts_with(&roaming)));
+        assert!(roots.iter().any(|root| root.ends_with(
+            "User/globalStorage/tencent-cloud.coding-copilot/genie-history"
+        )));
+    }
+
+    // The bucket is a base64 of the folder string cut at 64 characters, so these
+    // fixtures need a POSIX path short enough to survive: on Windows every temp
+    // path is already longer than the 48 bytes a full bucket holds, and a cut
+    // bucket is undecodable by design. `either_separator_matches_...` covers the
+    // Windows spelling without walking the filesystem.
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn vscode_bucket_names_decode_back_to_their_window_folder() {
         // Every `/`, `+` and `=` of the base64 becomes `_`: base64("/") is
@@ -587,6 +786,8 @@ mod tests {
             }
         }
     }
+    // Same fixture constraint as the bucket round-trip above.
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn vscode_folder_resolution_follows_the_plugin_history_bucket() {
         let base = scratch("resolve");

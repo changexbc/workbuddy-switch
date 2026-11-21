@@ -111,6 +111,14 @@ test('the VS Code plugin keeps the IDE source but becomes a VS Code host',()=>{
  assert.equal(screenSessionLink({...state,cwd:'/'},{x:(14+410*484/512)/512,y:(18+262*232/288)/288}),'/api/open-session?source=codebuddy-ide&host=vscode&session=conv-1');
 });
 
+test('Windows drive folders keep their drive prefix',()=>{
+ assert.equal(codeBuddyFolderLink('D:\\Work\\a b'),'codebuddy://file/D:/Work/a%20b');
+ assert.equal(agentSessionLink({source:'codebuddy-ide',sessionId:'conv-1',cwd:'D:\\Work\\app'}),'codebuddy://file/D:/Work/app');
+ assert.equal(agentSessionLink({source:'codebuddy-ide',hostKind:'vscode',sessionId:'conv-1',cwd:'D:\\Work\\app'}),'/api/open-session?source=codebuddy-ide&host=vscode&session=conv-1&cwd=D%3A%2FWork%2Fapp');
+ assert.equal(agentSessionLink({source:'codebuddy-ide',hostKind:'vscode',sessionId:'conv-1',cwd:'D:/Work/app'}),'/api/open-session?source=codebuddy-ide&host=vscode&session=conv-1&cwd=D%3A%2FWork%2Fapp');
+ assert.equal(hasOpenableFolder('D:\\Work\\app'),true);
+});
+
 test('a missing or unknown hostKind behaves exactly like a CodeBuddy IDE session',()=>{
  for(const hostKind of [undefined,'codebuddy-ide','','cursor']){
   const s={source:'codebuddy-ide',sessionId:'conv-1',cwd:'/work/app',...(hostKind===undefined?{}:{hostKind})};

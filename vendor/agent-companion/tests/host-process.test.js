@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HOST_BUNDLES, HostPresence, endHostSessions, matchHost } from '../collector/lib/host-process.js';
+import { HOST_BUNDLES, HOST_IMAGES, HostPresence, endHostSessions, matchHost, matchImages } from '../collector/lib/host-process.js';
 import { Hub } from '../collector/lib/hub.js';
 
 const PS_MAIN = '/Applications/WorkBuddy.app/Contents/MacOS/Electron\n/Applications/WorkBuddy.app/Contents/Frameworks/WorkBuddy Helper.app/Contents/MacOS/WorkBuddy Helper\n';
@@ -67,8 +67,31 @@ test('an unreadable process list or an unsupported platform stays unknown', asyn
   failing.noteHook();
   assert.equal(await failing.observe(), 'unknown');
   assert.equal(await failing.observe(), 'unknown');
-  const other = new HostPresence({ source: 'workbuddy', platform: 'win32', run: async () => PS_MAIN });
+  const other = new HostPresence({ source: 'workbuddy', platform: 'freebsd', run: async () => PS_MAIN });
   assert.equal(await other.observe(), 'unknown');
+});
+
+test('Windows image names match their own host kind', () => {
+  const running = 'Code.exe\nCode.exe\ncrashpad_handler.exe\nWorkBuddy.exe\nWorkBuddyAI.exe\nCodeBuddy.exe\nCodeBuddy CN.exe\n';
+  for (const kind of ['workbuddy', 'codebuddy-ide', 'vscode']) assert.equal(matchImages(running, HOST_IMAGES[kind]), true, kind);
+  assert.equal(matchImages('crashpad_handler.exe\n', HOST_IMAGES.vscode), false);
+  assert.equal(matchImages('CodeBuddy.exe\n', HOST_IMAGES.vscode), false);
+  assert.equal(matchImages('Code.exe\n', HOST_IMAGES['codebuddy-ide']), false);
+  // `tasklist /FO CSV` rows parse too, in case the probe changes.
+  assert.equal(matchImages('"Code.exe","1234","Console","1","99,000 K"\n', HOST_IMAGES.vscode), true);
+  assert.equal(matchImages('', HOST_IMAGES.vscode), false);
+});
+
+test('a win32 probe resolves through image names and still debounces exits', async () => {
+  let time = 0, output = 'Code.exe\n';
+  const presence = new HostPresence({ source: 'vscode', platform: 'win32', now: () => time, ttlMs: 0, minMisses: 2, run: async () => output });
+  presence.noteHook();
+  assert.equal(await presence.observe(), 'alive');
+  output = 'crashpad_handler.exe\n';
+  time += 1;
+  assert.equal(await presence.observe(), 'alive', 'one miss must not declare an exit');
+  time += 1;
+  assert.equal(await presence.observe(), 'gone');
 });
 
 test('ending host sessions only touches unfinished sessions of that source', () => {

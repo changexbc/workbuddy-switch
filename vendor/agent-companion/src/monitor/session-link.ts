@@ -107,13 +107,21 @@ function folderAbsolutePath(cwd: unknown): string | null {
   if(typeof cwd !== 'string' || !cwd.trim())return null;
   const normalized=cwd.trim().replace(/\\/g,'/').replace(/\/+$/,'');
   if(!normalized || !/^(?:\/|[A-Za-z]:\/)/.test(normalized))return null;
-  return normalized.startsWith('/')?normalized:`/${normalized}`;
+  // A drive path must stay `d:/Work/app`: prefixing it with `/` produces
+  // `/d:/Work/app`, which the desktop side cannot resolve or open.
+  return normalized;
 }
 export function codeBuddyFolderLink(cwd: unknown, session?: LinkableSession | null): string | null {
   const absolute=folderAbsolutePath(cwd);
   if(!absolute)return null;
   const scheme=isCodeBuddyInternationalType(session?.agentType)?'codebuddy':'codebuddycn';
-  return `${scheme}://file${absolute.split('/').map(encodeURIComponent).join('/')}`;
+  // Strip the separator before joining: a POSIX path starts with `/` while a
+  // drive path does not, and the `/` after `file` must be added exactly once.
+  // The drive colon stays literal (`D:/Work`), as URL handlers expect it.
+  const suffix=absolute.replace(/^\/+/,'').split('/')
+    .map((segment,index)=>index===0&&/^[A-Za-z]:$/.test(segment)?segment:encodeURIComponent(segment))
+    .join('/');
+  return `${scheme}://file/${suffix}`;
 }
 /**
  * True when the session carries a folder the desktop side can open. The VS Code

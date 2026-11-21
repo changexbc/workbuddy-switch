@@ -142,7 +142,9 @@ function writeCodeBuddyDb(dbPath, sessions) {
   db.close();
 }
 
-test('Codeg desktop db lives under Application Support/app.codeg',()=>{
+// Codeg ships on macOS only, and `path.join` spells the same fixture with
+// backslashes on Windows.
+test('Codeg desktop db lives under Application Support/app.codeg', { skip: process.platform === 'win32' },()=>{
  const paths=defaultCodegDbPaths('/Users/apple');
  assert.equal(paths[0],'/Users/apple/Library/Application Support/app.codeg/codeg.db');
  assert.ok(paths.includes('/Users/apple/Library/Application Support/codeg/codeg.db'));

@@ -1,4 +1,4 @@
-use super::{ensure_hook_binary, hook_command};
+use super::{ensure_hook_binary, hook_command, legacy_hook_command};
 use agent_studio_core::{
     adapters::{
         codebuddy_settings_files, workbuddy_edition, workbuddy_settings_files, Collector,
@@ -42,25 +42,32 @@ fn binary(c: &Collector) -> PathBuf {
         ".agent-studio/bin/agent-studio-runtime-v1"
     })
 }
+fn hook_edition(source: &str, file: &Path) -> Option<&'static str> {
+    if source == "workbuddy" {
+        Some(workbuddy_edition(file))
+    } else {
+        None
+    }
+}
 fn command(c: &Collector, source: &str, file: &Path) -> String {
-    hook_command(
-        &binary(c),
-        &c.home,
-        source,
-        if source == "workbuddy" {
-            Some(workbuddy_edition(file))
-        } else {
-            None
-        },
-    )
+    hook_command(&binary(c), &c.home, source, hook_edition(source, file))
+}
+/// The spelling an older runtime installed. On Windows those commands named an
+/// executable that starts with `'` and never ran, so they count as ours and are
+/// removed on install instead of lingering beside the working command.
+fn legacy_command(c: &Collector, source: &str, file: &Path) -> String {
+    legacy_hook_command(&binary(c), &c.home, source, hook_edition(source, file))
 }
 // Match complete commands at known application-owned locations, never substring names.
 fn owned(c: &Collector, source: &str, file: &Path, value: &Value) -> bool {
     let cmd = text(&value["command"]);
-    if cmd == command(c, source, file) {
+    if cmd == command(c, source, file) || cmd == legacy_command(c, source, file) {
         return true;
     }
-    if source == "workbuddy" && cmd == hook_command(&binary(c), &c.home, source, None) {
+    if source == "workbuddy"
+        && (cmd == hook_command(&binary(c), &c.home, source, None)
+            || cmd == legacy_hook_command(&binary(c), &c.home, source, None))
+    {
         return true;
     }
     let name = match source {
@@ -256,6 +263,39 @@ pub fn set(c: &mut Collector, p: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // A user who ran the pre-Windows runtime already has one such entry per
+    // event. Installing must replace it, not leave a second command that fails
+    // on every turn.
+    #[test]
+    fn install_replaces_the_pre_windows_single_quote_hook() {
+        let home = std::env::temp_dir().join(format!("integrations-legacy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(home.join(".codebuddy")).unwrap();
+        let c = Collector::new(home.clone()).unwrap();
+        let file = files(&c, "codebuddy-ide")[0].clone();
+        let dead = super::super::legacy_hook_command(&binary(&c), &c.home, "codebuddy-ide", None);
+        assert!(dead.starts_with('\''), "fixture must reproduce the old spelling");
+        atomic_json(
+            &file,
+            &json!({"hooks":{
+                "Stop":[{"matcher":"","hooks":[{"type":"command","command":dead,"timeout":3}]}],
+                "Keep":[{"matcher":"","hooks":[{"type":"command","command":"echo keep"}]}]
+            }}),
+        )
+        .unwrap();
+        edit(&c, "codebuddy-ide", true).unwrap();
+        let doc = read(&file).unwrap();
+        let commands: Vec<&str> = doc["hooks"]["Stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap())
+            .map(|hook| hook["command"].as_str().unwrap())
+            .collect();
+        assert_eq!(commands.len(), 1, "{commands:?}");
+        assert_eq!(commands[0], command(&c, "codebuddy-ide", &file));
+        assert_eq!(doc["hooks"]["Keep"][0]["hooks"][0]["command"], "echo keep");
+        std::fs::remove_dir_all(home).unwrap();
+    }
     #[test]
     fn cleanup_preserves_mixed_groups_and_opt_out_survives_restart() {
         let home = std::env::temp_dir().join(format!("integrations-{}", uuid::Uuid::new_v4()));
