@@ -102,13 +102,30 @@ jobs:
       - name: Stub companion runtime binary
         run: |
           mkdir -p src-tauri/binaries
-          touch "src-tauri/binaries/agent-studio-runtime-$(rustc -vV | sed -n "s/^host: //p")"
+          touch "src-tauri/binaries/wb-agent-runtime-$(rustc -vV | sed -n "s/^host: //p")"
 
       - name: Check formatting
         run: cargo fmt --check -p wb-switch-core -p wb-switch-server -p wb-switch-rust
 
+      # clippy 的告警不会自动变成 annotation，未登录时页面上看不到具体原因。
+      # 失败时把输出同时写进 job summary 和一条 error annotation，
+      # 这样 check-runs API 免登录也能读到报错内容。
       - name: Clippy
-        run: cargo clippy -p wb-switch-core -p wb-switch-server -p wb-switch-rust --all-targets --no-deps -- -D warnings
+        run: |
+          set +e
+          cargo clippy -p wb-switch-core -p wb-switch-server -p wb-switch-rust \
+            --all-targets --no-deps -- -D warnings 2>&1 | tee clippy.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '### clippy 输出'
+              echo '```'
+              tail -n 300 clippy.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$(tail -n 40 clippy.log | tr '\n' ' ' | tr -d '\r' | cut -c1-60000)"
+          fi
+          exit "$status"
 
       # server 的 8 个测试此前从不运行（rust-tests 只覆盖 core）。
       - name: Server tests

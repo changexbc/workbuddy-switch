@@ -13,6 +13,7 @@ dist-ssr
 public/companion/
 public/companion-demo/
 src-tauri/binaries/agent-studio-runtime-*
+src-tauri/binaries/wb-agent-runtime-*
 *.local
 
 # Rust / Tauri 构建产物（workspace target）

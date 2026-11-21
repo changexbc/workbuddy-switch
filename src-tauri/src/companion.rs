@@ -7,7 +7,7 @@ fn runtime_path() -> std::path::PathBuf {
     let suffix = if cfg!(windows) { ".exe" } else { "" };
     let bundled = std::env::current_exe().ok().and_then(|exe| {
         exe.parent()
-            .map(|dir| dir.join(format!("agent-studio-runtime{suffix}")))
+            .map(|dir| dir.join(format!("wb-agent-runtime{suffix}")))
     });
     if let Some(path) = bundled.filter(|path| path.is_file()) {
         return path;
@@ -15,7 +15,7 @@ fn runtime_path() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("binaries")
         .join(format!(
-            "agent-studio-runtime-{}{suffix}",
+            "wb-agent-runtime-{}{suffix}",
             env!("AGENT_COMPANION_TARGET")
         ))
 }
