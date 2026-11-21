@@ -21,8 +21,10 @@ import process from 'node:process';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
-export const OWNER = 'changexbc';
-export const REPO = 'agent-companion';
+// This copy is maintained by the host repository; every generated URL points
+// at the host's releases, never at another owner.
+export const OWNER = 'MagainBoss';
+export const REPO = 'workbuddy-switch';
 export const BASE_URL = `https://github.com/${OWNER}/${REPO}/releases/latest/download`;
 export const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 

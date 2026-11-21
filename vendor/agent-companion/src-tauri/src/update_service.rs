@@ -28,8 +28,8 @@ pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(15);
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// 状态事件名，负载为 [`UpdateSnapshot`]。
 pub const STATE_EVENT: &str = "update-state";
-/// 公开更新源，设置页展示用。
-pub const RELEASE_URL: &str = "https://github.com/changexbc/agent-companion/releases/latest";
+/// 公开更新源，设置页展示用。与宿主同一仓库发布。
+pub const RELEASE_URL: &str = "https://github.com/MagainBoss/workbuddy-switch/releases/latest";
 const CONFIG_FILE: &str = "update-config.json";
 const BUSY_MESSAGE: &str = "更新任务正在进行中，请稍候";
 const NO_PACKAGE_MESSAGE: &str = "没有可安装的更新包，请先下载更新包";

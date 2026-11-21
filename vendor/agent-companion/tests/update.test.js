@@ -21,7 +21,7 @@ test('update snapshot guard accepts native payloads and rejects malformed ones',
 });
 
 test('update config guard accepts the native config and rejects partial payloads', () => {
-  const config = {proxy: '', currentVersion: '0.1.0', releaseUrl: 'https://github.com/changexbc/agent-companion/releases/latest'};
+  const config = {proxy: '', currentVersion: '0.1.0', releaseUrl: 'https://github.com/MagainBoss/workbuddy-switch/releases/latest'};
   assert.ok(isUpdateConfig(config));
   assert.ok(isUpdateConfig({...config, proxy: 'http://127.0.0.1:7897'}));
   for (const invalid of [null, {}, {proxy: ''}, {...config, currentVersion: 1}, {...config, releaseUrl: null}]) {

@@ -22,7 +22,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/changexbc/agent-companion/releases/latest/download/latest.json"
+        "https://github.com/MagainBoss/workbuddy-switch/releases/latest/download/latest.json"
       ],
       "pubkey": ""
     }

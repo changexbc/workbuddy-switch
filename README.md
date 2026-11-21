@@ -8,7 +8,7 @@ WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号切�
 
 多账号共享登录态，一键切换 WorkBuddy 登录账号。**会话复制**：把当前账号的会话以新 id 复制给目标账号，源账号数据不受影响，云端归属目标账号。**关联会话**：复制过的会话会自动建立跨账号关联，集中查看各账号副本状态，并把新增内容同步过去。
 
-**在线演示**：[打开 GitHub Pages 演示](https://changexbc.github.io/workbuddy-switch/)（只读演示；账号、积分与请求记录均为虚构数据，所有业务操作均已禁用，另含只读的会话悬浮栏演示）
+**在线演示**：[打开 GitHub Pages 演示](https://magainboss.github.io/workbuddy-switch/)（只读演示；账号、积分与请求记录均为虚构数据，所有业务操作均已禁用，另含只读的会话悬浮栏演示）
 
 ## 快速开始
 
@@ -68,7 +68,7 @@ CodeBuddy CLI 切换时会先关闭正在运行的 CLI，当前会话会中断�
 
 ### 会话悬浮窗（Agent Companion）
 
-桌面版内置 [Agent Companion](https://github.com/changexbc/agent-companion) 悬浮栏：把各 AI Agent 的任务状态集中到桌面，一眼看出谁还在运行、谁需要你确认，支持跳转时点击即可回到原会话；悬浮栏可拖动调整位置，托盘可随时显示 / 隐藏。
+桌面版内置 Agent Companion 悬浮栏（组件源码在 `vendor/agent-companion/`，由本仓库维护）：把各 AI Agent 的任务状态集中到桌面，一眼看出谁还在运行、谁需要你确认，支持跳转时点击即可回到原会话；悬浮栏可拖动调整位置，托盘可随时显示 / 隐藏。
 
 | 监听来源 | 跳转到指定会话 | 点击后的行为 |
 | --- | :---: | --- |
@@ -80,11 +80,11 @@ CodeBuddy CLI 切换时会先关闭正在运行的 CLI，当前会话会中断�
 
 各来源都会显示运行中 / 待确认 / 已完成状态；CodeBuddy CLI 与 JetBrains 插件不在监听范围内。开启方式：左下角悬浮窗图标，或设置 → Agent Companion；首次使用在「悬浮窗设置」中完成接入（依赖对应客户端的 Hooks / Webhook），监听来源与外观样式也在那里调整。
 
-网页演示里的悬浮栏：一个已完成的 Codex 会话与一个失败的 WorkBuddy 会话，各自弹出信息卡（截自[在线演示](https://changexbc.github.io/agent-companion/)，数据为虚构）。
+网页演示里的悬浮栏：一个已完成的 Codex 会话与一个失败的 WorkBuddy 会话，各自弹出信息卡（截自[在线演示](https://magainboss.github.io/workbuddy-switch/)，数据为虚构）。
 
 ![Agent Companion 悬浮栏演示：已完成与失败两种状态各自弹出信息卡](docs/images/agent-companion-demo-rail.png)
 
-更多说明与独立版见 [Agent Companion 仓库](https://github.com/changexbc/agent-companion) · [在线演示](https://changexbc.github.io/agent-companion/)
+更多说明见 [Agent Companion 集成文档](docs/agent-companion-integration.md) · [在线演示](https://magainboss.github.io/workbuddy-switch/)
 
 ## 使用
 

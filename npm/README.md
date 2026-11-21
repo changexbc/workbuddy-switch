@@ -4,7 +4,7 @@ WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号切�
 
 多账号共享登录态，一键切换 WorkBuddy 登录账号。**会话复制**：把当前账号的会话以新 id 复制给目标账号，源账号数据不受影响，云端归属目标账号。
 
-**在线演示**：[打开 GitHub Pages 演示](https://changexbc.github.io/workbuddy-switch/)（只读演示；账号、积分与请求记录均为虚构数据，所有业务操作均已禁用）
+**在线演示**：[打开 GitHub Pages 演示](https://magainboss.github.io/workbuddy-switch/)（只读演示；账号、积分与请求记录均为虚构数据，所有业务操作均已禁用）
 
 ## 快速开始
 
@@ -20,7 +20,7 @@ webui 界面与桌面 App 一致，功能覆盖下方全部模块。
 
 ### 桌面 App
 
-从 [GitHub Releases](https://github.com/changexbc/workbuddy-switch/releases/latest) 下载 macOS / Windows / Linux 安装包（Tauri，推荐日常使用）。
+从 [GitHub Releases](https://github.com/MagainBoss/workbuddy-switch/releases/latest) 下载 macOS / Windows / Linux 安装包（Tauri，推荐日常使用）。
 
 > **macOS 提示「已损坏，无法打开」？** 未签名应用会触发隔离机制，在终端执行一次即可：
 >

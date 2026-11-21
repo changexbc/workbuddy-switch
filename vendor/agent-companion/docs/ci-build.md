@@ -85,7 +85,7 @@ CI 行为：
 
 - 四个平台片段齐全，且版本与标签一致；
 - 平台键恰好为 `darwin-aarch64`、`darwin-x86_64`、`windows-x86_64-nsis`、`windows-x86_64`、`linux-x86_64`；
-- 每个地址都是本 Release 资产（`https://github.com/changexbc/agent-companion/releases/latest/download/<资产名>`），且资产确实存在于产物目录；
+- 每个地址都是本 Release 资产（`https://github.com/MagainBoss/workbuddy-switch/releases/latest/download/<资产名>`），且资产确实存在于产物目录；
 - 每个更新包都有非空签名，不同更新包的签名不重复。
 
 `latest.json` 与更新包一起进入**草稿** Release。`/releases/latest/download/latest.json` 指向最近一个已发布版本，所以草稿期间线上客户端看到的仍是上一个稳定版；发布后才会切换到新版本。

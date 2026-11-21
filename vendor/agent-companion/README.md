@@ -10,37 +10,13 @@ Agent Companion 是一款桌面悬浮会话助手。把 Codex、WorkBuddy、Code
 
 适合同时运行多个 Agent、在不同项目之间切换，又不想反复打开窗口检查进度的人。
 
-### 在线演示
+## 在本仓库中使用
 
-[打开 GitHub Pages 在线演示](https://changexbc.github.io/agent-companion/)（只读演示；会话、项目与状态均为虚构数据，不连接 Hook / Webhook，也不打开原会话。）
+本组件随 workbuddy-switch 桌面版一起发布，源码在 `vendor/agent-companion/`，由本仓库维护；不单独分发安装包，也不从其它仓库获取内容。网页演示见 [workbuddy-switch 在线演示](https://magainboss.github.io/workbuddy-switch/)（只读；会话、项目与状态均为虚构数据）。
+
+嵌入其他 Tauri 宿主时由宿主负责自身更新，本组件的设置页不提供独立的更新通道。
 
 ## 快速开始
-
-### 下载与安装
-
-在 [Releases](https://github.com/changexbc/agent-companion/releases/latest) 页面下载对应平台与芯片架构的安装包（当前版本 **0.1.0**）。下表的链接始终指向最新发布版本：
-
-| 平台 | 下载 | 安装方式 |
-| --- | --- | --- |
-| macOS Apple Silicon（M 系列） | [Agent-Companion_mac-arm64.zip](https://github.com/changexbc/agent-companion/releases/latest/download/Agent-Companion_mac-arm64.zip) | 解压后把 `Agent Companion.app` 拖入「应用程序」 |
-| macOS Intel | [Agent-Companion_mac-x64.zip](https://github.com/changexbc/agent-companion/releases/latest/download/Agent-Companion_mac-x64.zip) | 同上，注意选择 Intel 版本 |
-| Windows x64 | [Agent-Companion_windows_x86_64-setup.exe](https://github.com/changexbc/agent-companion/releases/latest/download/Agent-Companion_windows_x86_64-setup.exe) | 下载后双击，按安装向导完成安装 |
-| Linux x64 | [Agent-Companion_linux_x86_64.AppImage](https://github.com/changexbc/agent-companion/releases/latest/download/Agent-Companion_linux_x86_64.AppImage) | 在文件属性中允许执行后直接运行；`.deb` 见 Releases 页（文件名带版本号），用软件安装器打开 |
-
-macOS 要求 **12 或更高版本**。首次打开遇到系统拦截，请参阅下方 [macOS 注意事项](#macos-注意事项)。Windows / Linux 尚未完成完整实机验收，遇到的问题欢迎在 Issues 反馈。
-
-### 应用内更新
-
-安装**首个带更新器的版本**之后，后续版本可以在应用内升级：
-
-1. 独立版启动 15 秒后自动检查一次，之后每 30 分钟检查公开发布的最新稳定版；也可以在设置 →「更新」中手动检查。
-2. 发现新版本后点「下载更新」，进度同时显示在设置页和托盘菜单；下载完成后点「重启并安装」，重启即完成升级。
-3. 更新包只有在通过签名校验后才会进入安装阶段；发现新版本不会自动下载、自动安装或自动重启。
-4. 需要显式代理时，在「更新代理」填写 HTTP/HTTPS 地址（例如 `http://127.0.0.1:7897`）并保存；留空表示不使用显式代理。该设置只作用于更新检查与安装包下载。
-
-`0.1.0` 及更早版本没有内置更新器，需要手动安装一次带更新器的版本，此后才能在应用内升级。macOS 包仍未做开发者签名与公证，更新签名不改变 Gatekeeper 的首次启动提示。嵌入其他 Tauri 宿主时由宿主负责自身更新，Agent Companion 的设置页不会触发独立版的更新流程。
-
-### 开始使用
 
 1. **启动 Agent Companion**：桌面上会出现悬浮栏。
 2. **接入 Agent**：从托盘进入设置，选择需要监听的 Codex、WorkBuddy、CodeBuddy 或 Codeg。接入依赖对应客户端的 Hooks / Webhook。
@@ -60,18 +36,18 @@ macOS 要求 **12 或更高版本**。首次打开遇到系统拦截，请参阅
 | 会话跳转 | 有可用跳转链接时，点击头像或卡片回到原会话 |
 | 悬浮交互 | 支持拖动、悬停查看详情；右键任意任务头像可关闭该任务的本次监听，透明区域可点击穿透 |
 | 本机设置 | 按来源开关监听，调整外观与开机启动；通过托盘管理应用 |
-| 应用内更新 | 设置页检查、下载并重启安装签名更新包，可为更新单独配置 HTTP/HTTPS 代理 |
+| 随宿主更新 | 组件不提供独立更新通道，升级随 workbuddy-switch 桌面版一起发布 |
 | 原生监控 | Rust 本地服务接收 Hooks / Webhook；打包后的应用无需 Node.js 或 Python |
 
 ## 界面预览
 
-网页演示里的悬浮栏：Codex 会话已完成、WorkBuddy 会话运行失败，两种状态都会自动弹出信息卡，头像上分别是绿色对勾与红色叉号（截图取自[在线演示](https://changexbc.github.io/agent-companion/)，数据全部为虚构）。
+网页演示里的悬浮栏：Codex 会话已完成、WorkBuddy 会话运行失败，两种状态都会自动弹出信息卡，头像上分别是绿色对勾与红色叉号（截图取自[在线演示](https://magainboss.github.io/workbuddy-switch/)，数据全部为虚构）。
 
 ![网页演示的悬浮栏：一个已完成的 Codex 会话与一个失败的 WorkBuddy 会话，各自弹出信息卡](docs/images/demo-rail-states.png)
 
 ## Agent 支持范围
 
-以下是四个内置来源在当前 macOS 版本中的能力。✅ 表示支持，— 表示不支持或不使用该接入方式；CodeBuddy IDE 与 VS Code 插件共用一个来源，但跳转目标不同。
+以下是四个内置来源在当前版本中的能力。✅ 表示支持，— 表示不支持或不使用该接入方式；CodeBuddy IDE 与 VS Code 插件共用一个来源，但跳转目标不同。
 
 | Agent / 客户端 | Hooks | Webhook | 运行、待确认、结束状态 | 跳到指定会话 | 点击后的实际行为 |
 | --- | :---: | :---: | :---: | :---: | --- |
@@ -124,7 +100,7 @@ npm run desktop:build   # 当前配置构建 macOS .app
 npm run demo:dev        # 开发网页演示（虚构数据，端口 4190）
 ```
 
-构建产物位于 `src-tauri/target/release/bundle/macos/Agent Companion.app`。本地构建不生成更新产物（发布构建由 CI 注入签名公钥），因此开发构建的设置页只提示未配置更新签名公钥，不会误报可更新。更多内容见 [开发文档](docs/development.md)、[构建与发布](docs/ci-build.md) 与 [验证记录](docs/validation.md)。
+构建产物位于 `src-tauri/target/release/bundle/macos/Agent Companion.app`。本仓库只构建嵌入宿主所需的运行时与页面，不发布独立版更新产物。更多内容见 [开发文档](docs/development.md) 与 [验证记录](docs/validation.md)。
 
 ## 致谢
 

@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
-// The public demo page embeds the upstream rail as a static web build. The
-// artifact follows vendoring automatically: the pinned revision is the only
-// input, so a new snapshot rebuilds once and repeated local builds are no-ops.
+// The public demo page embeds the bundled rail as a static web build. The
+// component is maintained in this repository, so the rebuild marker is a
+// fingerprint of its sources: any edit under `vendor/agent-companion/`
+// invalidates the cache, and repeated builds without changes are no-ops.
 //
 // Modes:
 //   dev   — build when stale, then copy into `public/` (Vite serves it in dev)
@@ -35,23 +37,44 @@ if (mode === 'clean') {
   process.exit(0);
 }
 
-const version = JSON.parse(await fs.readFile(path.join(root, 'vendor/agent-companion.version.json'), 'utf8'));
-if (!/^[0-9a-f]{40}$/.test(version.revision)) {
-  throw new Error('Invalid pinned Agent Companion version manifest');
+// Generated or installed trees never affect the demo build itself.
+const SKIP = new Set(['node_modules', 'target', 'dist', 'dist-embed', 'dist-demo', '.git']);
+
+/** Deterministic digest of every source file the demo build reads. */
+async function sourceFingerprint(dir) {
+  const files = [];
+  async function walk(current) {
+    for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+      if (SKIP.has(entry.name)) continue;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        const digest = createHash('sha256').update(await fs.readFile(full)).digest('hex');
+        files.push(`${path.relative(dir, full).split(path.sep).join('/')}:${digest}`);
+      }
+    }
+  }
+  await walk(dir);
+  files.sort();
+  return createHash('sha256').update(files.join('\n')).digest('hex');
 }
 
 if (mode !== 'copy') {
-  const marker = path.join(output, '.revision');
+  const marker = path.join(output, '.source-fingerprint');
   const built = await fs.readFile(marker, 'utf8').catch(() => '');
-  if (force || built.trim() !== version.revision) {
-    console.log(`Building Agent Companion demo assets at ${version.revision}`);
-    // The archived source carries its own lockfile. `--base=./` overrides the
-    // upstream Pages subpath so the frame works under any hosting prefix.
-    execFileSync('npm', ['ci'], { cwd: companion, stdio: 'inherit' });
-    execFileSync('npm', ['run', 'build:demo', '--', '--base=./'], { cwd: companion, stdio: 'inherit' });
-    await fs.writeFile(marker, `${version.revision}\n`);
+  const fingerprint = await sourceFingerprint(companion);
+  if (force || built.trim() !== fingerprint) {
+    console.log(`Building Agent Companion demo assets (${fingerprint.slice(0, 12)})`);
+    // `--base=./` keeps every asset relative, so the frame works under any
+    // hosting prefix. Windows 的 npm 是 .cmd，Node 20+ 禁止直接 spawn（EINVAL），
+    // 必须经 shell 解析。
+    const shell = process.platform === 'win32';
+    execFileSync('npm', ['ci'], { cwd: companion, stdio: 'inherit', shell });
+    execFileSync('npm', ['run', 'build:demo', '--', '--base=./'], { cwd: companion, stdio: 'inherit', shell });
+    await fs.writeFile(marker, `${fingerprint}\n`);
   } else {
-    console.log(`Agent Companion demo assets already built at ${version.revision}`);
+    console.log(`Agent Companion demo assets already built (${fingerprint.slice(0, 12)})`);
   }
 }
 

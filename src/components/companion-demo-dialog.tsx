@@ -21,7 +21,7 @@ const BLOCKED_FALLBACK = "该操作仅在桌面版可用";
 const ACTIVATE_CLIENT_NOTICE = "演示不会打开真实会话";
 
 /**
- * The upstream demo build of the rail; `BASE_URL` keeps it valid under any
+ * The bundled demo build of the rail; `BASE_URL` keeps it valid under any
  * hosting prefix. `?welcome` is the rail's own switch for its opening kitten
  * animation — the demo build has no desktop host, so without it the animation
  * is skipped.
@@ -36,7 +36,7 @@ interface CompanionDemoDialogProps {
 /**
  * Read-only showcase of the Agent Companion rail on the public demo page.
  *
- * The overlay only embeds the upstream web demo build and drives it with
+ * The overlay only embeds the bundled web demo build and drives it with
  * fictional snapshots: it never installs, starts or talks to the local
  * component, and the frame itself refuses session links and the close command.
  */

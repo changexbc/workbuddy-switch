@@ -3,10 +3,10 @@
  * public demo page.
  *
  * The rail ships a web demo build whose only data source is `postMessage`
- * (upstream `src/demo/protocol.ts`): the page publishes whole snapshots and the
- * frame answers with the interactions it cannot carry out on its own. This
- * module owns the wb-switch side of that contract — the wire types are
- * duplicated here on purpose, because `vendor/` is a pinned source snapshot and
+ * (`vendor/agent-companion/src/demo/protocol.ts`): the page publishes whole
+ * snapshots and the frame answers with the interactions it cannot carry out on
+ * its own. This module owns the wb-switch side of that contract — the wire types
+ * are duplicated here on purpose, because the component is maintained in-repo and
  * never a dependency of this frontend.
  *
  * Every value below is invented for the demo. Nothing reads a real session,

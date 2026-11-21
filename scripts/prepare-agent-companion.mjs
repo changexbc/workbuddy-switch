@@ -13,9 +13,9 @@ if (!['dev', 'build', 'copy'].includes(mode)) {
 
 const version = JSON.parse(await fs.readFile(path.join(root, 'vendor/agent-companion.version.json'), 'utf8'));
 if (!/^[0-9a-f]{40}$/.test(version.revision) || version.interfaceVersion !== 1) {
-  throw new Error('Invalid pinned Agent Companion version manifest');
+  throw new Error('Invalid Agent Companion version manifest');
 }
-console.log(`Agent Companion source: ${version.revision}, host interface: ${version.interfaceVersion}`);
+console.log(`Agent Companion base revision: ${version.revision}, host interface: ${version.interfaceVersion}`);
 
 const target = process.env.AGENT_COMPANION_TARGET
   || execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: (.+)$/m)?.[1];
@@ -23,7 +23,7 @@ if (!target) throw new Error('Could not determine Rust target; set AGENT_COMPANI
 const suffix = target.includes('windows') ? '.exe' : '';
 
 if (mode !== 'copy') {
-  // The archived source carries its own lockfiles, keeping the plugin, UI and
+  // The in-repo component carries its own lockfiles, keeping the plugin, UI and
   // runtime on one revision. A clean checkout has no installed dependencies.
   // Windows 的 npm 是 .cmd，Node 20+ 禁止直接 spawn（EINVAL），必须经 shell 解析。
   const shell = process.platform === 'win32';
