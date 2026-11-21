@@ -1,7 +1,10 @@
-//! 自动更新：检查公开 GitHub Releases 版本 + 更新源配置。
+//! 自动更新：检查本仓库的 GitHub Releases 版本 + 更新代理配置。
 //!
 //! 对照 server.py `load_github_config` / `save_github_config` /
 //! `compare_versions` / `update_check`。下载安装走 tauri-plugin-updater（整包更新）。
+//!
+//! 更新源固定为本仓库 `GITHUB_OWNER/GITHUB_REPO`，不提供自定义；`github_config.json`
+//! 只保存更新代理。检查与安装包下载因此始终是同一个仓库。
 //!
 //! 版本检查不走 GitHub API（避免 60 次/小时/IP 限流）：
 //! 1. 主端点：release 资产的 updater manifest（下载不计 API 配额）；
@@ -19,7 +22,7 @@ use crate::modules::config::{
 
 /// 应用当前版本（来自 Cargo.toml package.version）。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const GITHUB_OWNER: &str = "changexbc";
+pub const GITHUB_OWNER: &str = "MagainBoss";
 pub const GITHUB_REPO: &str = "workbuddy-switch";
 
 /// 成功结果缓存有效期（6 小时）。自动轮询（30 分钟）命中缓存，不发网络请求；
@@ -38,66 +41,45 @@ pub fn github_config_file() -> PathBuf {
     store_dir().join("github_config.json")
 }
 
-/// 读取更新源配置（兼容旧配置文件，但永不返回 token）。
+/// 读取更新配置：更新源恒为本仓库，只有代理可由用户配置。
+///
+/// 旧配置里的 `owner`/`repo`/`token` 不再生效，并在下次读取时清理掉。
 pub fn load_github_config() -> Value {
-    let mut owner = GITHUB_OWNER.to_string();
-    let mut repo = GITHUB_REPO.to_string();
     let mut proxy = String::new();
     let f = github_config_file();
     let mut should_normalize = false;
     if f.exists() {
         if let Ok(text) = std::fs::read_to_string(&f) {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                if let Some(value) = v.get("owner").and_then(|v| v.as_str()) {
-                    if !value.trim().is_empty() {
-                        owner = value.to_string();
-                    }
-                }
-                if let Some(value) = v.get("repo").and_then(|v| v.as_str()) {
-                    if !value.trim().is_empty() {
-                        repo = value.to_string();
-                    }
-                }
                 if let Some(value) = v.get("proxy").and_then(|v| v.as_str()) {
                     proxy = value.trim().to_string();
                 }
-                should_normalize = v.get("token").is_some();
+                should_normalize = v.get("owner").is_some()
+                    || v.get("repo").is_some()
+                    || v.get("token").is_some();
             }
         }
     }
-    // 旧版本截图/配置曾使用 changexbc/wb-switch；迁移到实际公开仓库。
-    if owner == "changexbc" && repo == "wb-switch" {
-        repo = GITHUB_REPO.to_string();
-        should_normalize = true;
-    }
-    let normalized = json!({"owner": owner, "repo": repo, "proxy": proxy});
+    // 对外仍返回 owner/repo（调用方据此展示仓库），落盘只保留代理。
+    let normalized = json!({"owner": GITHUB_OWNER, "repo": GITHUB_REPO, "proxy": proxy});
     if should_normalize {
+        let clean = json!({ "proxy": proxy });
         let _ = atomic_write(
             &f,
-            &serde_json::to_string_pretty(&normalized).unwrap_or_default(),
+            &serde_json::to_string_pretty(&clean).unwrap_or_default(),
         );
     }
     normalized
 }
 
-/// 保存更新源配置；公开仓库不需要也不保存 GitHub token。
+/// 保存更新配置：更新源硬编码，只有代理会被写入（公开仓库不需要 token）。
 pub fn save_github_config(cfg: &Value) -> std::io::Result<()> {
-    let owner = cfg
-        .get("owner")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or(GITHUB_OWNER);
-    let repo = cfg
-        .get("repo")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or(GITHUB_REPO);
     let proxy = cfg
         .get("proxy")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .unwrap_or("");
-    let clean = json!({"owner": owner, "repo": repo, "proxy": proxy});
+    let clean = json!({ "proxy": proxy });
     std::fs::create_dir_all(store_dir())?;
     atomic_write(
         &github_config_file(),
@@ -238,22 +220,14 @@ pub async fn update_check(proxy: Option<&str>, force: bool) -> Value {
     }
 
     let cfg = load_github_config();
-    let owner = cfg
-        .get("owner")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let repo = cfg
-        .get("repo")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
     let configured_proxy = cfg
         .get("proxy")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|v| !v.is_empty());
     let proxy = proxy.or(configured_proxy);
+    let owner = GITHUB_OWNER;
+    let repo = GITHUB_REPO;
     let release_url = format!("https://github.com/{owner}/{repo}/releases/latest");
     let current = APP_VERSION.to_string();
 
@@ -328,25 +302,25 @@ mod tests {
 
     #[test]
     fn updater_manifest_urls_macos_skips_duplicate_fallback() {
-        let urls = updater_manifest_urls("changexbc", "workbuddy-switch", "macos", "aarch64");
+        let urls = updater_manifest_urls(GITHUB_OWNER, GITHUB_REPO, "macos", "aarch64");
         assert_eq!(
             urls,
             vec![
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest.json",
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-macos-aarch64.json",
+                "https://github.com/MagainBoss/workbuddy-switch/releases/latest/download/latest.json",
+                "https://github.com/MagainBoss/workbuddy-switch/releases/latest/download/latest-macos-aarch64.json",
             ]
         );
     }
 
     #[test]
     fn updater_manifest_urls_windows_keeps_macos_compat() {
-        let urls = updater_manifest_urls("changexbc", "workbuddy-switch", "windows", "x86_64");
+        let urls = updater_manifest_urls(GITHUB_OWNER, GITHUB_REPO, "windows", "x86_64");
         assert_eq!(
             urls,
             vec![
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest.json",
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-windows-x86_64.json",
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-macos-x86_64.json",
+                "https://github.com/MagainBoss/workbuddy-switch/releases/latest/download/latest.json",
+                "https://github.com/MagainBoss/workbuddy-switch/releases/latest/download/latest-windows-x86_64.json",
+                "https://github.com/MagainBoss/workbuddy-switch/releases/latest/download/latest-macos-x86_64.json",
             ]
         );
     }

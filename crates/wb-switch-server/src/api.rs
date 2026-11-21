@@ -1603,8 +1603,11 @@ async fn api_update_config() -> Response {
 }
 
 async fn api_save_update_config(Json(body): Json<Value>) -> Response {
-    match update::save_github_config(&body) {
-        Ok(()) => json_ok(json!({ "ok": true, "config": update::load_github_config() })),
+    // webui 的 `saveGithubConfig` 与 Tauri 命令同形：配置包在 `config` 里，
+    // 返回值也与 Tauri 一致（直接回配置，而不是 `{ok,config}` 包装）。
+    let submitted = body.get("config").unwrap_or(&body);
+    match update::save_github_config(submitted) {
+        Ok(()) => json_ok(update::load_github_config()),
         Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
     }
 }
