@@ -107,8 +107,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check -p wb-switch-core -p wb-switch-server -p wb-switch-rust
 
-      # clippy 的告警不会变成 annotation，未登录时页面上看不到具体原因；
-      # 失败时把输出写进 job summary，check-runs API 可以直接读到。
+      # clippy 的告警不会自动变成 annotation，未登录时页面上看不到具体原因。
+      # 失败时把输出同时写进 job summary 和一条 error annotation，
+      # 这样 check-runs API 免登录也能读到报错内容。
       - name: Clippy
         run: |
           set +e
@@ -122,6 +123,7 @@ jobs:
               tail -n 300 clippy.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$(tail -n 40 clippy.log | tr '\n' ' ' | tr -d '\r' | cut -c1-60000)"
           fi
           exit "$status"
 
