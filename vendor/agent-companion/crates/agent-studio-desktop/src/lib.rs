@@ -1,3 +1,7 @@
+// vendor 快照：CI 的 clippy 门禁只针对本仓库自有代码。test.yml 里的 --no-deps
+// 不会跳过 path 依赖，所以在这里显式放行快照自身的告警。
+#![allow(warnings)]
+
 mod hit_test;
 mod integration_folder;
 #[cfg(target_os = "macos")]

@@ -107,8 +107,23 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check -p wb-switch-core -p wb-switch-server -p wb-switch-rust
 
+      # clippy 的告警不会变成 annotation，未登录时页面上看不到具体原因；
+      # 失败时把输出写进 job summary，check-runs API 可以直接读到。
       - name: Clippy
-        run: cargo clippy -p wb-switch-core -p wb-switch-server -p wb-switch-rust --all-targets --no-deps -- -D warnings
+        run: |
+          set +e
+          cargo clippy -p wb-switch-core -p wb-switch-server -p wb-switch-rust \
+            --all-targets --no-deps -- -D warnings 2>&1 | tee clippy.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '### clippy 输出'
+              echo '```'
+              tail -n 300 clippy.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
 
       # server 的 8 个测试此前从不运行（rust-tests 只覆盖 core）。
       - name: Server tests

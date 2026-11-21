@@ -1,3 +1,7 @@
+// vendor 快照：CI 的 clippy 门禁只针对本仓库自有代码。test.yml 里的 --no-deps
+// 不会跳过 path 依赖，所以在这里显式放行快照自身的告警。
+#![allow(warnings)]
+
 pub mod adapters;
 pub mod codex_recovery;
 pub mod codex_read_state;
