@@ -102,17 +102,7 @@ jobs:
       - name: Stub companion runtime binary
         run: |
           mkdir -p src-tauri/binaries
-          touch "src-tauri/binaries/agent-studio-runtime-$(rustc -vV | sed -n "s/^host: //p")"
-
-      # tauri-build 的 copy_binaries 在 dest 已存在时先 remove_file；缓存恢复的
-      # target/debug/agent-studio-runtime 删不掉时 macOS 上直接 EPERM panic
-      # （exit 101，看起来像 clippy 失败）。构建前先清掉，失败也打印现场。
-      - name: Reset sidecar copy target
-        run: |
-          ls -ld target/debug/agent-studio-runtime 2>/dev/null || true
-          chflags -R nouchg target/debug/agent-studio-runtime 2>/dev/null || true
-          chmod -R u+w target/debug/agent-studio-runtime 2>/dev/null || true
-          rm -rf target/debug/agent-studio-runtime
+          touch "src-tauri/binaries/wb-agent-runtime-$(rustc -vV | sed -n "s/^host: //p")"
 
       - name: Check formatting
         run: cargo fmt --check -p wb-switch-core -p wb-switch-server -p wb-switch-rust

@@ -44,7 +44,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/agent-studio-runtime"]
+    "externalBin": ["binaries/wb-agent-runtime"]
   },
   "plugins": {
     "updater": {

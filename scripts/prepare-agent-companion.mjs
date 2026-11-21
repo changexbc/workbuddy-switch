@@ -37,7 +37,7 @@ if (mode !== 'copy') {
   await fs.mkdir(binaries, { recursive: true });
   await fs.copyFile(
     path.join(root, 'target', target, 'release', `agent-studio-runtime${suffix}`),
-    path.join(binaries, `agent-studio-runtime-${target}${suffix}`),
+    path.join(binaries, `wb-agent-runtime-${target}${suffix}`),
   );
 }
 
