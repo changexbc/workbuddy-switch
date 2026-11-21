@@ -6,7 +6,8 @@
 //!
 //! 检查复用 `wb_switch_core::modules::update::update_check`（release 资产端点 + 302 兜底，
 //! 不占 GitHub API 配额）；下载走 tauri-plugin-updater 的 Rust API（签名校验在
-//! `Update::download` 内部完成），代理取自 `update::load_github_config()` 的 `proxy`。
+//! `Update::download` 内部完成）。更新源由 core 与 `tauri.conf.json` 共同硬编码为本仓库，
+//! 代理取自 `update::load_github_config()` 的 `proxy`。
 //!
 //! **安装时机**：下载完成的包暂存在内存（`PACKAGE`），由用户点「重启以完成升级」时才
 //! 安装。Windows NSIS 安装器要求应用退出后才能完成安装，下载即安装等于强制自动重启；
@@ -527,20 +528,13 @@ fn take_package() -> Option<DownloadedPackage> {
         .take()
 }
 
-/// 公开更新页地址（按当前更新源配置拼装，与 core 的 `update_check` 同源）。
+/// 公开更新页地址（与 core 的 `update_check` 同一个硬编码仓库）。
 fn release_url() -> String {
-    let config = update::load_github_config();
-    let owner = config
-        .get("owner")
-        .and_then(Value::as_str)
-        .filter(|owner| !owner.is_empty())
-        .unwrap_or(update::GITHUB_OWNER);
-    let repo = config
-        .get("repo")
-        .and_then(Value::as_str)
-        .filter(|repo| !repo.is_empty())
-        .unwrap_or(update::GITHUB_REPO);
-    format!("https://github.com/{owner}/{repo}/releases/latest")
+    format!(
+        "https://github.com/{}/{}/releases/latest",
+        update::GITHUB_OWNER,
+        update::GITHUB_REPO
+    )
 }
 
 // ---------------------------------------------------------------------------

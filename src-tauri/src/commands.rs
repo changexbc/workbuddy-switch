@@ -1217,13 +1217,13 @@ pub async fn refresh_account_token(account_id: String) -> Result<Value, String> 
 // 阶段 4：自动更新
 // ---------------------------------------------------------------------------
 
-/// GET /api/update/config —— 更新源配置（owner/repo/token）。
+/// GET /api/update/config —— 更新配置（更新源硬编码，只有代理可配置）。
 #[tauri::command]
 pub fn get_github_config() -> Value {
     update::load_github_config()
 }
 
-/// POST /api/update/config —— 保存更新源配置。
+/// POST /api/update/config —— 保存更新配置（只有代理会落盘）。
 #[tauri::command]
 pub fn save_github_config(config: Value) -> Result<Value, String> {
     update::save_github_config(&config).map_err(|e| e.to_string())?;
