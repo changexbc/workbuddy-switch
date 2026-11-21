@@ -375,11 +375,11 @@ fn list_codebuddy_cli_pids() -> Vec<u32> {
         let Some(stdout) = process::ps_output(script, 5) else {
             return Vec::new();
         };
-        return stdout
+        stdout
             .lines()
             .filter_map(|line| line.trim().parse::<u32>().ok())
             .filter(|pid| *pid != self_pid)
-            .collect();
+            .collect()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

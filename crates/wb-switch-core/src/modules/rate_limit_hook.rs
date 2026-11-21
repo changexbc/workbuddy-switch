@@ -241,12 +241,11 @@ impl HookLayout {
     ///   `bash "C:/.../hook.sh"`：cmd.exe 规则下单引号是字面量，且 PATH 上的
     ///   非 PortableGit bash 不认 `/c` 挂载）。
     fn legacy_markers(&self) -> Vec<String> {
-        let mut markers = vec![
-            self.script
-                .with_file_name(LEGACY_CMD_NAME)
-                .to_string_lossy()
-                .to_string(),
-        ];
+        let mut markers = vec![self
+            .script
+            .with_file_name(LEGACY_CMD_NAME)
+            .to_string_lossy()
+            .to_string()];
         if cfg!(windows) {
             markers.push(shell_quote(&msys_path(&self.script)));
         }
@@ -644,8 +643,8 @@ fn refresh_backup(
             }
         }
         Some(text) => {
-            let raw_is_clean =
-                !text.contains(marker) && !legacy_markers.iter().any(|legacy| text.contains(legacy));
+            let raw_is_clean = !text.contains(marker)
+                && !legacy_markers.iter().any(|legacy| text.contains(legacy));
             if let Ok(existing) = std::fs::read_to_string(&backup) {
                 let same = serde_json::from_str::<Value>(&existing).ok().as_ref() == Some(baseline);
                 if same {

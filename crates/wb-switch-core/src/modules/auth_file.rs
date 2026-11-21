@@ -28,7 +28,7 @@ pub fn workbuddy_app_path(variant: WbVariant) -> PathBuf {
         if let Some(exe) = crate::modules::process::windows_workbuddy_exe_path(variant) {
             return exe;
         }
-        return crate::modules::process::windows_default_app_path(variant);
+        crate::modules::process::windows_default_app_path(variant)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

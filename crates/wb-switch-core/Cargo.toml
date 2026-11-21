@@ -20,14 +20,19 @@ sha2 = "0.10"
 
 # CodeBuddy CN IDE Safe Storage (state.vscdb secret inject)
 aes = "0.8"
+base64 = "0.22"
+
+# macOS / Linux 的 v10、v11 都是 AES-128-CBC；Windows 走 AES-256-GCM，见下方 windows 段。
+[target.'cfg(not(target_os = "windows"))'.dependencies]
 cbc = "0.1"
 pbkdf2 = "0.12"
 sha1 = "0.10"
-aes-gcm = "0.10"
-base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+# Windows 独有的 v10 解密路径：DPAPI 取出的密钥走 AES-256-GCM；
+# macOS / Linux 的 v10、v11 都是 AES-128-CBC，不需要它。
+aes-gcm = "0.10"
 
 # Linux 密钥环：直接按 Secret Service D-Bus 协议读 Safe Storage 密码，不依赖
 # 默认不安装的 secret-tool（issue #80）。版本与 tauri 依赖图里已有的那份一致，

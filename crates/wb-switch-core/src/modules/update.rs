@@ -54,9 +54,8 @@ pub fn load_github_config() -> Value {
                 if let Some(value) = v.get("proxy").and_then(|v| v.as_str()) {
                     proxy = value.trim().to_string();
                 }
-                should_normalize = v.get("owner").is_some()
-                    || v.get("repo").is_some()
-                    || v.get("token").is_some();
+                should_normalize =
+                    v.get("owner").is_some() || v.get("repo").is_some() || v.get("token").is_some();
             }
         }
     }
@@ -232,7 +231,7 @@ pub async fn update_check(proxy: Option<&str>, force: bool) -> Value {
     let current = APP_VERSION.to_string();
 
     // 主端点：updater manifest（release 资产下载，不计 GitHub API 配额）。
-    if let Ok(manifest) = fetch_manifest_version(&owner, &repo, proxy).await {
+    if let Ok(manifest) = fetch_manifest_version(owner, repo, proxy).await {
         let version = manifest
             .get("version")
             .and_then(|v| v.as_str())
@@ -268,7 +267,7 @@ pub async fn update_check(proxy: Option<&str>, force: bool) -> Value {
     }
 
     // 兜底端点：`/releases/latest` 的 302 Location 头解析 tag（仅 manifest 失败时）。
-    match fetch_latest_tag(&owner, &repo, proxy).await {
+    match fetch_latest_tag(owner, repo, proxy).await {
         Ok(tag) => {
             let latest = tag.strip_prefix('v').unwrap_or(&tag).to_string();
             let value = json!({
