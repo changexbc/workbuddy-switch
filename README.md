@@ -12,7 +12,7 @@ WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号切�
 
 ## 快速开始
 
-前往 [GitHub Releases](https://github.com/changexbc/workbuddy-switch/releases/latest) 下载对应平台的安装包：
+前往 [GitHub Releases](https://github.com/MagainBoss/workbuddy-switch/releases/latest) 下载对应平台的安装包：
 
 | 平台 | 安装包 | 安装方式 |
 | --- | --- | --- |
