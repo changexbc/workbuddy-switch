@@ -657,6 +657,12 @@ pub(crate) fn hook_entries(now: i64) -> Vec<Resolved> {
     live_entries(state, now)
 }
 
+/// 轮换只读已落盘的台账快照，兼容桌面端与服务端之间接管轮换。
+/// 待处理事件仍由现有 watcher 入账并通知前端。
+pub(crate) fn saved_hook_entries(path: &Path, now: i64) -> Vec<Resolved> {
+    live_entries(&mut load_state(path), now)
+}
+
 /// 最近一次入账的 hook 限额事件时刻（诊断用）。
 pub fn last_event_at() -> Option<i64> {
     {
