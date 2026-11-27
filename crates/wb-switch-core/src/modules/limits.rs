@@ -1407,7 +1407,9 @@ static SCAN_CACHE: Mutex<Option<ScanCache>> = Mutex::new(None);
 /// （该来源改走事件通路）、卸载使范围扩大（回到日志扫描），两种变化都由「按当前 scope
 /// 重算」覆盖，不需要为任何一方强制全来源扫描 —— 也不为接入 hook 之前的历史补扫。
 pub fn invalidate_scan_cache() {
-    *SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *SCAN_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// 取一次扫描结果（命中缓存则不重扫）。
@@ -1415,7 +1417,9 @@ pub fn invalidate_scan_cache() {
 /// 命中要求缓存范围 ⊇ 请求范围；`allow_scan = false`（限额监听被关闭）时不重扫，
 /// 只用已有缓存——关闭开关后不得再读日志。
 fn cached_scan(requested: ScanScope, now: i64, allow_scan: bool) -> (i64, Vec<Resolved>) {
-    let mut cache = SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut cache = SCAN_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(cached) = cache.as_ref() {
         if cached.covers(requested, now) || !allow_scan {
             return (cached.at, cached.entries.clone());
@@ -3146,26 +3150,40 @@ mod tests {
             .expect("写入配置");
 
         // ① 装 / 卸 hook 后作废：缓存被清掉。
-        *SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ScanCache {
+        *SCAN_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ScanCache {
             at: 1,
             scope: ScanScope::ALL,
             entries: Vec::new(),
         });
         invalidate_scan_cache();
-        assert!(SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_none(), "缓存必须清掉");
+        assert!(
+            SCAN_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+            "缓存必须清掉"
+        );
 
         // ② 下一次扫描按请求的 scope 走，不会被放大成「全来源」。
         let (at, entries) = cached_scan(ScanScope::NONE, 1_000_000, true);
         assert_eq!(at, 1_000_000);
         assert!(entries.is_empty(), "NONE 范围不扫任何来源");
         assert_eq!(
-            SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|c| c.scope),
+            SCAN_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map(|c| c.scope),
             Some(ScanScope::NONE),
             "缓存记录的必须是请求的范围，不是全量"
         );
 
         // ③ 保存配置：`scanIdeLogs` 变化才作废缓存；其它字段变化不动缓存。
-        *SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ScanCache {
+        *SCAN_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ScanCache {
             at: 1,
             scope: ScanScope::NONE,
             entries: Vec::new(),
@@ -3173,14 +3191,20 @@ mod tests {
         save_rate_limit_config_at(&path, &json!({ "scanIdeLogs": true, "enabled": false }))
             .expect("保存其它字段");
         assert!(
-            SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some(),
+            SCAN_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
             "非范围字段变化不清缓存"
         );
 
         save_rate_limit_config_at(&path, &json!({ "scanIdeLogs": false }))
             .expect("关闭 IDE 日志扫描");
         assert!(
-            SCAN_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_none(),
+            SCAN_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
             "scanIdeLogs 变化必须清缓存"
         );
         assert_eq!(

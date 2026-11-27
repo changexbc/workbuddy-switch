@@ -87,7 +87,8 @@ impl AccountRunGuard {
             .unwrap_or_else(|| account_display_name(account));
         let mut running = CHECKIN_ACCOUNTS_RUNNING
             .get_or_init(|| Mutex::new(HashSet::new()))
-            .lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !running.insert(key.clone()) {
             return None;
         }
@@ -98,7 +99,10 @@ impl AccountRunGuard {
 impl Drop for AccountRunGuard {
     fn drop(&mut self) {
         if let Some(running) = CHECKIN_ACCOUNTS_RUNNING.get() {
-            running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&self.key);
+            running
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&self.key);
         }
     }
 }

@@ -633,7 +633,9 @@ fn compact_if_needed(ctx: &IngestContext, state: &mut State, now: i64) -> bool {
 pub(crate) fn consume_pending() -> bool {
     let events = rate_limit_hook::events_path();
     let state_file = state_path();
-    let mut guard = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let state = guard.get_or_insert_with(|| load_state(&state_file));
     // 快速路径：一次 stat，没有新字节就直接返回（watcher 每秒走这里）。
     if !has_pending_bytes(&events, state.offset) {
@@ -648,7 +650,9 @@ pub(crate) fn consume_pending() -> bool {
 /// 查询路径也能拿到最新状态。
 pub(crate) fn hook_entries(now: i64) -> Vec<Resolved> {
     let _ = consume_pending();
-    let mut guard = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let state = guard.get_or_insert_with(|| load_state(&state_path()));
     live_entries(state, now)
 }
@@ -656,7 +660,9 @@ pub(crate) fn hook_entries(now: i64) -> Vec<Resolved> {
 /// 最近一次入账的 hook 限额事件时刻（诊断用）。
 pub fn last_event_at() -> Option<i64> {
     {
-        let guard = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(state) = guard.as_ref() {
             return state.last_event_at;
         }
