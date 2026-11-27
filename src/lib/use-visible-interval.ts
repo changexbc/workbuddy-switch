@@ -50,6 +50,7 @@ export function useVisibleInterval(callback: () => void, intervalMs: number, ena
     let unlisten: (() => void) | undefined;
     if (!api.isWebui()) {
       void listen<boolean>("main-window-visible", (event) => {
+        if (disposed) return;
         if (event.payload) start();
         else stop();
       }).then((fn) => {

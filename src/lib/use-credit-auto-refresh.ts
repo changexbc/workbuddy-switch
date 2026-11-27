@@ -72,6 +72,7 @@ export function useCreditAutoRefresh() {
     let unlisten: (() => void) | undefined;
     if (!api.isWebui()) {
       void listen<boolean>("main-window-visible", (event) => {
+        if (disposed) return;
         setVisible(event.payload);
       }).then((fn) => {
         // 清理先于 resolve 时立即解绑，避免监听泄漏。

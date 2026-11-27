@@ -21,7 +21,10 @@ export function useTauriEvent<T = unknown>(
     if (!enabled) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    listen<T>(name, (event) => handlerRef.current(event.payload))
+    listen<T>(name, (event) => {
+      // 清理后、listen resolve 前到达的事件也要丢弃。
+      if (!disposed) handlerRef.current(event.payload);
+    })
       .then((fn) => {
         if (disposed) fn();
         else unlisten = fn;
