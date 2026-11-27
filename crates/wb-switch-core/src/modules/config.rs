@@ -2,7 +2,7 @@
 
 use chrono::{Local, TimeZone};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -820,13 +820,20 @@ pub(crate) enum RotateNotifyClaim {
     Unavailable,
 }
 
+pub(crate) struct RotateLimitNotice<'a> {
+    pub account_id: &'a str,
+    pub model: Option<&'a str>,
+    pub first_seen_at: i64,
+    pub reset_at: i64,
+}
+
 /// 领取一次「轮换推迟提示」配额，成功时一并保存已提示的限流事件（若有）。
 ///
 /// 每日次数按本地日期清零；限流事件的去重保留到官方恢复时刻，跨日也有效。
 /// 读取失败或损坏视为无记录，写入失败时不投递。
 pub(crate) fn try_consume_rotate_notify(
     at_ms: i64,
-    limit_event: Option<(String, i64)>,
+    limit_event: Option<RotateLimitNotice<'_>>,
 ) -> RotateNotifyClaim {
     let _guard = ROTATE_NOTIFY_LOCK
         .lock()
@@ -843,7 +850,7 @@ fn try_consume_rotate_notify_at(
     path: &Path,
     today: &str,
     now: i64,
-    limit_event: Option<(String, i64)>,
+    limit_event: Option<RotateLimitNotice<'_>>,
 ) -> RotateNotifyClaim {
     if today.is_empty() {
         return RotateNotifyClaim::Unavailable;
@@ -852,23 +859,44 @@ fn try_consume_rotate_notify_at(
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .unwrap_or_default();
-    let mut notified: std::collections::BTreeMap<String, i64> =
+    let stored: BTreeMap<String, i64> =
         serde_json::from_value(saved["rateLimits"].clone()).unwrap_or_default();
-    notified.retain(|_, reset_at| *reset_at > now);
-    if let Some((key, reset_at)) = limit_event {
-        if notified.contains_key(&key) {
-            return RotateNotifyClaim::AlreadyNotified;
-        }
-        notified.insert(key, reset_at);
+    let mut notified = BTreeMap::<String, i64>::new();
+    for (key, reset_at) in stored {
+        // 兼容第四批旧版包含 resetAt 的 key，升级后延续已提示的窗口。
+        let key = match serde_json::from_str::<(String, Option<String>, i64)>(&key) {
+            Ok((account_id, model, _)) => json!([account_id, model]).to_string(),
+            Err(_) => key,
+        };
+        notified
+            .entry(key)
+            .and_modify(|at| *at = (*at).max(reset_at))
+            .or_insert(reset_at);
     }
     let used = if saved["date"].as_str() == Some(today) {
         saved["count"].as_u64().unwrap_or(0)
     } else {
         0
     };
-    if used >= u64::from(ROTATE_NOTIFY_DAILY_LIMIT) {
+    let mut already_notified = false;
+    if let Some(event) = limit_event {
+        let key = json!([event.account_id, event.model]).to_string();
+        // watcher 可能在旧恢复时刻前已记录延长，轮换周期稍后才读到。
+        if let Some(previous_reset) = notified
+            .get(&key)
+            .filter(|&&at| at > now || at > event.first_seen_at)
+        {
+            if *previous_reset >= event.reset_at {
+                return RotateNotifyClaim::AlreadyNotified;
+            }
+            already_notified = true;
+        }
+        notified.insert(key, event.reset_at);
+    }
+    if !already_notified && used >= u64::from(ROTATE_NOTIFY_DAILY_LIMIT) {
         return RotateNotifyClaim::DailyLimit;
     }
+    notified.retain(|_, reset_at| *reset_at > now);
     if let Some(parent) = path.parent() {
         if std::fs::create_dir_all(parent).is_err() {
             return RotateNotifyClaim::Unavailable;
@@ -876,11 +904,12 @@ fn try_consume_rotate_notify_at(
     }
     let content = serde_json::to_string_pretty(&json!({
         "date": today,
-        "count": used + 1,
+        "count": used + u64::from(!already_notified),
         "rateLimits": notified,
     }))
     .unwrap_or_default();
     match atomic_write(path, &content) {
+        Ok(()) if already_notified => RotateNotifyClaim::AlreadyNotified,
         Ok(()) => RotateNotifyClaim::Granted,
         Err(_) => RotateNotifyClaim::Unavailable,
     }
@@ -2076,38 +2105,91 @@ mod tests {
         let path = dir.join(ROTATE_NOTIFY_FILE_NAME);
         let today = "2026-09-18";
         let tomorrow = "2026-09-19";
-        let event = |key: &str, reset_at| Some((key.to_string(), reset_at));
+        let event = |account_id, first_seen_at, reset_at| {
+            Some(RotateLimitNotice {
+                account_id,
+                model: Some("model"),
+                first_seen_at,
+                reset_at,
+            })
+        };
 
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, json!({"date": today, "count": 4}).to_string()).unwrap();
         let claim = |date, now, limit| try_consume_rotate_notify_at(&path, date, now, limit);
         assert_eq!(
-            claim(today, 10, event("a/model/30", 30)),
+            claim(today, 10, event("a", 10, 30)),
             RotateNotifyClaim::Granted
         );
         assert_eq!(claim(today, 10, None), RotateNotifyClaim::DailyLimit);
         assert_eq!(
-            claim(today, 11, event("b/model/40", 40)),
+            claim(today, 11, event("b", 11, 40)),
             RotateNotifyClaim::DailyLimit
         );
         assert_eq!(
-            claim(tomorrow, 20, event("a/model/30", 30)),
+            claim(tomorrow, 20, event("a", 10, 30)),
             RotateNotifyClaim::AlreadyNotified
         );
         assert_eq!(
-            claim(tomorrow, 20, event("b/model/40", 40)),
+            claim(tomorrow, 20, event("b", 11, 40)),
             RotateNotifyClaim::Granted
         );
         assert_eq!(
-            claim(tomorrow, 30, event("a/model/50", 50)),
+            claim(tomorrow, 30, event("a", 30, 50)),
             RotateNotifyClaim::Granted
         );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["count"], 2);
         assert_eq!(
             saved["rateLimits"],
-            json!({"a/model/50": 50, "b/model/40": 40})
+            json!({r#"["a","model"]"#: 50, r#"["b","model"]"#: 40})
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn extended_limit_migrates_old_key_without_spending_budget_or_notifying_again() {
+        let dir =
+            std::env::temp_dir().join(format!("wb-switch-rotate-notify-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(ROTATE_NOTIFY_FILE_NAME);
+        let today = "2026-09-18";
+        let tomorrow = "2026-09-19";
+        std::fs::write(
+            &path,
+            json!({
+                "date": today,
+                "count": ROTATE_NOTIFY_DAILY_LIMIT,
+                "rateLimits": {r#"["a","model",30]"#: 30, r#"["expired",null,20]"#: 20},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let claim = |date, now, first_seen_at, reset_at| {
+            try_consume_rotate_notify_at(
+                &path,
+                date,
+                now,
+                Some(RotateLimitNotice {
+                    account_id: "a",
+                    model: Some("model"),
+                    first_seen_at,
+                    reset_at,
+                }),
+            )
+        };
+
+        // 延长在旧恢复时刻之前入账，即使轮换下次检查已过了原恢复时刻，也只更新去重窗口。
+        assert_eq!(claim(today, 31, 29, 50), RotateNotifyClaim::AlreadyNotified);
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["count"], ROTATE_NOTIFY_DAILY_LIMIT);
+        assert_eq!(saved["rateLimits"], json!({r#"["a","model"]"#: 50}));
+        assert_eq!(
+            claim(tomorrow, 40, 29, 50),
+            RotateNotifyClaim::AlreadyNotified
+        );
+        assert_eq!(claim(tomorrow, 50, 50, 60), RotateNotifyClaim::Granted);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 }
