@@ -15,6 +15,10 @@ on:
           - mac-arm64
           - mac-x64
           - linux-x64
+      skip_tests:
+        description: "Skip the test gate (e.g. quick Windows test installer). Ignored for tag releases."
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -99,9 +103,16 @@ jobs:
               f.write("EOF\n")
           PY
 
+  # 发版门禁：复用 test.yml，测试不过不出包。
+  tests:
+    name: tests
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_tests) }}
+    uses: ./.github/workflows/test.yml
+
   build:
     name: ${{ matrix.name }}
-    needs: select-matrix
+    needs: [select-matrix, tests]
+    if: ${{ always() && !cancelled() && needs.select-matrix.result == 'success' && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select-matrix.outputs.matrix) }}
@@ -112,6 +123,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -159,7 +171,7 @@ jobs:
       # 前端构建产物（CLI 二进制 rust-embed 嵌入 + Tauri App 使用）
       - name: Build frontend
         run: |
-          npm install
+          npm ci
           npm run build
 
       # CLI 二进制
@@ -323,7 +335,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: Publish main package
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
