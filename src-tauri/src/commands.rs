@@ -1252,7 +1252,7 @@ pub fn get_rotate_logs() -> Value {
 #[tauri::command]
 pub async fn refresh_account_token(account_id: String) -> Result<Value, String> {
     let acc = account::find_account(&account_id).ok_or("账号不存在")?;
-    let fresh = refresh::refresh_account_token(acc).await;
+    let fresh = refresh::try_refresh_account_token(acc).await?;
     Ok(account::account_meta(&fresh))
 }
 

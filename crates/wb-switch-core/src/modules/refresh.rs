@@ -5,10 +5,15 @@
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
+use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
-use crate::modules::account::{build_auth_headers, upsert_account};
-use crate::modules::config::{http_request, load_checkin_config, norm_ts, now_ms, RunFlagGuard};
+use crate::modules::account::{self, build_auth_headers, AccountChange};
+use crate::modules::config::{
+    accounts_file, http_request_raw, load_checkin_config, norm_ts, now_ms, RunFlagGuard,
+};
 
 static KEEPALIVE_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -35,114 +40,226 @@ fn refresh_headers(account: &Value, refresh_token: &str) -> HashMap<String, Stri
     headers
 }
 
-/// 刷新单账号 token（POST /v2/plugin/auth/token/refresh），成功则落盘并返回新账号。
-///
-/// 刷新失败（refresh token 失效等）时给账号标记 needs_relogin，避免无限重试。
-pub async fn refresh_account_token(mut account: Value) -> Value {
-    let previous_access_token = account
-        .get("access_token")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-    let rt = account
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    if rt.is_empty() {
-        account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!("缺少 refresh token，无法刷新，需重新登录");
-        let _ = upsert_account(&account);
-        return account;
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum AccountIdentity {
+    Id(String),
+    LegacyUid(String),
+}
+
+impl AccountIdentity {
+    fn of(account: &Value) -> Option<Self> {
+        account::get_str(account, "id")
+            .map(Self::Id)
+            .or_else(|| account::get_str(account, "uid").map(Self::LegacyUid))
     }
 
-    let headers = refresh_headers(&account, &rt);
-    // 刷新必须走账号自身档位的域名：把国际版 token 打到国内网关等于登录失效。
-    let url = refresh_url(&account);
-    let resp = http_request(&url, "POST", Some(json!({})), Some(&headers)).await;
-    let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
-    if code != 0 && code != 200 {
-        account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!(format!(
-            "刷新失败(code={code}): {}",
-            resp.get("message")
-                .or_else(|| resp.get("msg"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("未知错误")
-        ));
-        let _ = upsert_account(&account);
-        return account;
+    fn matches(&self, account: &Value) -> bool {
+        match self {
+            Self::Id(id) => account::get_str(account, "id").as_ref() == Some(id),
+            Self::LegacyUid(uid) => {
+                account::get_str(account, "id").is_none()
+                    && account::get_str(account, "uid").as_ref() == Some(uid)
+            }
+        }
+    }
+}
+
+/// 凭据被重新登录、重新导入或另一进程刷新过时，旧请求的结果已经失效。
+fn same_credentials(previous: &Value, latest: &Value) -> bool {
+    ["uid", "access_token", "refresh_token", "refreshedAt"]
+        .into_iter()
+        .all(|key| previous.get(key) == latest.get(key))
+        && account::variant_of(previous) == account::variant_of(latest)
+}
+
+enum RefreshUpdate {
+    Tokens(Value),
+    Rejected(String),
+}
+
+fn response_token<'a>(data: &'a Value, camel: &str, snake: &str) -> Option<&'a str> {
+    [camel, snake]
+        .into_iter()
+        .filter_map(|key| data.get(key).and_then(Value::as_str))
+        .find(|token| !token.trim().is_empty())
+}
+
+fn parse_refresh_response(status: u16, response: Value) -> Result<RefreshUpdate, String> {
+    if status == 0 {
+        return Err("刷新请求失败，请检查网络后重试".to_string());
+    }
+    // JSON 业务码可能与 HTTP 状态不同，先排除传输失败、限流和服务端错误。
+    let success_status = (200..300).contains(&status);
+    if !success_status && !matches!(status, 400 | 401) {
+        return Err(format!("刷新请求失败 (HTTP {status})"));
     }
 
-    let data = resp.get("data").cloned().unwrap_or_else(|| json!({}));
-    let new_at = data
-        .get("accessToken")
-        .and_then(|v| v.as_str())
-        .or_else(|| data.get("access_token").and_then(|v| v.as_str()))
-        .map(|s| s.to_string());
-    let Some(new_at) = new_at else {
-        account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!("刷新响应缺少 accessToken");
-        let _ = upsert_account(&account);
-        return account;
+    let code = response.get("code").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    });
+    let rejected = status == 401
+        || matches!(code, Some(401 | 12153))
+        || ["error", "error_description", "message", "msg"]
+            .into_iter()
+            .filter_map(|key| response.get(key).and_then(Value::as_str))
+            .any(|text| {
+                let text = text.to_ascii_lowercase();
+                text.contains("invalid_grant") || text.contains("invalid refresh token")
+            });
+    if rejected {
+        let code = code.unwrap_or(i64::from(status));
+        return Ok(RefreshUpdate::Rejected(format!(
+            "刷新凭据已被服务端拒绝 (code={code})，请重新登录"
+        )));
+    }
+    if success_status && matches!(code, Some(0 | 200)) {
+        if let Some(data) = response.get("data") {
+            if response_token(data, "accessToken", "access_token").is_some() {
+                return Ok(RefreshUpdate::Tokens(data.clone()));
+            }
+        }
+        return Err("刷新响应缺少 accessToken".to_string());
+    }
+    Err(format!(
+        "刷新请求失败 (code={})",
+        code.unwrap_or(i64::from(status))
+    ))
+}
+
+fn apply_refresh_tokens(account: &mut Value, data: &Value) {
+    for (key, camel, snake) in [
+        ("access_token", "accessToken", "access_token"),
+        ("refresh_token", "refreshToken", "refresh_token"),
+        ("token_type", "tokenType", "token_type"),
+    ] {
+        if let Some(value) = response_token(data, camel, snake) {
+            account[key] = json!(value);
+        }
+    }
+    let now = now_ms();
+    let relative_expiry = |key| {
+        data.get(key)
+            .and_then(Value::as_i64)
+            .map(|seconds| now.saturating_add(seconds.saturating_mul(1000)))
     };
-
-    account["access_token"] = json!(new_at);
-    if let Some(new_rt) = data
-        .get("refreshToken")
-        .and_then(|v| v.as_str())
-        .or_else(|| data.get("refresh_token").and_then(|v| v.as_str()))
-    {
-        account["refresh_token"] = json!(new_rt);
+    let access_expiry = norm_ts(data.get("expiresAt").or_else(|| data.get("expires_at")))
+        .or_else(|| relative_expiry("expiresIn"));
+    if let Some(expiry) = access_expiry {
+        account["expiresAt"] = json!(expiry);
     }
-    // 官方接口只返回相对 expiresIn（秒），需换算为绝对时间戳
-    let new_exp = norm_ts(data.get("expiresAt").or_else(|| data.get("expires_at")));
-    let new_exp = match new_exp {
-        Some(v) => Some(v),
-        None => data
-            .get("expiresIn")
-            .and_then(|v| v.as_i64())
-            .map(|e| now_ms() + e * 1000),
-    };
-    if let Some(v) = new_exp {
-        account["expiresAt"] = json!(v);
-    }
-    let fallback_rt_exp = norm_ts(
-        account
-            .get("auth_raw")
-            .and_then(|a| a.get("refreshExpiresAt")),
-    );
-    let mut new_rt_exp = norm_ts(
+    let refresh_expiry = norm_ts(
         data.get("refreshExpiresAt")
             .or_else(|| data.get("refresh_expires_at")),
-    );
-    if new_rt_exp.is_none() {
-        new_rt_exp = fallback_rt_exp;
+    )
+    .or_else(|| relative_expiry("refreshExpiresIn"))
+    .or_else(|| {
+        if norm_ts(account.get("refreshExpiresAt")).is_some() {
+            return None;
+        }
+        norm_ts(account.get("auth_raw")?.get("refreshExpiresAt"))
+    });
+    if let Some(expiry) = refresh_expiry {
+        account["refreshExpiresAt"] = json!(expiry);
     }
-    let new_rt_exp = match new_rt_exp {
-        Some(v) => Some(v),
-        None => data
-            .get("refreshExpiresIn")
-            .and_then(|v| v.as_i64())
-            .map(|e| now_ms() + e * 1000),
-    };
-    if let Some(v) = new_rt_exp {
-        account["refreshExpiresAt"] = json!(v);
-    }
-    account["refreshedAt"] = json!(now_ms());
+    account["refreshedAt"] = json!(now);
     let map = account.as_object_mut().unwrap();
     map.remove("needs_relogin");
     map.remove("needs_relogin_reason");
-    let _ = upsert_account(&account);
-    // Windows 不执行 apiKeyHelper；当前 CLI 账号刷新后同步 settings env。
-    // 同步失败不阻断 WorkBuddy 保活；状态接口会根据 settings 与账号库是否
-    // 一致显示“待同步”，避免把认证配置错误混入账号数据。
-    if cfg!(windows) {
-        let _ = crate::modules::codebuddy_cli::sync_windows_env_for_account(
-            &account,
-            previous_access_token.as_deref(),
-        );
+}
+
+async fn request_refresh(url: String, headers: HashMap<String, String>) -> (u16, Value) {
+    let (status, _, body) =
+        http_request_raw(&url, "POST", Some(json!({})), Some(&headers), None, true).await;
+    (status, serde_json::from_str(&body).unwrap_or(Value::Null))
+}
+
+async fn refresh_stored_account<Fut: Future<Output = (u16, Value)>>(
+    path: PathBuf,
+    identity: AccountIdentity,
+    snapshot: Value,
+    request: impl FnOnce(String, HashMap<String, String>) -> Fut,
+) -> Result<Value, String> {
+    let read_path = path.clone();
+    let read_identity = identity.clone();
+    let account = tokio::task::spawn_blocking(move || {
+        account::load_accounts_from_path(&read_path).map(|accounts| {
+            accounts
+                .into_iter()
+                .find(|account| read_identity.matches(account))
+        })
+    })
+    .await
+    .map_err(|e| format!("读取账号库失败：{e}"))?
+    .map_err(|e| format!("读取账号库失败：{e}"))?
+    .ok_or("账号不存在")?;
+    if !same_credentials(&snapshot, &account) {
+        return Ok(account);
     }
-    account
+
+    let refresh_token =
+        response_token(&account, "refresh_token", "refresh_token").ok_or_else(|| {
+            if account::is_envelope(&account, "refresh_token") {
+                "加密的 refresh token 无法用于刷新，请重新登录"
+            } else {
+                "缺少 refresh token，无法刷新"
+            }
+        })?;
+    let (status, response) = request(
+        refresh_url(&account),
+        refresh_headers(&account, refresh_token),
+    )
+    .await;
+    let update = parse_refresh_response(status, response)?;
+    let refreshed = matches!(update, RefreshUpdate::Tokens(_));
+
+    tokio::task::spawn_blocking(move || {
+        let (latest, written) = account::mutate_at(&path, |accounts| {
+            let latest = accounts
+                .iter_mut()
+                .find(|account| identity.matches(account))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "账号已删除"))?;
+            if !same_credentials(&account, latest) {
+                return Ok(AccountChange::Unchanged((latest.clone(), false)));
+            }
+            match update {
+                RefreshUpdate::Tokens(data) => {
+                    apply_refresh_tokens(latest, &data);
+                    if matches!(identity, AccountIdentity::LegacyUid(_)) {
+                        latest["id"] = json!(uuid::Uuid::new_v4().to_string());
+                    }
+                }
+                RefreshUpdate::Rejected(reason) => {
+                    latest["needs_relogin"] = json!(true);
+                    latest["needs_relogin_reason"] = json!(reason);
+                }
+            }
+            Ok(AccountChange::Write((latest.clone(), true)))
+        })
+        .map_err(|e| format!("保存刷新结果失败：{e}"))?;
+
+        // Windows CLI 的 settings 同步在账号库提交后执行。失败由状态接口提示。
+        if cfg!(windows) && refreshed && written && path == accounts_file() {
+            let previous = account.get("access_token").and_then(Value::as_str);
+            let _ = crate::modules::codebuddy_cli::sync_windows_env_for_account(&latest, previous);
+        }
+        Ok(latest)
+    })
+    .await
+    .map_err(|e| format!("保存刷新结果失败：{e}"))?
+}
+
+/// 手动刷新和保活需要回报请求或写入错误；明确拒绝的凭据通过账号重登标记反馈。
+pub async fn try_refresh_account_token(snapshot: Value) -> Result<Value, String> {
+    let identity = AccountIdentity::of(&snapshot).ok_or("账号缺少 id 和 uid")?;
+    refresh_stored_account(accounts_file(), identity, snapshot, request_refresh).await
+}
+
+/// 签到、积分等调用在刷新暂时失败时继续使用原有账号。
+pub async fn refresh_account_token(account: Value) -> Value {
+    try_refresh_account_token(account.clone())
+        .await
+        .unwrap_or(account)
 }
 
 /// 惰性刷新：expiresAt 缺失或剩余 < lazy_refresh_hours 则刷新。返回最新账号。
@@ -185,7 +302,7 @@ pub async fn run_keepalive_cycle() -> Value {
     let accounts = crate::modules::account::load_accounts();
     let total = accounts.len();
     let mut results: Vec<Value> = Vec::new();
-    for mut acc in accounts {
+    for acc in accounts {
         let exp = acc.get("expiresAt").and_then(|v| v.as_i64());
         let stale = keep_days <= 0
             || match exp {
@@ -201,16 +318,20 @@ pub async fn run_keepalive_cycle() -> Value {
             .unwrap_or("")
             .is_empty()
         {
-            acc["needs_relogin"] = json!(true);
-            acc["needs_relogin_reason"] = json!("缺少 refresh token，无法保活，需重新登录");
-            let _ = upsert_account(&acc);
             results.push(json!({
                 "email": crate::modules::account::account_display_name(&acc),
                 "status": "missing_rt",
             }));
             continue;
         }
-        let fresh = refresh_account_token(acc).await;
+        let email = account::account_display_name(&acc);
+        let fresh = match try_refresh_account_token(acc).await {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                results.push(json!({"email": email, "status": "failed", "error": error}));
+                continue;
+            }
+        };
         let failed = fresh.get("needs_relogin").and_then(|v| v.as_bool()) == Some(true);
         results.push(json!({
             "email": crate::modules::account::account_display_name(&fresh),
@@ -228,6 +349,170 @@ pub async fn run_keepalive_cycle() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn store_account(acc: &Value) -> PathBuf {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let path = account::accounts_file_in(&dir);
+        account::mutate_at(&path, |accounts| {
+            accounts.push(acc.clone());
+            Ok(AccountChange::Write(()))
+        })
+        .unwrap();
+        path
+    }
+
+    fn test_account() -> Value {
+        json!({"id": "account", "uid": "user", "access_token": "old-at", "refresh_token": "old-rt"})
+    }
+
+    fn successful_response() -> (u16, Value) {
+        (
+            200,
+            json!({"code": 0, "data": {
+                "accessToken": "new-at", "refreshToken": "new-rt",
+                "expiresAt": 1_900_000_000_000_i64, "refreshExpiresIn": 3600
+            }}),
+        )
+    }
+
+    #[tokio::test]
+    async fn refresh_merges_only_token_fields_after_concurrent_account_edit() {
+        let mut snapshot = test_account();
+        snapshot["nickname"] = json!("old");
+        snapshot["needs_relogin"] = json!(true);
+        let path = store_account(&snapshot);
+        let edit_path = path.clone();
+        let identity = AccountIdentity::of(&snapshot).unwrap();
+        let fresh = refresh_stored_account(path.clone(), identity, snapshot, |_, _| async {
+            account::mutate_at(&edit_path, |accounts| {
+                accounts[0]["nickname"] = json!("new nickname");
+                accounts[0]["note"] = json!("new note");
+                accounts[0]["auth_raw"] = json!({"value": "new raw", "refreshExpiresAt": 123});
+                Ok(AccountChange::Write(()))
+            })
+            .unwrap();
+            successful_response()
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            account::load_accounts_from_path(&path).unwrap(),
+            vec![fresh.clone()]
+        );
+        assert_eq!(fresh["nickname"], "new nickname");
+        assert_eq!(fresh["note"], "new note");
+        assert_eq!(
+            fresh["auth_raw"],
+            json!({"value": "new raw", "refreshExpiresAt": 123})
+        );
+        assert_eq!(fresh["access_token"], "new-at");
+        assert_eq!(fresh["refresh_token"], "new-rt");
+        assert_eq!(fresh["expiresAt"], 1_900_000_000_000_i64);
+        assert_eq!(
+            fresh["refreshExpiresAt"].as_i64().unwrap(),
+            fresh["refreshedAt"].as_i64().unwrap() + 3_600_000
+        );
+        assert!(fresh.get("needs_relogin").is_none());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_does_not_restore_a_deleted_account() {
+        let snapshot = test_account();
+        let identity = AccountIdentity::of(&snapshot).unwrap();
+        let path = store_account(&snapshot);
+        let delete_path = path.clone();
+        let result = refresh_stored_account(path.clone(), identity, snapshot, |_, _| async {
+            account::mutate_at(&delete_path, |accounts| {
+                accounts.clear();
+                Ok(AccountChange::Write(()))
+            })
+            .unwrap();
+            successful_response()
+        })
+        .await;
+
+        assert!(result.unwrap_err().contains("账号已删除"));
+        assert!(account::load_accounts_from_path(&path).unwrap().is_empty());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_failure_with_old_credentials_keeps_new_envelopes() {
+        let snapshot = test_account();
+        let identity = AccountIdentity::of(&snapshot).unwrap();
+        let path = store_account(&snapshot);
+        let edit_path = path.clone();
+        let envelope = json!({"$wbEncrypted": true, "envelope": "fixture"});
+        let fresh = refresh_stored_account(path.clone(), identity, snapshot, |_, _| async {
+            account::mutate_at(&edit_path, |accounts| {
+                accounts[0]["access_token"] = envelope.clone();
+                accounts[0]["refresh_token"] = envelope.clone();
+                Ok(AccountChange::Write(()))
+            })
+            .unwrap();
+            (400, json!({"error": "invalid_grant"}))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            account::load_accounts_from_path(&path).unwrap(),
+            vec![fresh.clone()]
+        );
+        assert_eq!(fresh["access_token"], envelope);
+        assert_eq!(fresh["refresh_token"], envelope);
+        assert!(fresh.get("needs_relogin").is_none());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_transient_errors_leave_account_bytes_unchanged() {
+        let snapshot = test_account();
+        let identity = AccountIdentity::of(&snapshot).unwrap();
+        let path = store_account(&snapshot);
+        let original = std::fs::read(&path).unwrap();
+        for response in [
+            (0, Value::Null),
+            (408, Value::Null),
+            (503, json!({"code": 12153})),
+            (400, json!({"error": "bad_request"})),
+            (200, json!({"code": 0})),
+        ] {
+            let result = refresh_stored_account(
+                path.clone(),
+                identity.clone(),
+                snapshot.clone(),
+                |_, _| async { response },
+            )
+            .await;
+            assert!(result.is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_rejection_marks_account_for_relogin() {
+        let snapshot = test_account();
+        let identity = AccountIdentity::of(&snapshot).unwrap();
+        let path = store_account(&snapshot);
+        let fresh = refresh_stored_account(path.clone(), identity, snapshot, |_, _| async {
+            (400, json!({"code": 12153, "error": "invalid_grant"}))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(fresh["needs_relogin"], true);
+        assert_eq!(fresh["access_token"], "old-at");
+        assert_eq!(fresh["refresh_token"], "old-rt");
+        assert_eq!(
+            account::load_accounts_from_path(&path).unwrap(),
+            vec![fresh]
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn refresh_url_follows_account_variant() {
