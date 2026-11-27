@@ -7,7 +7,6 @@ mod instance_lock;
 mod tray;
 mod update_service;
 
-use std::time::Duration;
 use tauri::Emitter;
 use wb_switch_core::modules;
 
@@ -53,78 +52,16 @@ pub(crate) fn notify_codebuddy_cli_updated(app: &tauri::AppHandle) {
     }
 }
 
-/// 后台循环：自动签到启动即核验，之后按 core 计算的下一轮延迟睡眠（未设置
-/// 签到时间段时固定 30 分钟）；自动轮换每 30 秒检查；每天一次保活；
-/// 限额 hook 信号每秒轮询一次（入账即通知前端）；限额 hook 启动时后台默认接入。
+/// 账号后台任务由桌面端和 HTTP 服务选主，桌面端负责将本进程的任务结果通知前端。
 fn spawn_background_loops(app: tauri::AppHandle) {
     let rotate_app = app.clone();
+    let keepalive_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = modules::config::compact_checkin_logs() {
-            eprintln!("[签到] 历史日志整理失败: {error}");
-        }
-        let _ =
-            modules::checkin::run_checkin_cycle(modules::checkin::CheckinCycleMode::StartupVerify)
-                .await;
-        loop {
-            tokio::time::sleep(modules::checkin::next_cycle_delay()).await;
-            let _ = modules::checkin::run_checkin_cycle(
-                modules::checkin::CheckinCycleMode::PeriodicRecovery,
-            )
-            .await;
-        }
-    });
-
-    // 派猫猫旅行：启动即派发，之后周期性补派（并重试 no-buddy / 瞬时错误）。
-    // 档位过滤在 core（`travel_capable_accounts`）：不支持成长中心的档位不会发请求。
-    tauri::async_runtime::spawn(async move {
-        let _ = modules::travel::run_travel_cycle().await;
-        loop {
-            tokio::time::sleep(modules::travel::TRAVEL_RETRY_INTERVAL).await;
-            let _ = modules::travel::run_travel_cycle().await;
-        }
-    });
-
-    // 旅行领取：启动立刻查一轮（避免重启后空等 15 分钟漏领），之后按周期检查。
-    tauri::async_runtime::spawn(async move {
-        let _ = modules::travel::run_travel_claim_cycle().await;
-        loop {
-            tokio::time::sleep(modules::travel::TRAVEL_CLAIM_INTERVAL).await;
-            let _ = modules::travel::run_travel_claim_cycle().await;
-        }
-    });
-
-    tauri::async_runtime::spawn(async move {
-        let mut last_keepalive_day = String::new();
-        let mut last_rotate_at: i64 = 0;
-        loop {
-            // 自动轮换（CodeBuddy CLI）：按配置间隔执行
-            let rotate_cfg = modules::config::load_auto_rotate_config();
-            if rotate_cfg.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
-                let interval_minutes = rotate_cfg
-                    .get("check_interval_minutes")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(5)
-                    .max(1);
-                let now = modules::config::now_ms();
-                if now - last_rotate_at >= interval_minutes * 60_000 {
-                    last_rotate_at = now;
-                    let result = modules::rotate::run_rotate_cycle().await;
-                    deliver_rotate_notify(&rotate_app, &result);
-                }
-            }
-            let today = modules::checkin::date_str(None);
-            if today != last_keepalive_day {
-                last_keepalive_day = today;
-                // 保活会批量改写 `access_token` 并同步回 settings.json，期间前端若拉到
-                // 状态会读到「账号库已换新、settings 未跟上」的中间态。刷新前后各广播
-                // 一次：先让前端把已显示的旧判断标记为「同步中」，刷新完再让它重读，
-                // 避免误判的告警滞留在页面上。
-                notify_codebuddy_cli_updated(&rotate_app);
-                let _ = modules::refresh::run_keepalive_cycle().await;
-                notify_codebuddy_cli_updated(&rotate_app);
-            }
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
+        modules::background::run(
+            |result| deliver_rotate_notify(&rotate_app, result),
+            || notify_codebuddy_cli_updated(&keepalive_app),
+        )
+        .await;
     });
 
     // 统一更新服务：首次 15 秒后检查一次，之后每 30 分钟（未带 force，走 core 的

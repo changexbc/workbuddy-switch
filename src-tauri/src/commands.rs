@@ -438,36 +438,24 @@ pub async fn detect_codebuddy_ide_account() -> Result<Value, String> {
 
 /// 串行化界面发起的账号库「读-改-写」（删除 / 备注 / 导入）。
 ///
-/// 导入命令已移到线程池执行，不再与主线程上的同步命令天然串行；
-/// 不加锁时两边各自整份写回 `accounts.json`，后写的会覆盖先写的
-/// （例如让刚删除的账号重新出现）。后台循环的写入仍未纳入，留待 core 统一加锁。
-static ACCOUNT_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn account_write_guard() -> std::sync::MutexGuard<'static, ()> {
-    ACCOUNT_WRITE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 /// DELETE /api/delete —— 删除账号。
 #[tauri::command]
-pub fn delete_account(account_id: String) -> Result<Value, String> {
-    let _guard = account_write_guard();
-    let mut accounts = account::load_accounts();
-    let before = accounts.len();
-    accounts.retain(|a| a.get("id").and_then(|v| v.as_str()) != Some(account_id.as_str()));
-    if accounts.len() == before {
-        return Err("账号不存在".to_string());
-    }
-    account::save_accounts(&accounts).map_err(|e| e.to_string())?;
-    Ok(json!({ "ok": true }))
+pub async fn delete_account(account_id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        account::delete_account(&account_id).map(|()| json!({ "ok": true }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/update-account-display —— 更新账号本地展示字段（备注 / 显示选择）。
 #[tauri::command]
-pub fn update_account_display(account_id: String, patch: Value) -> Result<Value, String> {
-    let _guard = account_write_guard();
-    account::update_account_display(&account_id, &patch)
+pub async fn update_account_display(account_id: String, patch: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        account::update_account_display(&account_id, &patch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/oauth/start —— 发起 OAuth 扫码登录（`variant` 缺省国内版）。
@@ -486,7 +474,6 @@ pub async fn oauth_status(login_id: String) -> Value {
 #[tauri::command]
 pub async fn import_local(variant: Option<String>) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = account_write_guard();
         account::import_local(WbVariant::parse(variant.as_deref()))
             .map(|acc| json!({ "ok": true, "account": acc }))
     })
@@ -535,7 +522,6 @@ pub async fn preview_import_accounts(file_text: String) -> Result<Value, String>
 #[tauri::command]
 pub async fn import_accounts(file_text: String, indexes: Vec<usize>) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = account_write_guard();
         let result = export_import::import_accounts(&file_text, &indexes)?;
         Ok(json!({
             "ok": true,
@@ -1266,7 +1252,7 @@ pub fn get_rotate_logs() -> Value {
 #[tauri::command]
 pub async fn refresh_account_token(account_id: String) -> Result<Value, String> {
     let acc = account::find_account(&account_id).ok_or("账号不存在")?;
-    let fresh = refresh::refresh_account_token(acc).await;
+    let fresh = refresh::try_refresh_account_token(acc).await?;
     Ok(account::account_meta(&fresh))
 }
 

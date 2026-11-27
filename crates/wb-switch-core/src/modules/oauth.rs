@@ -254,7 +254,11 @@ pub async fn oauth_poll(login_id: &str) -> Value {
         "createdAt": now_ms(),
     });
 
-    let account = match account::save_collected_account(account) {
+    let saved = tokio::task::spawn_blocking(move || account::save_collected_account(account))
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    let account = match saved {
         Ok(saved) => saved,
         Err(error) => {
             let error = format!("保存账号失败: {error}");

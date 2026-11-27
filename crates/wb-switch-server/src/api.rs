@@ -1779,7 +1779,10 @@ async fn api_refresh_token(Json(body): Json<Value>) -> Response {
     let Some(acc) = account::find_account(id) else {
         return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
     };
-    json_ok(refresh::refresh_account_token(acc).await)
+    match refresh::try_refresh_account_token(acc).await {
+        Ok(fresh) => json_ok(fresh),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
 }
 
 // ---------------------------------------------------------------------------
