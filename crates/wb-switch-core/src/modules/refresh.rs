@@ -187,14 +187,24 @@ fn apply_refresh_tokens(account: &mut Value, data: &Value) {
             .or_else(|| data.get("refresh_expires_at")),
     )
     .or_else(|| relative_expiry("refreshExpiresIn"))
+    .or_else(|| norm_ts(account.get("refreshExpiresAt")).filter(|&expiry| expiry > 0))
     .or_else(|| {
-        if norm_ts(account.get("refreshExpiresAt")).is_some() {
-            return None;
-        }
-        norm_ts(account.get("auth_raw")?.get("refreshExpiresAt"))
+        let raw = account.get("auth_raw")?;
+        norm_ts(raw.get("refreshExpiresAt"))
+            .filter(|&expiry| expiry > 0)
+            .or_else(|| norm_ts(raw.get("auth")?.get("refreshExpiresAt")))
     });
     if let Some(expiry) = refresh_expiry {
         account["refreshExpiresAt"] = json!(expiry);
+        // 切换账号会从 auth_raw 取过期时间，导入的认证文件也可能把 auth 包在里面。
+        let raw = &mut account["auth_raw"];
+        if !raw.is_object() {
+            *raw = json!({});
+        }
+        raw["refreshExpiresAt"] = json!(expiry);
+        if let Some(auth) = raw.get_mut("auth").and_then(Value::as_object_mut) {
+            auth.insert("refreshExpiresAt".to_string(), json!(expiry));
+        }
     }
     account["refreshedAt"] = json!(now);
     let map = account.as_object_mut().unwrap();
@@ -543,7 +553,7 @@ mod tests {
         assert_eq!(fresh["note"], "new note");
         assert_eq!(
             fresh["auth_raw"],
-            json!({"value": "new raw", "refreshExpiresAt": 123})
+            json!({"value": "new raw", "refreshExpiresAt": fresh["refreshExpiresAt"]})
         );
         assert_eq!(fresh["access_token"], "new-at");
         assert_eq!(fresh["refresh_token"], "new-rt");
@@ -554,6 +564,58 @@ mod tests {
         );
         assert!(fresh.get("needs_relogin").is_none());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn refresh_expiry_is_written_back_to_client_auth() {
+        use crate::modules::auth_file::build_auth_obj;
+
+        let old_expiry = 1_700_000_000_000_i64;
+        let new_expiry = 4_000_000_000_000_i64;
+        for raw in [
+            Value::Null,
+            json!({"refreshExpiresAt": old_expiry, "scope": "custom"}),
+            json!({"auth": {"refreshExpiresAt": old_expiry, "scope": "custom"}}),
+        ] {
+            let mut account = test_account();
+            account["expiresAt"] = json!(1_900_000_000_000_i64);
+            account["refreshExpiresAt"] = json!(old_expiry);
+            account["auth_raw"] = raw.clone();
+            apply_refresh_tokens(
+                &mut account,
+                &json!({"accessToken": "new-at", "refreshExpiresAt": new_expiry}),
+            );
+
+            assert_eq!(account["refreshExpiresAt"], new_expiry);
+            assert_eq!(account["auth_raw"]["refreshExpiresAt"], new_expiry);
+            if raw.get("auth").is_some() {
+                assert_eq!(account["auth_raw"]["auth"]["refreshExpiresAt"], new_expiry);
+            }
+            let auth = build_auth_obj(&account);
+            assert_eq!(auth["refreshExpiresAt"], new_expiry);
+            assert!(auth["refreshExpiresIn"].as_i64().unwrap() > 0);
+            if raw.is_object() {
+                assert_eq!(auth["scope"], "custom");
+            }
+        }
+    }
+
+    #[test]
+    fn refresh_without_expiry_keeps_the_current_account_expiry() {
+        let mut account = test_account();
+        let expiry = 1_900_000_000_000_i64;
+        account["refreshExpiresAt"] = json!(expiry);
+        account["auth_raw"] = json!({"refreshExpiresAt": 1_700_000_000_000_i64});
+        apply_refresh_tokens(&mut account, &json!({"accessToken": "new-at"}));
+        assert_eq!(account["refreshExpiresAt"], expiry);
+        assert_eq!(account["auth_raw"]["refreshExpiresAt"], expiry);
+
+        account["refreshExpiresAt"] = json!(0);
+        account["auth_raw"] = json!({"refreshExpiresAt": 0, "auth": {"refreshExpiresAt": expiry}});
+        apply_refresh_tokens(&mut account, &json!({"accessToken": "newer-at"}));
+        assert_eq!(account["refreshExpiresAt"], expiry);
+        assert_eq!(account["auth_raw"]["refreshExpiresAt"], expiry);
+        assert_eq!(account["auth_raw"]["auth"]["refreshExpiresAt"], expiry);
     }
 
     #[tokio::test]
