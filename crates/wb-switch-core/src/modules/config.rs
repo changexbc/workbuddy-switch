@@ -34,7 +34,7 @@ static TRAVEL_CACHE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Serialize travel-cache read-modify-write across depart and claim cycles.
 pub fn with_travel_cache_lock<T>(f: impl FnOnce() -> T) -> T {
-    let _guard = TRAVEL_CACHE_WRITE_LOCK.lock().unwrap();
+    let _guard = TRAVEL_CACHE_WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f()
 }
 
@@ -422,7 +422,7 @@ fn save_checkin_logs_unlocked(logs: &[Value]) -> std::io::Result<()> {
 
 /// 保存签到日志（30 天过滤 + 保留最近 500 条，保持插入顺序）。
 pub fn save_checkin_logs(logs: &[Value]) -> std::io::Result<()> {
-    let _guard = CHECKIN_LOG_WRITE_LOCK.lock().unwrap();
+    let _guard = CHECKIN_LOG_WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     save_checkin_logs_unlocked(logs)
 }
 
@@ -539,7 +539,7 @@ fn compact_checkin_logs_at(path: &Path, at_ms: i64) -> std::io::Result<bool> {
 /// read-only operation; both hosts invoke this explicit migration before their
 /// first automatic verification cycle.
 pub fn compact_checkin_logs() -> std::io::Result<bool> {
-    let _guard = CHECKIN_LOG_WRITE_LOCK.lock().unwrap();
+    let _guard = CHECKIN_LOG_WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     compact_checkin_logs_at(&checkin_logs_file(), now_ms())
 }
 
@@ -547,7 +547,7 @@ pub fn compact_checkin_logs() -> std::io::Result<bool> {
 pub fn add_checkin_log(entry: &Value) {
     // Account-scoped check-in coordination permits unrelated accounts to run
     // concurrently. Serialize the file read-modify-write so neither entry is lost.
-    let _guard = CHECKIN_LOG_WRITE_LOCK.lock().unwrap();
+    let _guard = CHECKIN_LOG_WRITE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut logs = load_checkin_logs();
     logs.push(entry.clone());
     let _ = save_checkin_logs_unlocked(&logs);
@@ -827,7 +827,7 @@ fn rotate_notify_count_at(path: &Path, today: &str) -> u32 {
 /// 同自然日上限 [`ROTATE_NOTIFY_DAILY_LIMIT`]，跨日按本地日期清零；读取失败/损坏视为 0，
 /// 不阻塞轮换。预算文件写不进去时不投递——宁可少一条通知，也不要每轮都弹。
 pub fn try_consume_rotate_notify(at_ms: i64) -> bool {
-    let _guard = ROTATE_NOTIFY_LOCK.lock().unwrap();
+    let _guard = ROTATE_NOTIFY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = auto_rotate_notify_file();
     try_consume_rotate_notify_at(&path, &local_date(at_ms))
 }
