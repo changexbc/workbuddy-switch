@@ -516,11 +516,20 @@ pub(crate) fn copy_sessions_in_with(
     let target_history = history_root_in(spec, root, target_uid);
 
     // 先为每个目标工作区建立「磁盘备份 + 内存工作副本」，保证逐条隔离与可回退。
-    let mut states: BTreeMap<String, WorkspaceState> = BTreeMap::new();
+    let mut states = BTreeMap::new();
     for workspace_hash in distinct_workspaces(items) {
         let ws_dir = target_history.join(&workspace_hash);
-        let state = WorkspaceState::load(&ws_dir, backup_root, &workspace_hash)
-            .map_err(|error| format!("加载目标工作区索引失败（{workspace_hash}）：{error}"))?;
+        let state = match WorkspaceState::load(&ws_dir, backup_root, &workspace_hash) {
+            Ok(state) => Ok(state),
+            Err(WorkspaceLoadError::InvalidIndex(error)) => Err(format!(
+                "加载目标工作区索引失败（{workspace_hash}）：解析 index.json 失败：{error}"
+            )),
+            Err(WorkspaceLoadError::Io(error)) => {
+                return Err(format!(
+                    "加载目标工作区索引失败（{workspace_hash}）：{error}"
+                ));
+            }
+        };
         states.insert(workspace_hash, state);
     }
 
@@ -538,6 +547,25 @@ pub(crate) fn copy_sessions_in_with(
             }));
             continue;
         }
+        let Some(state) = states.get_mut(workspace_hash) else {
+            errors.push(json!({
+                "workspaceHash": workspace_hash,
+                "conversationId": conversation_id,
+                "error": "工作区状态缺失",
+            }));
+            continue;
+        };
+        let state = match state {
+            Ok(state) => state,
+            Err(error) => {
+                errors.push(json!({
+                    "workspaceHash": workspace_hash,
+                    "conversationId": conversation_id,
+                    "error": error,
+                }));
+                continue;
+            }
+        };
         let source_dir = source_history.join(workspace_hash).join(conversation_id);
         if !source_dir.is_dir() {
             errors.push(json!({
@@ -547,14 +575,6 @@ pub(crate) fn copy_sessions_in_with(
             }));
             continue;
         }
-        let Some(state) = states.get_mut(workspace_hash) else {
-            errors.push(json!({
-                "workspaceHash": workspace_hash,
-                "conversationId": conversation_id,
-                "error": "工作区状态缺失",
-            }));
-            continue;
-        };
         let target_dir = target_history.join(workspace_hash);
         match copy_one_conversation(
             options,
@@ -726,6 +746,11 @@ fn distinct_workspaces(items: &[CopyItem]) -> BTreeSet<String> {
         .collect()
 }
 
+enum WorkspaceLoadError {
+    InvalidIndex(serde_json::Error),
+    Io(String),
+}
+
 /// 目标工作区在本次复制期间的状态：磁盘备份 + 内存工作副本。
 struct WorkspaceState {
     /// 目标工作区目录（`...\history\<workspaceHash>`）。
@@ -744,26 +769,34 @@ impl WorkspaceState {
     /// **延迟创建**：此处**不**创建目标工作区目录，只有确有会话写入（[`Self::persist`] 或
     /// [`write_conversation`] 落临时目录）时才创建，避免「该工作区所有条目最终都失败」
     /// 时留下空目录。备份目录也仅在确有既有索引需要备份时才落盘。
-    fn load(dir: &Path, backup_root: &Path, workspace_hash: &str) -> Result<Self, String> {
+    fn load(
+        dir: &Path,
+        backup_root: &Path,
+        workspace_hash: &str,
+    ) -> Result<Self, WorkspaceLoadError> {
         let original = Self::read_optional_index(dir, "index.json")?;
         let current = match &original {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|error| format!("解析 index.json 失败：{error}"))?,
+            Some(bytes) => {
+                serde_json::from_slice(bytes).map_err(WorkspaceLoadError::InvalidIndex)?
+            }
             None => json!({}),
         };
         let original_bak = Self::read_optional_index(dir, ".index_bak.json")?;
 
         let workspace_backup = backup_root.join(workspace_hash);
         if original.is_some() || original_bak.is_some() {
-            std::fs::create_dir_all(&workspace_backup)
-                .map_err(|error| format!("创建索引备份目录失败：{error}"))?;
+            std::fs::create_dir_all(&workspace_backup).map_err(|error| {
+                WorkspaceLoadError::Io(format!("创建索引备份目录失败：{error}"))
+            })?;
             if let Some(bytes) = &original {
-                std::fs::write(workspace_backup.join("index.json"), bytes)
-                    .map_err(|error| format!("备份 index.json 失败：{error}"))?;
+                std::fs::write(workspace_backup.join("index.json"), bytes).map_err(|error| {
+                    WorkspaceLoadError::Io(format!("备份 index.json 失败：{error}"))
+                })?;
             }
             if let Some(bytes) = &original_bak {
-                std::fs::write(workspace_backup.join(".index_bak.json"), bytes)
-                    .map_err(|error| format!("备份 .index_bak.json 失败：{error}"))?;
+                std::fs::write(workspace_backup.join(".index_bak.json"), bytes).map_err(
+                    |error| WorkspaceLoadError::Io(format!("备份 .index_bak.json 失败：{error}")),
+                )?;
             }
         }
 
@@ -775,11 +808,11 @@ impl WorkspaceState {
         })
     }
 
-    fn read_optional_index(dir: &Path, name: &str) -> Result<Option<Vec<u8>>, String> {
+    fn read_optional_index(dir: &Path, name: &str) -> Result<Option<Vec<u8>>, WorkspaceLoadError> {
         match std::fs::read(dir.join(name)) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(format!("读取 {name} 失败：{error}")),
+            Err(error) => Err(WorkspaceLoadError::Io(format!("读取 {name} 失败：{error}"))),
         }
     }
 
@@ -1045,7 +1078,7 @@ fn rewrite_conversation_id_references(
 ) -> io::Result<()> {
     let mut map: BTreeMap<String, String> = BTreeMap::new();
     map.insert(old_id.to_string(), new_id.to_string());
-    // 非 JSON 附件原样保留。所有 .json 文件都可能包含旧 id，无法读取或解析时中止复制。
+    // 无法解析的 .json 附件只有在原始字节中含旧 id 时才中止复制。
     for path in json_files(dest_dir)? {
         let bytes = std::fs::read(&path).map_err(|error| {
             io::Error::new(
@@ -1053,12 +1086,21 @@ fn rewrite_conversation_id_references(
                 format!("读取 {} 失败：{error}", path.display()),
             )
         })?;
-        let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("解析 {} 失败：{error}", path.display()),
-            )
-        })?;
+        let value: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(error) => {
+                if bytes
+                    .windows(old_id.len())
+                    .any(|window| window == old_id.as_bytes())
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("解析 {} 失败：{error}", path.display()),
+                    ));
+                }
+                continue;
+            }
+        };
         // 先判定「确有引用」再改写：改写会把文件重新序列化为紧凑格式，不该波及无关文件。
         if !contains_exact_id(&value, old_id) {
             continue;
@@ -1835,23 +1877,60 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_target_workspace_index_stops_copy_without_overwriting_it() {
+    fn corrupt_target_workspace_index_only_blocks_its_own_items() {
+        const BROKEN_WS: &str = "00000000000000000000000000000000";
         let fixture = Fixture::new("corrupt-target-index");
         seed_source(&fixture);
-        let index_path = fixture.dst_ws_dir().join("index.json");
+        let broken_source = history_root(&fixture.root, SRC_UID).join(BROKEN_WS);
+        copy_dir_recursive(&fixture.src_ws_dir(), &broken_source).unwrap();
+        copy_dir_recursive(
+            &fixture.src_ws_dir().join(CONV_OLD),
+            &broken_source.join(CONV_EXISTING),
+        )
+        .unwrap();
+        let broken_target = history_root(&fixture.root, DST_UID).join(BROKEN_WS);
+        let index_path = broken_target.join("index.json");
         let corrupt = r#"{"conversations":[{"id":"existing"}]"#;
         write(&index_path, corrupt);
 
-        let items = [CopyItem {
-            workspace_hash: WS.to_string(),
-            conversation_id: CONV_OLD.to_string(),
-        }];
-        let error =
-            copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, DST_UID, &items).unwrap_err();
-        assert!(error.contains(WS), "{error}");
-        assert!(error.contains("解析 index.json 失败"), "{error}");
+        let items = [
+            CopyItem {
+                workspace_hash: BROKEN_WS.to_string(),
+                conversation_id: CONV_OLD.to_string(),
+            },
+            CopyItem {
+                workspace_hash: WS.to_string(),
+                conversation_id: CONV_OLD.to_string(),
+            },
+            CopyItem {
+                workspace_hash: BROKEN_WS.to_string(),
+                conversation_id: CONV_EXISTING.to_string(),
+            },
+        ];
+        let report =
+            copy_sessions_in(&fixture.root, &fixture.backup, SRC_UID, DST_UID, &items).unwrap();
+        let copied = report["copied"].as_array().unwrap();
+        assert_eq!(copied.len(), 1);
+        assert_eq!(copied[0]["workspaceHash"], WS);
+        let new_id = copied[0]["newId"].as_str().unwrap();
+        assert!(fixture
+            .dst_ws_dir()
+            .join(new_id)
+            .join("index.json")
+            .is_file());
+        let healthy_index = read_json(&fixture.dst_ws_dir().join("index.json")).unwrap();
+        assert!(find_conversation(&healthy_index, new_id).is_some());
+        let errors = report["errors"].as_array().unwrap();
+        assert_eq!(errors.len(), 2);
+        for (failure, id) in errors.iter().zip([CONV_OLD, CONV_EXISTING]) {
+            assert_eq!(failure["workspaceHash"], BROKEN_WS);
+            assert_eq!(failure["conversationId"], id);
+            let error = failure["error"].as_str().unwrap();
+            assert!(error.contains(BROKEN_WS), "{error}");
+            assert!(error.contains("解析 index.json 失败"), "{error}");
+        }
         assert_eq!(std::fs::read(&index_path).unwrap(), corrupt.as_bytes());
-        assert_eq!(std::fs::read_dir(fixture.dst_ws_dir()).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&broken_target).unwrap().count(), 1);
     }
 
     #[test]
@@ -1875,6 +1954,44 @@ mod tests {
         assert_eq!(std::fs::read(&index_path).unwrap(), original);
         assert_eq!(std::fs::read(&backup_path).unwrap(), b"{}");
         assert_eq!(std::fs::read_dir(fixture.dst_ws_dir()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn conflict_rewrite_preserves_jsonc_attachment_without_old_id() {
+        let fixture = Fixture::new("conflict-rewrite-jsonc");
+        seed_source(&fixture);
+        let attachment = "assets/settings.json";
+        let jsonc = "{\r\n  // Editor settings\r\n  \"editor.tabSize\": 4\r\n}\r\n";
+        write(&fixture.src_ws_dir().join(CONV_OLD).join(attachment), jsonc);
+        write(
+            &fixture.dst_ws_dir().join("index.json"),
+            &json!({ "conversations": [{ "id": CONV_OLD }], "current": CONV_OLD }).to_string(),
+        );
+
+        let items = [CopyItem {
+            workspace_hash: WS.to_string(),
+            conversation_id: CONV_OLD.to_string(),
+        }];
+        let report = copy_sessions_in_with(
+            VSCODE_STORE,
+            IDE_COPY,
+            &fixture.root,
+            &fixture.backup,
+            SRC_UID,
+            DST_UID,
+            &items,
+        )
+        .unwrap();
+
+        assert!(report.get("errors").is_none(), "{report}");
+        let copied = report["copied"].as_array().unwrap();
+        assert_eq!(copied.len(), 1);
+        let new_id = copied[0]["newId"].as_str().unwrap();
+        assert_ne!(new_id, CONV_OLD);
+        assert_eq!(
+            std::fs::read(fixture.dst_ws_dir().join(new_id).join(attachment)).unwrap(),
+            jsonc.as_bytes()
+        );
     }
 
     #[test]
