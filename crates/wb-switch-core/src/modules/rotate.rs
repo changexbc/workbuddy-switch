@@ -34,7 +34,7 @@ use crate::modules::config::{
 };
 use crate::modules::credits;
 use crate::modules::limits::Resolved;
-use crate::modules::rate_limit_events;
+use crate::modules::rate_limit_events::{self, HookSource};
 use crate::modules::session_link::{try_lock_file, LockError};
 use crate::modules::variant::WbVariant;
 
@@ -339,8 +339,13 @@ pub async fn run_rotate_cycle() -> Value {
         .unwrap_or_default();
 
     let now = now_ms();
-    let limits = rate_limit_events::saved_hook_entries(&rate_limit_events::state_path(), now);
+    let limits = rate_limit_events::saved_hook_entries(
+        &rate_limit_events::state_path(),
+        now,
+        HookSource::Cli,
+    );
     // 下一个 CLI 进程使用的模型可能变化，因此保守地避开任一模型仍受限的账号。
+    // 多账号同模型全局限流可能导致反复换号，仍由持久化冷却期限制切换频率。
     let rate_limited = limits
         .iter()
         .map(|entry| entry.account_id.as_str())
@@ -693,6 +698,7 @@ mod tests {
         let state = json!({"events": [{
             "accountId": "next",
             "model": "hy3",
+            "source": HookSource::Cli,
             "resetAt": now,
             "firstSeenAt": now - HOUR_MS,
             "hitCount": 1,
@@ -700,7 +706,7 @@ mod tests {
         fs::write(&path, state.to_string()).unwrap();
         let candidates = [cand("next", Some(now + HOUR_MS), 10.0, true)];
         let decide_at = |at| {
-            let entries = rate_limit_events::saved_hook_entries(&path, at);
+            let entries = rate_limit_events::saved_hook_entries(&path, at, HookSource::Cli);
             decide_target(
                 &candidates,
                 &RotationInputs {
@@ -717,6 +723,59 @@ mod tests {
             Decision::Skip("没有可用账号（有剩余积分的账号均处于模型限流）".into())
         );
         assert_eq!(decide_at(now), Decision::Switch("next".into()));
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn only_cli_limits_affect_rotation_with_shared_account_ids() {
+        let now = 1_800_000_000_000;
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("rate_limit_state.json");
+        let candidates = [
+            cand("current", Some(now + HOUR_MS), 10.0, true),
+            cand("next", Some(now + 5 * DAY_MS), 10.0, true),
+        ];
+        let entry = |id: &str, source: HookSource| {
+            json!({
+                "accountId": id,
+                "model": "hy3",
+                "source": source,
+                "resetAt": now + DAY_MS,
+                "firstSeenAt": now,
+                "hitCount": 1,
+            })
+        };
+        let mut events = vec![
+            entry("current", HookSource::WorkBuddy(WbVariant::Cn)),
+            entry("next", HookSource::WorkBuddy(WbVariant::Ai)),
+        ];
+        let decide = |events: &[Value]| {
+            fs::write(&path, json!({"events": events}).to_string()).unwrap();
+            let entries = rate_limit_events::saved_hook_entries(&path, now, HookSource::Cli);
+            decide_target(
+                &candidates,
+                &RotationInputs {
+                    rate_limited: entries
+                        .iter()
+                        .map(|entry| entry.account_id.as_str())
+                        .collect(),
+                    ..inputs(Some("current"), now)
+                },
+            )
+        };
+        assert_eq!(
+            decide(&events),
+            Decision::Skip("当前账号已是最紧迫账号".into())
+        );
+        events.push(entry("current", HookSource::Cli));
+        assert_eq!(decide(&events), Decision::Switch("next".into()));
+        events.push(entry("next", HookSource::Cli));
+        assert_eq!(
+            decide(&events),
+            Decision::Skip("没有可用账号（有剩余积分的账号均处于模型限流）".into())
+        );
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();
     }
