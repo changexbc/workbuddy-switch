@@ -9,6 +9,8 @@ use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::sync::{LazyLock, Mutex};
+use tokio::sync::watch;
 
 use crate::modules::account::{self, build_auth_headers, AccountChange};
 use crate::modules::config::{
@@ -16,6 +18,24 @@ use crate::modules::config::{
 };
 
 static KEEPALIVE_RUNNING: AtomicBool = AtomicBool::new(false);
+
+type RefreshKey = (PathBuf, AccountIdentity);
+type RefreshResult = Result<Value, String>;
+type FlightReceiver = watch::Receiver<Option<RefreshResult>>;
+
+static REFRESH_IN_FLIGHT: LazyLock<Mutex<HashMap<RefreshKey, FlightReceiver>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct RefreshFlight(RefreshKey);
+
+impl Drop for RefreshFlight {
+    fn drop(&mut self) {
+        REFRESH_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
 
 /// 刷新接口 URL：域名与路径前缀都按账号自身档位选（缺档位字段 → 国内版，零回归）。
 fn refresh_url(account: &Value) -> String {
@@ -249,10 +269,47 @@ async fn refresh_stored_account<Fut: Future<Output = (u16, Value)>>(
     .map_err(|e| format!("保存刷新结果失败：{e}"))?
 }
 
-/// 手动刷新和保活需要回报请求或写入错误；明确拒绝的凭据通过账号重登标记反馈。
-pub async fn try_refresh_account_token(snapshot: Value) -> Result<Value, String> {
+async fn refresh_account_token_at<Fut>(
+    path: PathBuf,
+    snapshot: Value,
+    request: impl FnOnce(String, HashMap<String, String>) -> Fut + Send + 'static,
+) -> RefreshResult
+where
+    Fut: Future<Output = (u16, Value)> + Send,
+{
     let identity = AccountIdentity::of(&snapshot).ok_or("账号缺少 id 和 uid")?;
-    refresh_stored_account(accounts_file(), identity, snapshot, request_refresh).await
+    let key = (path.clone(), identity.clone());
+    let (mut receiver, leader) = {
+        let mut in_flight = REFRESH_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(receiver) = in_flight.get(&key) {
+            (receiver.clone(), None)
+        } else {
+            let (sender, receiver) = watch::channel(None);
+            in_flight.insert(key.clone(), receiver.clone());
+            (receiver, Some((RefreshFlight(key), sender)))
+        }
+    };
+
+    if let Some((flight, sender)) = leader {
+        // 刷新由独立任务收尾，最先发起调用的一方取消时，其他等待者仍能收到结果。
+        tokio::spawn(async move {
+            let result = refresh_stored_account(path, identity, snapshot, request).await;
+            drop(flight);
+            let _ = sender.send(Some(result));
+        });
+    }
+    let result = receiver
+        .wait_for(Option::is_some)
+        .await
+        .map_err(|_| "刷新任务已中断".to_string())?;
+    result.clone().expect("wait_for 仅在刷新结果已发布时返回")
+}
+
+/// 手动刷新和保活需要回报请求或写入错误；明确拒绝的凭据通过账号重登标记反馈。
+pub async fn try_refresh_account_token(snapshot: Value) -> RefreshResult {
+    refresh_account_token_at(accounts_file(), snapshot, request_refresh).await
 }
 
 /// 签到、积分等调用在刷新暂时失败时继续使用原有账号。
@@ -511,6 +568,69 @@ mod tests {
             account::load_accounts_from_path(&path).unwrap(),
             vec![fresh]
         );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_share_one_request_and_allow_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let snapshot = test_account();
+        let path = store_account(&snapshot);
+        let requests = Arc::new(AtomicUsize::new(0));
+        let request = {
+            let requests = Arc::clone(&requests);
+            move |_, _| async move {
+                requests.fetch_add(1, Ordering::Relaxed);
+                (0, Value::Null)
+            }
+        };
+        let (first, second, third) = tokio::join!(
+            refresh_account_token_at(path.clone(), snapshot.clone(), request.clone()),
+            refresh_account_token_at(path.clone(), snapshot.clone(), request.clone()),
+            refresh_account_token_at(path.clone(), snapshot.clone(), request),
+        );
+        assert!(first.is_err());
+        assert_eq!(first, second);
+        assert_eq!(first, third);
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+
+        let retried = refresh_account_token_at(path.clone(), snapshot, |_, _| async {
+            successful_response()
+        })
+        .await
+        .unwrap();
+        assert_eq!(retried["access_token"], "new-at");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_first_caller_preserves_shared_refresh() {
+        let snapshot = test_account();
+        let path = store_account(&snapshot);
+        let (started, pending) = tokio::sync::oneshot::channel();
+        let (complete, finish) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn(refresh_account_token_at(
+            path.clone(),
+            snapshot.clone(),
+            |_, _| async {
+                started.send(()).unwrap();
+                finish.await.unwrap();
+                successful_response()
+            },
+        ));
+        pending.await.unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        complete.send(()).unwrap();
+
+        let fresh = refresh_account_token_at(path.clone(), snapshot, |_, _| async {
+            panic!("等待方不得再次发送刷新请求")
+        })
+        .await
+        .unwrap();
+        assert_eq!(fresh["access_token"], "new-at");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
