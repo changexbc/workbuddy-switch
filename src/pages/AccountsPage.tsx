@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/lib/use-tauri-event";
 import { toast } from "sonner";
 import {
   Columns3,
@@ -507,16 +507,11 @@ export default function AccountsPage() {
 
   // 后端入账 hook 事件（CLI / WorkBuddy 的 429 当轮）后推送 → 立即拉取，秒级更新。
   // 这一路不看节流：新状态已经在后端，前端只做拉取。
-  useEffect(() => {
-    if (api.isWebui()) return;
-    let unlisten: (() => void) | undefined;
-    void listen("rate-limits-updated", () => {
-      void loadRateLimitsRef.current({ force: true });
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(
+    "rate-limits-updated",
+    () => void loadRateLimitsRef.current({ force: true }),
+    !api.isWebui(),
+  );
 
   /**
    * CLI 认证状态变化（保活刷新前后、切换账号、接入 helper）→ 立即重读。
@@ -524,16 +519,11 @@ export default function AccountsPage() {
    * 没有这一路时，页面只在挂载时读一次状态：若恰好落在保活刷新的中间态，
    * 判出来的「认证已脱节」会一直留在页面上，用户点什么都要等下次重挂载。
    */
-  useEffect(() => {
-    if (api.isWebui()) return;
-    let unlisten: (() => void) | undefined;
-    void listen("codebuddy-cli-updated", () => {
-      void refreshCodebuddyCliStatusRef.current();
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(
+    "codebuddy-cli-updated",
+    () => void refreshCodebuddyCliStatusRef.current(),
+    !api.isWebui(),
+  );
 
   // 兜底轮询：事件可能因窗口尚未挂载而错过（例如后台刷新先于页面加载完成），
   // 仅主窗口可见时执行，保证横幅最终一定会自愈。

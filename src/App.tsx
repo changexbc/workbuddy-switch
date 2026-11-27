@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { toast } from "sonner";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { ArrowUp, Link2, Loader2, MessagesSquare, Play, Settings, Sparkles, User } from "lucide-react";
@@ -6,10 +6,12 @@ import { ArrowUp, Link2, Loader2, MessagesSquare, Play, Settings, Sparkles, User
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
 import AccountsPage from "@/pages/AccountsPage";
-import SessionsPage from "@/pages/SessionsPage";
-import CreditStatsPage from "@/pages/CreditStatsPage";
-import TokenStatsPage from "@/pages/TokenStatsPage";
-import SettingsPage from "@/pages/SettingsPage";
+
+// 非首页路由按需加载，减小首屏主包体积。
+const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
+const CreditStatsPage = lazy(() => import("@/pages/CreditStatsPage"));
+const TokenStatsPage = lazy(() => import("@/pages/TokenStatsPage"));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { CompanionDemoDialog } from "@/components/companion-demo-dialog";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
@@ -331,7 +333,9 @@ function Layout() {
           hasUnifiedTitleBar && "pt-16 [&>div]:pt-4",
         )}
       >
-        <Outlet />
+        <Suspense fallback={<div className="min-h-full" aria-busy="true" />}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   );
