@@ -5,10 +5,15 @@
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io;
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::modules::config::{accounts_file, atomic_write, now_ms};
 use crate::modules::variant::WbVariant;
+
+static ACCOUNT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 判断字段是否为 WorkBuddy 5.6 加密信封对象（`{$wbEncrypted, envelope}`）。
 ///
@@ -32,21 +37,59 @@ fn has_unexpired_plain_token(acc: &Value) -> bool {
     }
 }
 
-fn load_accounts_from_path(path: &Path) -> Vec<Value> {
-    if let Ok(text) = std::fs::read_to_string(path) {
-        if let Ok(Value::Array(accounts)) = serde_json::from_str::<Value>(&text) {
-            return accounts;
-        }
+pub(crate) fn load_accounts_from_path(path: &Path) -> io::Result<Vec<Value>> {
+    match fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    vec![]
 }
 
-fn save_accounts_to_path(path: &Path, accounts: &[Value]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+pub(crate) enum AccountChange<T> {
+    Write(T),
+    Unchanged(T),
+}
+
+/// 在进程内和跨进程锁都持有时读取、修改并原子替换账号库。
+/// 回调只做内存操作，不得再次进入事务或发起网络请求。
+pub(crate) fn mutate_at<T>(
+    path: &Path,
+    change: impl FnOnce(&mut Vec<Value>) -> io::Result<AccountChange<T>>,
+) -> io::Result<T> {
+    let _guard = ACCOUNT_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
     }
-    let content = serde_json::to_string_pretty(accounts).unwrap_or_default();
-    atomic_write(path, &content)
+    // 锁文件保持原位：账号文件会被 rename 替换，不能把锁加在账号文件本身。
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_file_name("accounts.lock"))?;
+    lock_file.lock()?;
+
+    let mut accounts = load_accounts_from_path(path)?;
+    match change(&mut accounts)? {
+        AccountChange::Write(result) => {
+            let content = serde_json::to_string_pretty(&accounts).map_err(io::Error::other)?;
+            atomic_write(path, &content)?;
+            Ok(result)
+        }
+        AccountChange::Unchanged(result) => Ok(result),
+    }
+}
+
+pub(crate) fn mutate<T>(
+    change: impl FnOnce(&mut Vec<Value>) -> io::Result<AccountChange<T>>,
+) -> io::Result<T> {
+    mutate_at(&accounts_file(), change)
 }
 
 fn find_account_in(accounts: &[Value], account_id: &str) -> Option<Value> {
@@ -60,18 +103,20 @@ fn find_account_in(accounts: &[Value], account_id: &str) -> Option<Value> {
 }
 
 fn delete_account_from_path(path: &Path, account_id: &str) -> Result<(), String> {
-    let mut accounts = load_accounts_from_path(path);
-    let before = accounts.len();
-    accounts.retain(|account| account.get("id").and_then(Value::as_str) != Some(account_id));
-    if accounts.len() == before {
-        return Err("账号不存在".to_string());
-    }
-    save_accounts_to_path(path, &accounts).map_err(|error| error.to_string())
+    mutate_at(path, |accounts| {
+        let before = accounts.len();
+        accounts.retain(|account| account.get("id").and_then(Value::as_str) != Some(account_id));
+        if accounts.len() == before {
+            return Err(io::Error::other("账号不存在"));
+        }
+        Ok(AccountChange::Write(()))
+    })
+    .map_err(|error| error.to_string())
 }
 
-/// 读取账号库；文件缺失或损坏返回空列表。
+/// 只读列表查询，沿用文件无法读取时返回空列表的行为。
 pub fn load_accounts() -> Vec<Value> {
-    load_accounts_from_path(&accounts_file())
+    load_accounts_at(&accounts_file())
 }
 
 /// 指定工具存储根下的账号库路径（会话操作等注入路径的场景用）。
@@ -79,14 +124,9 @@ pub fn accounts_file_in(store_root: &Path) -> std::path::PathBuf {
     store_root.join("accounts.json")
 }
 
-/// 读取指定账号库文件；文件缺失或损坏返回空列表。
+/// 只读查询指定账号库文件；写入路径由事务严格读取。
 pub fn load_accounts_at(path: &Path) -> Vec<Value> {
-    load_accounts_from_path(path)
-}
-
-/// 写回账号库（原子写），保持原 JSON 数组结构。
-pub fn save_accounts(accounts: &[Value]) -> std::io::Result<()> {
-    save_accounts_to_path(&accounts_file(), accounts)
+    load_accounts_from_path(path).unwrap_or_default()
 }
 
 /// 按 id 或 uid 查找账号。
@@ -318,17 +358,23 @@ pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value)
 
 /// 使用统一身份规则保存采集到的账号。
 pub fn save_collected_account(collected: Value) -> std::io::Result<Value> {
-    let mut accounts = load_accounts();
-    let saved = upsert_collected_account(&mut accounts, collected);
-    save_accounts(&accounts)?;
-    Ok(saved)
+    mutate(|accounts| {
+        Ok(AccountChange::Write(upsert_collected_account(
+            accounts, collected,
+        )))
+    })
 }
 
 /// 按 id 覆盖；id 缺失或未命中时按 uid 回退覆盖，仍未命中则补 id 追加。
 pub fn upsert_account(updated: &Value) -> std::io::Result<()> {
-    let mut accounts = load_accounts();
-    upsert_account_in(&mut accounts, updated);
-    save_accounts(&accounts)
+    upsert_account_at(&accounts_file(), updated)
+}
+
+fn upsert_account_at(path: &Path, updated: &Value) -> io::Result<()> {
+    mutate_at(path, |accounts| {
+        upsert_account_in(accounts, updated);
+        Ok(AccountChange::Write(()))
+    })
 }
 
 /// 备注长度上限（字符数），与前端输入框 maxLength 保持一致。
@@ -339,10 +385,12 @@ const NOTE_MAX_CHARS: usize = 24;
 /// 只触碰本地展示字段，不修改 uid / token / profile_raw 等官方数据。
 /// 先整体校验再写入，避免部分更新。返回更新后的 `account_meta`。
 pub fn update_account_display(account_id: &str, patch: &Value) -> Result<Value, String> {
-    let mut accounts = load_accounts();
-    let updated = update_account_display_in(&mut accounts, account_id, patch)?;
-    save_accounts(&accounts).map_err(|error| error.to_string())?;
-    Ok(account_meta(&updated))
+    mutate(|accounts| {
+        let updated =
+            update_account_display_in(accounts, account_id, patch).map_err(io::Error::other)?;
+        Ok(AccountChange::Write(account_meta(&updated)))
+    })
+    .map_err(|error| error.to_string())
 }
 
 /// 更新账号展示字段的内存实现（不落盘，便于单测）。
@@ -1001,6 +1049,46 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_upserts_keep_every_account() {
+        const WRITERS: usize = 16;
+        let test_dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let path = accounts_file_in(&test_dir);
+        let barrier = std::sync::Barrier::new(WRITERS);
+        std::thread::scope(|scope| {
+            for index in 0..WRITERS {
+                let path = &path;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    upsert_account_at(path, &json!({"id": format!("account-{index}")})).unwrap();
+                });
+            }
+        });
+
+        let accounts = load_accounts_from_path(&path).unwrap();
+        assert_eq!(accounts.len(), WRITERS);
+        for index in 0..WRITERS {
+            assert!(find_account_in(&accounts, &format!("account-{index}")).is_some());
+        }
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn upsert_rejects_corrupt_store_without_rewriting_it() {
+        let test_dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let path = accounts_file_in(&test_dir);
+        fs::create_dir_all(&test_dir).unwrap();
+
+        for corrupt in [b"[{\"id\":".as_slice(), b"{}", b"\xff"] {
+            fs::write(&path, corrupt).unwrap();
+            let error = upsert_account_at(&path, &json!({"id": "new-account"})).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(fs::read(&path).unwrap(), corrupt);
+        }
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
     fn persisted_same_name_accounts_can_be_found_and_deleted_independently() {
         let test_dir = std::env::temp_dir().join(format!(
             "wb-switch-same-name-{}",
@@ -1016,9 +1104,13 @@ mod tests {
             &mut accounts,
             account("account-2", Some("uid-2"), "同名用户", None),
         );
-        save_accounts_to_path(&path, &accounts).expect("same-name accounts should persist");
+        mutate_at(&path, |stored| {
+            *stored = accounts;
+            Ok(AccountChange::Write(()))
+        })
+        .expect("same-name accounts should persist");
 
-        let persisted = load_accounts_from_path(&path);
+        let persisted = load_accounts_from_path(&path).unwrap();
         assert_eq!(
             find_account_in(&persisted, "account-1").unwrap()["uid"],
             "uid-1"
@@ -1029,7 +1121,7 @@ mod tests {
         );
 
         delete_account_from_path(&path, "account-1").expect("first account should delete");
-        let after_first_delete = load_accounts_from_path(&path);
+        let after_first_delete = load_accounts_from_path(&path).unwrap();
         assert!(find_account_in(&after_first_delete, "account-1").is_none());
         assert_eq!(
             find_account_in(&after_first_delete, "account-2").unwrap()["uid"],
@@ -1037,7 +1129,7 @@ mod tests {
         );
 
         delete_account_from_path(&path, "account-2").expect("second account should delete");
-        assert!(load_accounts_from_path(&path).is_empty());
+        assert!(load_accounts_from_path(&path).unwrap().is_empty());
         std::fs::remove_dir_all(&test_dir).expect("temporary account store should clean up");
     }
 
