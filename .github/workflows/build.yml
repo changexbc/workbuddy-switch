@@ -201,7 +201,12 @@ jobs:
           cp "$SRC" "$PKG_DIR/bin/${{ matrix.cli_bin }}"
           cd "$PKG_DIR"
           printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > .npmrc
-          npm publish --access public --registry=https://registry.npmjs.org
+          NAME="$(node -p "require('./package.json').name")"
+          if [ "$(npm view "$NAME@$VER" version --registry=https://registry.npmjs.org 2>/dev/null)" = "$VER" ]; then
+            echo "$NAME@$VER 已发布，跳过（重跑幂等）"
+          else
+            npm publish --access public --registry=https://registry.npmjs.org
+          fi
 
       # 桌面 App（mac app / nsis exe / deb + AppImage）
       # 仓库变量 PUBLISH_APP=false 时整段跳过：纯 npm/CLI 改动可只发 npm 不发桌面 App；
@@ -342,7 +347,13 @@ jobs:
         run: |
           cd npm
           printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > .npmrc
-          npm publish --access public --registry=https://registry.npmjs.org
+          NAME="$(node -p "require('./package.json').name")"
+          VER="$(node -p "require('./package.json').version")"
+          if [ "$(npm view "$NAME@$VER" version --registry=https://registry.npmjs.org 2>/dev/null)" = "$VER" ]; then
+            echo "$NAME@$VER 已发布，跳过（重跑幂等）"
+          else
+            npm publish --access public --registry=https://registry.npmjs.org
+          fi
 
   release:
     name: Publish release assets
