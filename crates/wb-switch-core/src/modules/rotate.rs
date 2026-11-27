@@ -18,20 +18,47 @@
 //! - 被门控拦下、但"除门控外本来会切换"时提示一次（受每日预算约束，见 `config`）。
 
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::{
+    fs,
+    path::Path,
+    sync::atomic::{AtomicI64, Ordering},
+};
 
 use crate::modules::account;
 use crate::modules::codebuddy_cli;
 use crate::modules::config::{
-    add_rotate_log, load_auto_rotate_config, load_rotate_logs, now_ms, try_consume_rotate_notify,
-    RunFlagGuard,
+    add_rotate_log, atomic_write, load_auto_rotate_config, load_rotate_logs, now_ms, store_dir,
+    try_consume_rotate_notify,
 };
 use crate::modules::credits;
+use crate::modules::session_link::{try_lock_file, LockError};
 use crate::modules::variant::WbVariant;
 
-static ROTATE_RUNNING: AtomicBool = AtomicBool::new(false);
 static LAST_CHECK_AT: AtomicI64 = AtomicI64::new(0);
 static LAST_SWITCH_AT: AtomicI64 = AtomicI64::new(0);
+const LAST_SWITCH_FILE: &str = "rotate_last_switch.json";
+
+fn load_last_switch_at(path: &Path) -> Option<i64> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<i64>(&text).ok().filter(|&ts| ts > 0)
+}
+
+fn save_last_switch_at(path: &Path, timestamp: i64) -> std::io::Result<()> {
+    atomic_write(path, &timestamp.to_string())
+}
+
+fn last_switch_at(path: &Path) -> Option<i64> {
+    let local = LAST_SWITCH_AT.load(Ordering::SeqCst);
+    let saved = load_last_switch_at(path).or_else(|| {
+        // 升级后首次读取时沿用旧版轮换日志里的成功切换时间。
+        load_rotate_logs()
+            .iter()
+            .filter(|entry| entry["action"] == "switched")
+            .filter_map(|entry| entry["ts"].as_i64().filter(|&ts| ts > 0))
+            .max()
+    });
+    saved.max((local > 0).then_some(local))
+}
 
 /// 一天的毫秒数（新代码里用它代替裸写的 `24 * 3_600_000`）。
 const DAY_MS: i64 = 24 * 3_600_000;
@@ -163,7 +190,7 @@ pub fn decide_target(
     }
     // 5) 冷却期
     if let Some(ts) = last_switch_at_ms {
-        if ts + cooldown_ms > now_ms() {
+        if ts.saturating_add(cooldown_ms) > now_ms() {
             return Decision::Skip("处于切换冷却期".to_string());
         }
     }
@@ -241,14 +268,18 @@ fn deferred_prompt_target(
 
 /// 一次轮换周期（后台定时任务 / 手动触发共用）。
 pub async fn run_rotate_cycle() -> Value {
-    let Some(_guard) = RunFlagGuard::try_acquire(&ROTATE_RUNNING) else {
-        return json!({"status": "skipped", "reason": "already_running"});
-    };
-
     let cfg = load_auto_rotate_config();
     if cfg.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
         return json!({"status": "disabled"});
     }
+    // 手动触发和后台周期可以来自不同进程，共用冷却状态与这把锁。
+    let store = store_dir();
+    let _guard = match try_lock_file(&store.join("locks").join("rotate-cycle.lock")) {
+        Ok(guard) => guard,
+        Err(LockError::Busy) => return json!({"status": "skipped", "reason": "already_running"}),
+        Err(error) => return json!({"status": "error", "error": error.message("轮换操作")}),
+    };
+    let last_switch_path = store.join(LAST_SWITCH_FILE);
 
     let cooldown_minutes = cfg
         .get("cooldown_minutes")
@@ -287,8 +318,7 @@ pub async fn run_rotate_cycle() -> Value {
         .map(|s| s.to_string());
 
     let now = now_ms();
-    let last_switch = LAST_SWITCH_AT.load(Ordering::SeqCst);
-    let last_switch_opt = (last_switch > 0).then_some(last_switch);
+    let last_switch_opt = last_switch_at(&last_switch_path);
     // 存活门控：读 `~/.codebuddy/sessions/*.json` 的心跳（单次检查只读这里与 state.json，
     // 不再遍历 `~/.codebuddy/projects` 下的 transcript）。
     let has_live_session = codebuddy_cli::has_live_session(now);
@@ -298,7 +328,7 @@ pub async fn run_rotate_cycle() -> Value {
             &candidates,
             current_id.as_deref(),
             last_switch_opt,
-            cooldown_minutes * 60_000,
+            cooldown_minutes.saturating_mul(60_000),
             min_gap_hours * 3_600_000,
             min_urgency_hours * 3_600_000,
             has_live_session,
@@ -381,7 +411,12 @@ pub async fn run_rotate_cycle() -> Value {
             });
             match codebuddy_cli::switch_active_account(&target_id) {
                 Ok(res) => {
-                    LAST_SWITCH_AT.store(now, Ordering::SeqCst);
+                    let switched_at = now_ms();
+                    LAST_SWITCH_AT.store(switched_at, Ordering::SeqCst);
+                    if let Err(error) = save_last_switch_at(&last_switch_path, switched_at) {
+                        eprintln!("[轮换] 保存上次切换时间失败: {error}");
+                    }
+                    log["ts"] = json!(switched_at);
                     log["action"] = json!("switched");
                     json!({"status": "switched", "to": target_id, "detail": res})
                 }
@@ -402,14 +437,14 @@ pub fn rotate_status() -> Value {
     let cfg = load_auto_rotate_config();
     let cli_status = codebuddy_cli::status();
     let last_check = LAST_CHECK_AT.load(Ordering::SeqCst);
-    let last_switch = LAST_SWITCH_AT.load(Ordering::SeqCst);
+    let last_switch = last_switch_at(&store_dir().join(LAST_SWITCH_FILE));
     json!({
         "config": cfg,
         "cliConfigured": cli_status.get("configured").cloned().unwrap_or(json!(false)),
         "activeAccountId": cli_status.get("activeAccountId").cloned().unwrap_or_default(),
         "activeAccountName": cli_status.get("activeAccountName").cloned().unwrap_or_default(),
         "lastCheckAt": (last_check > 0).then_some(last_check),
-        "lastSwitchAt": (last_switch > 0).then_some(last_switch),
+        "lastSwitchAt": last_switch,
     })
 }
 
@@ -427,6 +462,34 @@ mod tests {
     const GAP: i64 = 24 * 3_600_000; // 防抖动差异阈值
     const URG: i64 = 72 * 3_600_000; // 紧迫度阈值
     const HOUR_MS: i64 = 3_600_000;
+
+    #[test]
+    fn persisted_switch_time_blocks_rotation_after_takeover() {
+        let store = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir(&store).unwrap();
+        let path = store.join(LAST_SWITCH_FILE);
+        let now = now_ms();
+        let candidates = [cand("next", Some(now + HOUR_MS), 100.0, true)];
+        let decide = || {
+            decide_target(
+                &candidates,
+                Some("current"),
+                load_last_switch_at(&path),
+                HOUR_MS,
+                GAP,
+                URG,
+                false,
+                0.0,
+            )
+        };
+
+        assert_eq!(decide(), Decision::Switch("next".to_string()));
+        save_last_switch_at(&path, now).unwrap();
+        assert_eq!(decide(), Decision::Skip("处于切换冷却期".to_string()));
+        save_last_switch_at(&path, now - 2 * HOUR_MS).unwrap();
+        assert_eq!(decide(), Decision::Switch("next".to_string()));
+        fs::remove_dir_all(store).unwrap();
+    }
 
     fn cand(id: &str, expire_at: Option<i64>, remaining: f64, valid: bool) -> Candidate {
         Candidate {
