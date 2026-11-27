@@ -436,23 +436,26 @@ pub async fn detect_codebuddy_ide_account() -> Result<Value, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// 串行化界面发起的账号库「读-改-写」（删除 / 备注 / 导入）。
+///
 /// DELETE /api/delete —— 删除账号。
 #[tauri::command]
-pub fn delete_account(account_id: String) -> Result<Value, String> {
-    let mut accounts = account::load_accounts();
-    let before = accounts.len();
-    accounts.retain(|a| a.get("id").and_then(|v| v.as_str()) != Some(account_id.as_str()));
-    if accounts.len() == before {
-        return Err("账号不存在".to_string());
-    }
-    account::save_accounts(&accounts).map_err(|e| e.to_string())?;
-    Ok(json!({ "ok": true }))
+pub async fn delete_account(account_id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        account::delete_account(&account_id).map(|()| json!({ "ok": true }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/update-account-display —— 更新账号本地展示字段（备注 / 显示选择）。
 #[tauri::command]
-pub fn update_account_display(account_id: String, patch: Value) -> Result<Value, String> {
-    account::update_account_display(&account_id, &patch)
+pub async fn update_account_display(account_id: String, patch: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        account::update_account_display(&account_id, &patch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/oauth/start —— 发起 OAuth 扫码登录（`variant` 缺省国内版）。
@@ -469,9 +472,13 @@ pub async fn oauth_status(login_id: String) -> Value {
 
 /// POST /api/import-local —— 导入本机当前账号（`variant` 缺省国内版）。
 #[tauri::command]
-pub fn import_local(variant: Option<String>) -> Result<Value, String> {
-    account::import_local(WbVariant::parse(variant.as_deref()))
-        .map(|acc| json!({ "ok": true, "account": acc }))
+pub async fn import_local(variant: Option<String>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        account::import_local(WbVariant::parse(variant.as_deref()))
+            .map(|acc| json!({ "ok": true, "account": acc }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ---------------------------------------------------------------------------
@@ -480,34 +487,51 @@ pub fn import_local(variant: Option<String>) -> Result<Value, String> {
 
 /// POST /api/export-accounts —— 按账号 id 列表导出完整记录（含 token）。
 #[tauri::command]
-pub fn export_accounts(account_ids: Vec<String>) -> Result<Value, String> {
-    export_import::export_accounts(&account_ids)
-        .map(|records| json!({ "ok": true, "accounts": records }))
+pub async fn export_accounts(account_ids: Vec<String>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        export_import::export_accounts(&account_ids)
+            .map(|records| json!({ "ok": true, "accounts": records }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/export-accounts-to-path —— 把勾选账号的完整记录写入用户选择的路径（保存对话框产物）。
 #[tauri::command]
-pub fn export_accounts_to_path(account_ids: Vec<String>, path: String) -> Result<Value, String> {
-    export_import::export_accounts_to_path(&account_ids, &path)
-        .map(|path| json!({ "ok": true, "path": path }))
+pub async fn export_accounts_to_path(
+    account_ids: Vec<String>,
+    path: String,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        export_import::export_accounts_to_path(&account_ids, &path)
+            .map(|path| json!({ "ok": true, "path": path }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/import/preview —— 解析导入文件并返回脱敏预览（含文件内索引）。
 #[tauri::command]
-pub fn preview_import_accounts(file_text: String) -> Result<Value, String> {
-    export_import::preview_accounts(&file_text)
+pub async fn preview_import_accounts(file_text: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || export_import::preview_accounts(&file_text))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// POST /api/import —— 按选中索引把账号导入账号库，返回导入/跳过/覆盖计数。
 #[tauri::command]
-pub fn import_accounts(file_text: String, indexes: Vec<usize>) -> Result<Value, String> {
-    let result = export_import::import_accounts(&file_text, &indexes)?;
-    Ok(json!({
-        "ok": true,
-        "imported": result.imported,
-        "skipped": result.skipped,
-        "overwritten": result.overwritten,
-    }))
+pub async fn import_accounts(file_text: String, indexes: Vec<usize>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = export_import::import_accounts(&file_text, &indexes)?;
+        Ok(json!({
+            "ok": true,
+            "imported": result.imported,
+            "skipped": result.skipped,
+            "overwritten": result.overwritten,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 打开系统设置授权面板。默认「完全磁盘访问」（该 anchor 各版本均有效）；
@@ -607,41 +631,52 @@ pub async fn switch_account(
 
 /// GET /api/sessions —— 当前账号的会话列表（`variant` 缺省国内版）。
 #[tauri::command]
-pub fn list_sessions(variant: Option<String>) -> Value {
-    let variant = WbVariant::parse(variant.as_deref());
-    match session::current_user_uid(variant) {
-        Some(uid) => json!({
-            "sessions": session::list_sessions_for_user(variant, &uid),
-            "current": uid,
-        }),
-        None => json!({"sessions": [], "current": Value::Null}),
-    }
+pub async fn list_sessions(variant: Option<String>) -> Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        let variant = WbVariant::parse(variant.as_deref());
+        match session::current_user_uid(variant) {
+            Some(uid) => json!({
+                "sessions": session::list_sessions_for_user(variant, &uid),
+                "current": uid,
+            }),
+            None => json!({"sessions": [], "current": Value::Null}),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| json!({"sessions": [], "current": Value::Null}))
 }
 
 /// GET /api/sessions/account —— 指定账号名下的会话列表（会话管理页源账号视角）。
 ///
 /// `client` 缺省 workbuddy（读 WorkBuddy 数据库）；`vscodeExt` 改读插件数据仓。
 #[tauri::command(rename_all = "camelCase")]
-pub fn list_account_sessions(account_id: String, client: Option<String>) -> Result<Value, String> {
+pub async fn list_account_sessions(
+    account_id: String,
+    client: Option<String>,
+) -> Result<Value, String> {
     if account_id.trim().is_empty() {
         return Err("缺少 accountId".to_string());
     }
-    let account = account::find_account(&account_id).ok_or("账号不存在")?;
-    match session_groups::SessionClient::parse(client.as_deref().unwrap_or("workbuddy"))? {
-        session_groups::SessionClient::VscodeExt => {
-            let uid = account::get_str(&account, "uid")
-                .map(|uid| uid.trim().to_string())
-                .filter(|uid| !uid.is_empty())
-                .ok_or("账号缺少 uid")?;
-            Ok(vscode_session::list_vscode_sessions(&uid))
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = account::find_account(&account_id).ok_or("账号不存在")?;
+        match session_groups::SessionClient::parse(client.as_deref().unwrap_or("workbuddy"))? {
+            session_groups::SessionClient::VscodeExt => {
+                let uid = account::get_str(&account, "uid")
+                    .map(|uid| uid.trim().to_string())
+                    .filter(|uid| !uid.is_empty())
+                    .ok_or("账号缺少 uid")?;
+                Ok(vscode_session::list_vscode_sessions(&uid))
+            }
+            session_groups::SessionClient::Workbuddy => {
+                Ok(session::list_sessions_for_account(&account))
+            }
+            session_groups::SessionClient::CodebuddyIde => {
+                Err("当前客户端暂不支持列出账号会话".to_string())
+            }
         }
-        session_groups::SessionClient::Workbuddy => {
-            Ok(session::list_sessions_for_account(&account))
-        }
-        session_groups::SessionClient::CodebuddyIde => {
-            Err("当前客户端暂不支持列出账号会话".to_string())
-        }
-    }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/sessions/copy —— 把勾选会话复制到指定账号（路径 B）。
@@ -947,8 +982,12 @@ pub async fn copy_linked_sessions(
 ///
 /// 供前端决定「是否先弹确认框」；最终把关仍在各写入口的实时判定。
 #[tauri::command(rename_all = "camelCase")]
-pub fn vscode_restart_precheck(target_account_ids: Vec<String>) -> Value {
-    session_groups::vscode_restart_precheck(&target_account_ids)
+pub async fn vscode_restart_precheck(target_account_ids: Vec<String>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        session_groups::vscode_restart_precheck(&target_account_ids)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 取消关联：从会话组移除一个成员，只解除管理关系，不删除账号内的会话内容。
@@ -1086,9 +1125,13 @@ pub fn get_rate_limit_config() -> Value {
 /// 走 `limits::save_rate_limit_config`：`scanIdeLogs` 变化时作废扫描缓存（下一次按当前
 /// 来源范围重算），否则关掉 IDE 扫描后下一次还会按旧缓存把两个 IDE 扫一遍。
 #[tauri::command]
-pub fn save_rate_limit_config(config: Value) -> Result<Value, String> {
-    limits::save_rate_limit_config(&config).map_err(|e| e.to_string())?;
-    Ok(crate::modules::config::load_rate_limit_config())
+pub async fn save_rate_limit_config(config: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        limits::save_rate_limit_config(&config).map_err(|e| e.to_string())?;
+        Ok(crate::modules::config::load_rate_limit_config())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// POST /api/checkin —— 单账号立即签到。
@@ -1209,7 +1252,7 @@ pub fn get_rotate_logs() -> Value {
 #[tauri::command]
 pub async fn refresh_account_token(account_id: String) -> Result<Value, String> {
     let acc = account::find_account(&account_id).ok_or("账号不存在")?;
-    let fresh = refresh::refresh_account_token(acc).await;
+    let fresh = refresh::try_refresh_account_token(acc).await?;
     Ok(account::account_meta(&fresh))
 }
 

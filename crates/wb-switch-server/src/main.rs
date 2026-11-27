@@ -12,65 +12,16 @@ mod api;
 use serde_json::json;
 
 use wb_switch_core::modules::{
-    account, auth_file, checkin, config, process, rotate, travel, update, variant::WbVariant,
+    account, auth_file, background, process, update, variant::WbVariant,
 };
 
 fn default_port() -> u16 {
     57890
 }
 
-/// 后台任务：自动签到启动即核验，之后按 core 计算的下一轮延迟睡眠（未设置
-/// 签到时间段时固定 30 分钟）；自动轮换按配置间隔执行；
-/// 限额 hook 信号每秒轮询一次、启动时后台默认接入。
+/// HTTP 服务与桌面端选主，共用签到、旅行、轮换和保活的调度。
 fn spawn_background_loops() {
-    tokio::spawn(async move {
-        if let Err(error) = config::compact_checkin_logs() {
-            eprintln!("[签到] 历史日志整理失败: {error}");
-        }
-        let _ = checkin::run_checkin_cycle(checkin::CheckinCycleMode::StartupVerify).await;
-        loop {
-            tokio::time::sleep(checkin::next_cycle_delay()).await;
-            let _ = checkin::run_checkin_cycle(checkin::CheckinCycleMode::PeriodicRecovery).await;
-        }
-    });
-
-    tokio::spawn(async move {
-        let mut last_cycle_at: i64 = 0;
-        loop {
-            let cfg = config::load_auto_rotate_config();
-            if cfg.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
-                let interval_minutes = cfg
-                    .get("check_interval_minutes")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(5)
-                    .max(1);
-                let now = config::now_ms();
-                if now - last_cycle_at >= interval_minutes * 60_000 {
-                    last_cycle_at = now;
-                    let _ = rotate::run_rotate_cycle().await;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-        }
-    });
-
-    // 派猫猫旅行：启动即派发，之后周期性补派（并重试 no-buddy / 瞬时错误）。
-    tokio::spawn(async move {
-        let _ = travel::run_travel_cycle().await;
-        loop {
-            tokio::time::sleep(travel::TRAVEL_RETRY_INTERVAL).await;
-            let _ = travel::run_travel_cycle().await;
-        }
-    });
-
-    // 旅行领取：启动立刻查一轮（避免重启后空等 15 分钟漏领），之后按周期检查。
-    tokio::spawn(async move {
-        let _ = travel::run_travel_claim_cycle().await;
-        loop {
-            tokio::time::sleep(travel::TRAVEL_CLAIM_INTERVAL).await;
-            let _ = travel::run_travel_claim_cycle().await;
-        }
-    });
+    tokio::spawn(background::run(|_| {}, || {}));
 
     // 限额 hook 信号：轮询 `~/.wb-switch/hook-events.jsonl`，入账后由前端下次拉取可见。
     // webui 没有 Tauri 事件通道，因此不需要推送回调（桌面端见 src-tauri/src/lib.rs）。

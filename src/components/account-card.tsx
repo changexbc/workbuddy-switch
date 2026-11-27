@@ -20,12 +20,8 @@ import { accountIdentity, displayName } from "@/lib/account-display";
 import { avatarTone } from "@/lib/avatar-tone";
 import { creditResourceName } from "@/lib/credit-package-names";
 import { demoModeEnabled } from "@/lib/demo-mode";
+import { formatCredits } from "@/lib/format";
 import type { AccountMeta, CreditExpiry, CreditResource, RateLimitEntry, TravelStatus } from "@/lib/types";
-
-function formatCredits(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
-}
 
 /** 积分包到期时刻（精确到分）。行内不再带「到期」后缀：区块标题已表达，带后缀会把名称列挤到截断。 */
 function formatCreditExpiry(ts: number | null): string {

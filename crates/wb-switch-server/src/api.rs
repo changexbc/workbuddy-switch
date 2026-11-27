@@ -33,7 +33,9 @@ static RUNNING_CACHE: Mutex<Option<(Instant, bool, WbVariant)>> = Mutex::new(Non
 fn cached_workbuddy_running(variant: WbVariant) -> bool {
     #[cfg(target_os = "windows")]
     {
-        let mut cache = RUNNING_CACHE.lock().unwrap();
+        let mut cache = RUNNING_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((t, v, cached_variant)) = cache.as_ref() {
             if *cached_variant == variant && t.elapsed() < Duration::from_secs(3) {
                 return *v;
@@ -235,6 +237,18 @@ fn json_err(e: String, code: StatusCode) -> Response {
 }
 
 /// 从 query string 解析档位（缺省国内版）。与 Tauri 命令的可选 `variant` 参数同义。
+/// 把阻塞型 core 调用（进程枚举 / SQLite / 文件 IO / 等待 IDE 退出）放到 blocking 线程池，
+/// 避免占用 tokio 运行时 worker 线程；join 失败（panic / 取消）映射为 500。
+async fn blocking_response<F>(f: F) -> Response
+where
+    F: FnOnce() -> Response + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(response) => response,
+        Err(error) => json_err(error.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 fn query_variant(query: Option<&str>) -> WbVariant {
     let raw = query.unwrap_or("").split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -262,6 +276,10 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 async fn api_status(RawQuery(query): RawQuery) -> Response {
+    blocking_response(move || api_status_blocking(query)).await
+}
+
+fn api_status_blocking(query: Option<String>) -> Response {
     let variant = query_variant(query.as_deref());
     let auth = auth_file::read_auth_file(variant);
     let current = auth.as_ref().map(|a| {
@@ -284,6 +302,10 @@ async fn api_status(RawQuery(query): RawQuery) -> Response {
 
 /// GET /api/accounts —— 返回全部档位的账号，`current` 取请求档位的登录态。
 async fn api_accounts(RawQuery(query): RawQuery) -> Response {
+    blocking_response(move || api_accounts_blocking(query)).await
+}
+
+fn api_accounts_blocking(query: Option<String>) -> Response {
     let variant = query_variant(query.as_deref());
     json_ok(json!({
         "accounts": account::load_accounts()
@@ -297,10 +319,18 @@ async fn api_accounts(RawQuery(query): RawQuery) -> Response {
 }
 
 async fn api_codebuddy_cli_status() -> Response {
+    blocking_response(move || api_codebuddy_cli_status_blocking()).await
+}
+
+fn api_codebuddy_cli_status_blocking() -> Response {
     json_ok(codebuddy_cli::status())
 }
 
 async fn api_codebuddy_cli_install_helper() -> Response {
+    blocking_response(move || api_codebuddy_cli_install_helper_blocking()).await
+}
+
+fn api_codebuddy_cli_install_helper_blocking() -> Response {
     match codebuddy_cli::install_helper() {
         Ok(result) => json_ok(result),
         Err(error) => json_err(error, StatusCode::BAD_REQUEST),
@@ -308,6 +338,10 @@ async fn api_codebuddy_cli_install_helper() -> Response {
 }
 
 async fn api_codebuddy_cli_switch(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_codebuddy_cli_switch_blocking(body)).await
+}
+
+fn api_codebuddy_cli_switch_blocking(body: Value) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
     // 入参 `closeRunningCli` 已废弃：后端一律先关闭正在运行的 CLI 再写状态，忽略该值。
     // 无头模式不投递系统通知，切号结果（含关闭数量）照常返回给调用方。
@@ -318,10 +352,18 @@ async fn api_codebuddy_cli_switch(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_codebuddy_cn_ide_status() -> Response {
+    blocking_response(move || api_codebuddy_cn_ide_status_blocking()).await
+}
+
+fn api_codebuddy_cn_ide_status_blocking() -> Response {
     json_ok(codebuddy_cn_ide::status())
 }
 
 async fn api_codebuddy_cn_ide_switch(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_codebuddy_cn_ide_switch_blocking(body)).await
+}
+
+fn api_codebuddy_cn_ide_switch_blocking(body: Value) -> Response {
     let account_id = body
         .get("accountId")
         .or_else(|| body.get("account_id"))
@@ -410,6 +452,10 @@ async fn api_codebuddy_cn_ide_session_links_preview(Json(body): Json<Value>) -> 
 }
 
 async fn api_codebuddy_cn_ide_detect() -> Response {
+    blocking_response(move || api_codebuddy_cn_ide_detect_blocking()).await
+}
+
+fn api_codebuddy_cn_ide_detect_blocking() -> Response {
     match codebuddy_cn_ide::detect_current_account() {
         Ok(v) => json_ok(v),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
@@ -417,6 +463,10 @@ async fn api_codebuddy_cn_ide_detect() -> Response {
 }
 
 async fn api_vscode_ext_status() -> Response {
+    blocking_response(move || api_vscode_ext_status_blocking()).await
+}
+
+fn api_vscode_ext_status_blocking() -> Response {
     json_ok(vscode_ext::status())
 }
 
@@ -434,6 +484,10 @@ async fn api_vscode_ext_sessions() -> Response {
 }
 
 async fn api_vscode_ext_switch(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_vscode_ext_switch_blocking(body)).await
+}
+
+fn api_vscode_ext_switch_blocking(body: Value) -> Response {
     let account_id = body
         .get("accountId")
         .or_else(|| body.get("account_id"))
@@ -517,6 +571,10 @@ async fn api_vscode_ext_session_links_preview(Json(body): Json<Value>) -> Respon
 }
 
 async fn api_codebuddy_ide_status() -> Response {
+    blocking_response(move || api_codebuddy_ide_status_blocking()).await
+}
+
+fn api_codebuddy_ide_status_blocking() -> Response {
     json_ok(codebuddy_ide::status())
 }
 
@@ -525,6 +583,10 @@ async fn api_codebuddy_ide_status() -> Response {
 /// `copySessions` / `syncSelections` 与国内版（`/api/codebuddy-cn-ide/switch`）同形：
 /// 任一条目非法即整包拒绝，两者都为空时行为与纯切换逐字一致。
 async fn api_codebuddy_ide_switch(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_codebuddy_ide_switch_blocking(body)).await
+}
+
+fn api_codebuddy_ide_switch_blocking(body: Value) -> Response {
     let account_id = body
         .get("accountId")
         .or_else(|| body.get("account_id"))
@@ -609,6 +671,10 @@ async fn api_codebuddy_intl_ide_session_links_preview(Json(body): Json<Value>) -
 }
 
 async fn api_vscode_ext_detect() -> Response {
+    blocking_response(move || api_vscode_ext_detect_blocking()).await
+}
+
+fn api_vscode_ext_detect_blocking() -> Response {
     match vscode_ext::detect_current_account() {
         Ok(v) => json_ok(v),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
@@ -616,6 +682,10 @@ async fn api_vscode_ext_detect() -> Response {
 }
 
 async fn api_codebuddy_ide_detect() -> Response {
+    blocking_response(move || api_codebuddy_ide_detect_blocking()).await
+}
+
+fn api_codebuddy_ide_detect_blocking() -> Response {
     match codebuddy_ide::detect_current_account() {
         Ok(v) => json_ok(v),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
@@ -623,10 +693,18 @@ async fn api_codebuddy_ide_detect() -> Response {
 }
 
 async fn api_jetbrains_status() -> Response {
+    blocking_response(move || api_jetbrains_status_blocking()).await
+}
+
+fn api_jetbrains_status_blocking() -> Response {
     json_ok(jetbrains::status())
 }
 
 async fn api_jetbrains_switch(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_jetbrains_switch_blocking(body)).await
+}
+
+fn api_jetbrains_switch_blocking(body: Value) -> Response {
     let account_id = body
         .get("accountId")
         .or_else(|| body.get("account_id"))
@@ -654,6 +732,10 @@ async fn api_jetbrains_switch(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_jetbrains_detect() -> Response {
+    blocking_response(move || api_jetbrains_detect_blocking()).await
+}
+
+fn api_jetbrains_detect_blocking() -> Response {
     match jetbrains::detect_current_account() {
         Ok(v) => json_ok(v),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
@@ -661,6 +743,10 @@ async fn api_jetbrains_detect() -> Response {
 }
 
 async fn api_delete(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_delete_blocking(body)).await
+}
+
+fn api_delete_blocking(body: Value) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
     match account::delete_account(id) {
         Ok(()) => json_ok(json!({ "ok": true })),
@@ -672,6 +758,10 @@ async fn api_delete(Json(body): Json<Value>) -> Response {
 ///
 /// body：`{ accountId, patch }`，patch 可含 `note`（字符串或 null）与 `displayField`。
 async fn api_update_account_display(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_update_account_display_blocking(body)).await
+}
+
+fn api_update_account_display_blocking(body: Value) -> Response {
     let id = body.get("accountId").and_then(|v| v.as_str()).unwrap_or("");
     let patch = body.get("patch").cloned().unwrap_or_else(|| json!({}));
     match account::update_account_display(id, &patch) {
@@ -684,6 +774,10 @@ async fn api_update_account_display(Json(body): Json<Value>) -> Response {
 ///
 /// body 允许缺失，保持改造前的调用方式可用。
 async fn api_import_local(body: Option<Json<Value>>) -> Response {
+    blocking_response(move || api_import_local_blocking(body)).await
+}
+
+fn api_import_local_blocking(body: Option<Json<Value>>) -> Response {
     let variant = body
         .as_ref()
         .map(|Json(value)| body_variant(value))
@@ -699,6 +793,10 @@ async fn api_import_local(body: Option<Json<Value>>) -> Response {
 // ---------------------------------------------------------------------------
 
 async fn api_export_accounts(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_export_accounts_blocking(body)).await
+}
+
+fn api_export_accounts_blocking(body: Value) -> Response {
     let ids: Vec<String> = body
         .get("accountIds")
         .and_then(|v| v.as_array())
@@ -715,6 +813,10 @@ async fn api_export_accounts(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_export_accounts_to_path(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_export_accounts_to_path_blocking(body)).await
+}
+
+fn api_export_accounts_to_path_blocking(body: Value) -> Response {
     let ids: Vec<String> = body
         .get("accountIds")
         .and_then(|v| v.as_array())
@@ -736,6 +838,10 @@ async fn api_export_accounts_to_path(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_preview_import(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_preview_import_blocking(body)).await
+}
+
+fn api_preview_import_blocking(body: Value) -> Response {
     let text = body
         .get("fileText")
         .and_then(|v| v.as_str())
@@ -748,6 +854,10 @@ async fn api_preview_import(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_import(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_import_blocking(body)).await
+}
+
+fn api_import_blocking(body: Value) -> Response {
     let text = body
         .get("fileText")
         .and_then(|v| v.as_str())
@@ -836,16 +946,22 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
     };
 
     {
-        let mut running = SWITCH_RUNNING.lock().unwrap();
+        let mut running = SWITCH_RUNNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *running {
             return json_err("已有切换任务进行中".to_string(), StatusCode::CONFLICT);
         }
         *running = true;
-        *SWITCH_PROGRESS.lock().unwrap() = Some("开始切换账号…".to_string());
+        *SWITCH_PROGRESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some("开始切换账号…".to_string());
     }
 
     let progress: switch::ProgressFn = Box::new(|msg| {
-        *SWITCH_PROGRESS.lock().unwrap() = Some(msg.to_string());
+        *SWITCH_PROGRESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(msg.to_string());
     });
 
     let result = tokio::task::spawn_blocking(move || {
@@ -860,7 +976,9 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
     })
     .await;
 
-    *SWITCH_RUNNING.lock().unwrap() = false;
+    *SWITCH_RUNNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
 
     match result {
         Ok(Ok(v)) => json_ok(v),
@@ -870,8 +988,13 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_switch_progress() -> Response {
-    let p = SWITCH_PROGRESS.lock().unwrap().clone();
-    let running = *SWITCH_RUNNING.lock().unwrap();
+    let p = SWITCH_PROGRESS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let running = *SWITCH_RUNNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     json_ok(json!({ "running": running, "progress": p }))
 }
 
@@ -881,6 +1004,10 @@ async fn api_switch_progress() -> Response {
 
 /// GET /api/sessions —— 当前账号的会话列表（query 可选 `variant`，缺省国内版）。
 async fn api_sessions(RawQuery(query): RawQuery) -> Response {
+    blocking_response(move || api_sessions_blocking(query)).await
+}
+
+fn api_sessions_blocking(query: Option<String>) -> Response {
     let variant = query_variant(query.as_deref());
     match session::current_user_uid(variant) {
         Some(uid) => json_ok(json!({
@@ -897,6 +1024,10 @@ async fn api_sessions(RawQuery(query): RawQuery) -> Response {
 /// 与 `GET /api/sessions` 同形，但来源是显式账号（`accountId` query）：账号不存在
 /// 返回 400；账号缺 uid 时返回空列表 + `current: null`（与现有容错一致）。
 async fn api_account_sessions(RawQuery(query): RawQuery) -> Response {
+    blocking_response(move || api_account_sessions_blocking(query)).await
+}
+
+fn api_account_sessions_blocking(query: Option<String>) -> Response {
     let account_id = query_param(query.as_deref(), "accountId").unwrap_or_default();
     let client = query_param(query.as_deref(), "client").unwrap_or_else(|| "workbuddy".to_string());
     let Some(account) = account::find_account(&account_id) else {
@@ -927,6 +1058,10 @@ async fn api_account_sessions(RawQuery(query): RawQuery) -> Response {
 }
 
 async fn api_copy_sessions(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_copy_sessions_blocking(body)).await
+}
+
+fn api_copy_sessions_blocking(body: Value) -> Response {
     let target_account_id = body
         .get("targetAccountId")
         .and_then(|v| v.as_str())
@@ -963,6 +1098,10 @@ async fn api_copy_sessions(Json(body): Json<Value>) -> Response {
 /// 不再从目标档登录态读取，支持国内版 ↔ 国际版。报告与桌面端 `copy_sessions_cross`
 /// 同形（含 `sourceVariant` / `targetVariant`）。
 async fn api_copy_sessions_cross(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_copy_sessions_cross_blocking(body)).await
+}
+
+fn api_copy_sessions_cross_blocking(body: Value) -> Response {
     let source_account_id = body
         .get("sourceAccountId")
         .and_then(|v| v.as_str())
@@ -1006,6 +1145,10 @@ async fn api_copy_sessions_cross(Json(body): Json<Value>) -> Response {
 /// `storeStatus` / `groups`），每组的 `defaultChecked` 与 `availableModes` 是前端的
 /// 勾选权限来源。`variant` 缺省取目标账号自身档位。
 async fn api_session_links_preview(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_session_links_preview_blocking(body)).await
+}
+
+fn api_session_links_preview_blocking(body: Value) -> Response {
     let target_account_id = body
         .get("targetAccountId")
         .and_then(|v| v.as_str())
@@ -1032,6 +1175,10 @@ async fn api_session_links_preview(Json(body): Json<Value>) -> Response {
 /// 与 `POST /api/session-links/preview` 同形，多一个 `sourceAccountId`；
 /// 成员内容按成员自身档位读取（跨档组的源读源档、目标读目标档）。
 async fn api_session_links_preview_cross(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_session_links_preview_cross_blocking(body)).await
+}
+
+fn api_session_links_preview_cross_blocking(body: Value) -> Response {
     let source_account_id = body
         .get("sourceAccountId")
         .and_then(|v| v.as_str())
@@ -1061,6 +1208,10 @@ async fn api_session_links_preview_cross(Json(body): Json<Value>) -> Response {
 ///
 /// `syncSelections` 与切号弹窗同形（core 校验缺 groupId / previewToken / mode）。
 async fn api_session_sync_cross(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_session_sync_cross_blocking(body)).await
+}
+
+fn api_session_sync_cross_blocking(body: Value) -> Response {
     let source_account_id = body
         .get("sourceAccountId")
         .and_then(|v| v.as_str())
@@ -1101,6 +1252,10 @@ fn session_group_request(
 }
 
 async fn api_list_session_groups(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_list_session_groups_blocking(body)).await
+}
+
+fn api_list_session_groups_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1112,6 +1267,10 @@ async fn api_list_session_groups(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_get_session_group(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_get_session_group_blocking(body)).await
+}
+
+fn api_get_session_group_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1124,6 +1283,10 @@ async fn api_get_session_group(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_preview_session_group_pair(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_preview_session_group_pair_blocking(body)).await
+}
+
+fn api_preview_session_group_pair_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1144,6 +1307,10 @@ async fn api_preview_session_group_pair(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_sync_session_group_pair(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_sync_session_group_pair_blocking(body)).await
+}
+
+fn api_sync_session_group_pair_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1174,6 +1341,10 @@ async fn api_sync_session_group_pair(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_sync_session_group_unify(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_sync_session_group_unify_blocking(body)).await
+}
+
+fn api_sync_session_group_unify_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1212,6 +1383,10 @@ async fn api_sync_session_group_unify(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_sync_session_group_safe_batch(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_sync_session_group_safe_batch_blocking(body)).await
+}
+
+fn api_sync_session_group_safe_batch_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1228,6 +1403,10 @@ async fn api_sync_session_group_safe_batch(Json(body): Json<Value>) -> Response 
 }
 
 async fn api_add_session_group_member(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_add_session_group_member_blocking(body)).await
+}
+
+fn api_add_session_group_member_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1252,6 +1431,10 @@ async fn api_add_session_group_member(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_copy_linked_sessions(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_copy_linked_sessions_blocking(body)).await
+}
+
+fn api_copy_linked_sessions_blocking(body: Value) -> Response {
     let (client, _scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1292,6 +1475,10 @@ async fn api_copy_linked_sessions(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_vscode_restart_precheck(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_vscode_restart_precheck_blocking(body)).await
+}
+
+fn api_vscode_restart_precheck_blocking(body: Value) -> Response {
     let target_account_ids: Vec<String> = body
         .get("targetAccountIds")
         .and_then(Value::as_array)
@@ -1308,6 +1495,10 @@ async fn api_vscode_restart_precheck(Json(body): Json<Value>) -> Response {
 
 /// 取消关联：只解除管理关系，不触碰账号内的会话内容。
 async fn api_unlink_session_group_member(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_unlink_session_group_member_blocking(body)).await
+}
+
+fn api_unlink_session_group_member_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1322,6 +1513,10 @@ async fn api_unlink_session_group_member(Json(body): Json<Value>) -> Response {
 
 /// 删除会话组：组内所有成员一起解除关联，只解除管理关系，不触碰账号内的会话内容。
 async fn api_delete_session_group(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_delete_session_group_blocking(body)).await
+}
+
+fn api_delete_session_group_blocking(body: Value) -> Response {
     let (client, scope) = match session_group_request(&body) {
         Ok(value) => value,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
@@ -1462,6 +1657,10 @@ async fn api_uninstall_rate_limit_hook() -> Response {
 }
 
 async fn api_rate_limit_config() -> Response {
+    blocking_response(move || api_rate_limit_config_blocking()).await
+}
+
+fn api_rate_limit_config_blocking() -> Response {
     json_ok(config::load_rate_limit_config())
 }
 
@@ -1469,6 +1668,10 @@ async fn api_rate_limit_config() -> Response {
 ///
 /// 与桌面端同语义：`scanIdeLogs` 变化时作废扫描缓存，下一次按当前来源范围重算。
 async fn api_save_rate_limit_config(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_save_rate_limit_config_blocking(body)).await
+}
+
+fn api_save_rate_limit_config_blocking(body: Value) -> Response {
     let submitted = body.get("config").unwrap_or(&body);
     match limits::save_rate_limit_config(submitted) {
         Ok(()) => json_ok(config::load_rate_limit_config()),
@@ -1503,10 +1706,18 @@ async fn api_checkin_all(body: Option<Json<Value>>) -> Response {
 }
 
 async fn api_checkin_config() -> Response {
+    blocking_response(move || api_checkin_config_blocking()).await
+}
+
+fn api_checkin_config_blocking() -> Response {
     json_ok(config::load_checkin_config())
 }
 
 async fn api_save_checkin_config(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_save_checkin_config_blocking(body)).await
+}
+
+fn api_save_checkin_config_blocking(body: Value) -> Response {
     let submitted = body.get("config").unwrap_or(&body);
     match config::save_checkin_config(submitted) {
         Ok(()) => json_ok(config::load_checkin_config()),
@@ -1516,6 +1727,10 @@ async fn api_save_checkin_config(Json(body): Json<Value>) -> Response {
 
 /// GET /api/checkin/logs —— 签到日志（每行带 `variant`，便于前端按档位过滤）。
 async fn api_checkin_logs() -> Response {
+    blocking_response(move || api_checkin_logs_blocking()).await
+}
+
+fn api_checkin_logs_blocking() -> Response {
     json_ok(json!({ "logs": checkin::load_checkin_logs_with_variant() }))
 }
 
@@ -1535,6 +1750,10 @@ async fn api_travel_status() -> Response {
 }
 
 async fn api_travel_config() -> Response {
+    blocking_response(move || api_travel_config_blocking()).await
+}
+
+fn api_travel_config_blocking() -> Response {
     json_ok(config::load_travel_config())
 }
 
@@ -1560,7 +1779,10 @@ async fn api_refresh_token(Json(body): Json<Value>) -> Response {
     let Some(acc) = account::find_account(id) else {
         return json_err("账号不存在".to_string(), StatusCode::BAD_REQUEST);
     };
-    json_ok(refresh::refresh_account_token(acc).await)
+    match refresh::try_refresh_account_token(acc).await {
+        Ok(fresh) => json_ok(fresh),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1568,10 +1790,18 @@ async fn api_refresh_token(Json(body): Json<Value>) -> Response {
 // ---------------------------------------------------------------------------
 
 async fn api_rotate_config() -> Response {
+    blocking_response(move || api_rotate_config_blocking()).await
+}
+
+fn api_rotate_config_blocking() -> Response {
     json_ok(config::load_auto_rotate_config())
 }
 
 async fn api_save_rotate_config(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_save_rotate_config_blocking(body)).await
+}
+
+fn api_save_rotate_config_blocking(body: Value) -> Response {
     match config::save_auto_rotate_config(&body) {
         Ok(()) => json_ok(json!({ "ok": true, "config": config::load_auto_rotate_config() })),
         Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
@@ -1579,6 +1809,10 @@ async fn api_save_rotate_config(Json(body): Json<Value>) -> Response {
 }
 
 async fn api_rotate_status() -> Response {
+    blocking_response(move || api_rotate_status_blocking()).await
+}
+
+fn api_rotate_status_blocking() -> Response {
     json_ok(rotate::rotate_status())
 }
 
@@ -1587,6 +1821,10 @@ async fn api_rotate_run() -> Response {
 }
 
 async fn api_rotate_logs() -> Response {
+    blocking_response(move || api_rotate_logs_blocking()).await
+}
+
+fn api_rotate_logs_blocking() -> Response {
     json_ok(json!({ "logs": rotate::rotate_logs() }))
 }
 
@@ -1599,10 +1837,18 @@ async fn api_update_check() -> Response {
 }
 
 async fn api_update_config() -> Response {
+    blocking_response(move || api_update_config_blocking()).await
+}
+
+fn api_update_config_blocking() -> Response {
     json_ok(update::load_github_config())
 }
 
 async fn api_save_update_config(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_save_update_config_blocking(body)).await
+}
+
+fn api_save_update_config_blocking(body: Value) -> Response {
     match update::save_github_config(&body) {
         Ok(()) => json_ok(json!({ "ok": true, "config": update::load_github_config() })),
         Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
@@ -1667,6 +1913,10 @@ async fn static_handler(uri: Uri) -> Response {
 
 /// GET /api/notifications —— 最近的应用内提示（新的在前，最多 100 条）。
 async fn api_notifications() -> Response {
+    blocking_response(move || api_notifications_blocking()).await
+}
+
+fn api_notifications_blocking() -> Response {
     match notifications::list() {
         Ok(items) => json_ok(json!({ "items": items })),
         Err(error) => json_err(error, StatusCode::INTERNAL_SERVER_ERROR),
@@ -1675,6 +1925,10 @@ async fn api_notifications() -> Response {
 
 /// POST /api/notifications/record —— 记录一条提示（前端 toast 同步写一份）。
 async fn api_record_notification(Json(body): Json<Value>) -> Response {
+    blocking_response(move || api_record_notification_blocking(body)).await
+}
+
+fn api_record_notification_blocking(body: Value) -> Response {
     let level = body.get("level").and_then(|v| v.as_str()).unwrap_or("info");
     let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
     let description = body.get("description").and_then(|v| v.as_str());
@@ -1686,6 +1940,10 @@ async fn api_record_notification(Json(body): Json<Value>) -> Response {
 
 /// POST /api/notifications/clear —— 清空通知存档。
 async fn api_clear_notifications() -> Response {
+    blocking_response(move || api_clear_notifications_blocking()).await
+}
+
+fn api_clear_notifications_blocking() -> Response {
     match notifications::clear() {
         Ok(()) => json_ok(json!({ "cleared": true })),
         Err(error) => json_err(error, StatusCode::BAD_REQUEST),

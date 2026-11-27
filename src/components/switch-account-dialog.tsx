@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 import { CircleAlert, ExternalLink, Loader2 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/lib/use-tauri-event";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -109,16 +109,12 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       }, 600);
       return () => clearInterval(timer);
     }
-    let unlisten: (() => void) | undefined;
-    listen<{ message: string }>("switch-progress", (e) => {
-      setProgress(e.payload.message);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
   }, []);
+  useTauriEvent<{ message: string }>(
+    "switch-progress",
+    (payload) => setProgress(payload.message),
+    !api.isWebui(),
+  );
 
   // 立即打开弹框；首次绘制前重置旧内容，两个 tab 各自加载数据。
   useLayoutEffect(() => {

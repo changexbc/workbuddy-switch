@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::modules::account;
+use crate::modules::account::{self, AccountChange};
+use crate::modules::config::accounts_file;
 
 /// 导入结果计数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -133,6 +134,14 @@ pub fn merge_import_records(
     indexes: &[usize],
 ) -> Result<ImportResult, String> {
     let array = parse_accounts_json(text)?;
+    Ok(merge_selected_records(accounts, &array, indexes))
+}
+
+fn merge_selected_records(
+    accounts: &mut Vec<Value>,
+    array: &[Value],
+    indexes: &[usize],
+) -> ImportResult {
     let mut result = ImportResult::default();
     for &index in indexes {
         match array.get(index) {
@@ -147,15 +156,21 @@ pub fn merge_import_records(
             },
         }
     }
-    Ok(result)
+    result
 }
 
 /// 导入：读账号库 → 合并 → 写回，返回计数。
 pub fn import_accounts(text: &str, indexes: &[usize]) -> Result<ImportResult, String> {
-    let mut accounts = account::load_accounts();
-    let result = merge_import_records(&mut accounts, text, indexes)?;
-    account::save_accounts(&accounts).map_err(|e| format!("保存账号库失败：{e}"))?;
-    Ok(result)
+    let array = parse_accounts_json(text)?;
+    account::mutate(|accounts| {
+        let result = merge_selected_records(accounts, &array, indexes);
+        if result.imported == 0 {
+            Ok(AccountChange::Unchanged(result))
+        } else {
+            Ok(AccountChange::Write(result))
+        }
+    })
+    .map_err(|e| format!("保存账号库失败：{e}"))
 }
 
 /// 纯函数：从账号列表中挑出 id 命中的完整记录（含 token）。
@@ -185,7 +200,9 @@ pub fn select_export_records(accounts: &[Value], ids: &[String]) -> Result<Vec<V
 
 /// 导出：按账号 id 列表返回完整记录（含 token）。
 pub fn export_accounts(ids: &[String]) -> Result<Vec<Value>, String> {
-    select_export_records(&account::load_accounts(), ids)
+    let accounts = account::load_accounts_from_path(&accounts_file())
+        .map_err(|e| format!("读取账号库失败：{e}"))?;
+    select_export_records(&accounts, ids)
 }
 
 /// 导出文件名白名单：只允许 `wb-switch-accounts-YYYY-MM-DD.json` 这类由前端生成的文件名。
@@ -236,8 +253,14 @@ pub fn write_records_to_file(
 /// 导出：按账号 id 列表把完整记录写入用户选择的路径（保存对话框产物），返回该路径。
 pub fn export_accounts_to_path(ids: &[String], path: &str) -> Result<String, String> {
     validate_export_path(path)?;
-    let records = select_export_records(&account::load_accounts(), ids)?;
+    let records = export_accounts(ids)?;
     let path_buf = PathBuf::from(path.trim());
+    if std::fs::canonicalize(&path_buf)
+        .ok()
+        .is_some_and(|target| std::fs::canonicalize(accounts_file()).ok() == Some(target))
+    {
+        return Err("导出文件不能覆盖当前账号库".to_string());
+    }
     let content = serde_json::to_string_pretty(&records).map_err(|e| e.to_string())?;
     crate::modules::config::atomic_write(&path_buf, &content)
         .map_err(|e| format!("写入导出文件失败：{e}"))?;

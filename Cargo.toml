@@ -2,6 +2,11 @@
 members = ["crates/wb-switch-core", "crates/wb-switch-server", "src-tauri"]
 resolver = "2"
 
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
 # `schemars 0.8`（tauri-build / tauri-plugin 的传递依赖，且开启了 `preserve_order`）
 # 用 `indexmap 1.x` 的 `IndexMap<K, V>` 两参数形式。而 `indexmap 1.9.3` 的 `IndexMap`
 # 只在 `has_std` 下有默认哈希参数，该标记由 build.rs 里的 `autocfg` 探测 sysroot 得出。

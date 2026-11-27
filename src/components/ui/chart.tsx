@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as RechartsPrimitive from "recharts";
 
+import { creditsFormatter } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const THEMES = { light: "", dark: ".dark" } as const;
@@ -285,7 +286,7 @@ function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key:
 /** tooltip 数值格式化（0 值显示 0，避免 —）。 */
 function formatCreditsNumber(value: unknown): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
+  return creditsFormatter.format(value);
 }
 
 export { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent, ChartStyle };

@@ -7,12 +7,14 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # 被 build.yml 调用时 github.workflow 为调用方名，加 event_name 避免与独立 push 运行互相取消
+  group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

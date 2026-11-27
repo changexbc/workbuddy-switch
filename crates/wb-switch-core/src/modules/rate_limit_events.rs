@@ -29,6 +29,7 @@
 //! 事件 payload 不含账号 uid：CLI 的 key 归属由「429 请求时刻的进程快照」决定，WorkBuddy 由
 //! 触发当轮的登录态决定，因此必须在事件到达时归因，不能延后。
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -69,9 +70,21 @@ const TRANSCRIPT_HEAD_LIMIT: u64 = 64 * 1024;
 struct StoredEntry {
     account_id: String,
     model: Option<String>,
+    #[serde(default)]
+    source: HookSource,
+    #[serde(default, deserialize_with = "deserialize_reset_at")]
     reset_at: i64,
     first_seen_at: i64,
     hit_count: u32,
+}
+
+// 非整数与缺失值都按 0 交给 load_state 校验，避免一条坏记录吞掉整个台账。
+fn deserialize_reset_at<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<i64, D::Error> {
+    Ok(Value::deserialize(deserializer)?
+        .as_i64()
+        .unwrap_or_default())
 }
 
 /// 后端持有的状态：事件文件已读偏移 + 当前有效的限额条目。
@@ -91,10 +104,17 @@ pub fn state_path() -> PathBuf {
 }
 
 fn load_state(path: &Path) -> State {
-    std::fs::read_to_string(path)
+    let mut state = std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<State>(&text).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let loaded_count = state.events.len();
+    state.events.retain(|entry| entry.reset_at > 0);
+    let invalid_count = loaded_count - state.events.len();
+    if invalid_count > 0 {
+        eprintln!("[限额台账] 跳过 {invalid_count} 条 resetAt 缺失或无效的记录");
+    }
+    state
 }
 
 fn save_state(path: &Path, state: &State) -> std::io::Result<()> {
@@ -128,12 +148,16 @@ struct HookPayload {
 }
 
 /// 事件的客户端来源（由 `transcript_path` 前缀判定）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HookSource {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum HookSource {
     /// CodeBuddy CLI（`~/.codebuddy/projects/…`）。
     Cli,
     /// WorkBuddy 客户端（`~/.workbuddy` / `~/.workbuddy-ai`）。
     WorkBuddy(WbVariant),
+    /// 升级前的台账没有来源，不能用来驱动 CLI 换号。
+    #[default]
+    Unknown,
 }
 
 /// 一行 payload 里识别出的限额事件（来源判定需要环境，见 `source_of`）。
@@ -457,6 +481,7 @@ fn attribute(
 ) -> Option<String> {
     match source {
         HookSource::Cli => attribute_cli(event, ctx, now),
+        HookSource::Unknown => None,
         HookSource::WorkBuddy(variant) => {
             let uid = ctx
                 .auth_file_paths
@@ -524,6 +549,7 @@ fn ingest_lines(ctx: &IngestContext, state: &mut State, lines: &[String], now: i
             StoredEntry {
                 account_id,
                 model: event.model.clone(),
+                source,
                 reset_at: event.reset_at,
                 first_seen_at: now,
                 hit_count: 1,
@@ -537,10 +563,11 @@ fn ingest_lines(ctx: &IngestContext, state: &mut State, lines: &[String], now: i
     added
 }
 
-/// 同一次事件（同账号 + 同模型 + 同恢复时刻）只保留一条，命中行数累加。
+/// 同一次事件（同来源 + 同账号 + 同模型 + 同恢复时刻）只保留一条，命中行数累加。
 fn merge_entry(events: &mut Vec<StoredEntry>, entry: StoredEntry) {
     if let Some(existing) = events.iter_mut().find(|existing| {
         existing.account_id == entry.account_id
+            && existing.source == entry.source
             && existing.model == entry.model
             && existing.reset_at == entry.reset_at
     }) {
@@ -552,19 +579,28 @@ fn merge_entry(events: &mut Vec<StoredEntry>, entry: StoredEntry) {
 }
 
 /// 清掉已过官方恢复时刻的条目，并转成台账条目。
-fn live_entries(state: &mut State, now: i64) -> Vec<Resolved> {
+fn live_entries(state: &mut State, now: i64, source: Option<HookSource>) -> Vec<Resolved> {
     state.events.retain(|entry| entry.reset_at > now);
-    state
+    let mut resolved = BTreeMap::new();
+    for entry in state
         .events
         .iter()
-        .map(|entry| Resolved {
-            account_id: entry.account_id.clone(),
-            model: entry.model.clone(),
-            reset_at: entry.reset_at,
-            first_seen_at: entry.first_seen_at,
-            hit_count: entry.hit_count,
-        })
-        .collect()
+        .filter(|entry| source.is_none_or(|source| entry.source == source))
+    {
+        // 界面继续按账号、模型和恢复时刻统计，来源仅用于轮换筛选。
+        let item = resolved
+            .entry((&entry.account_id, &entry.model, entry.reset_at))
+            .or_insert_with(|| Resolved {
+                account_id: entry.account_id.clone(),
+                model: entry.model.clone(),
+                reset_at: entry.reset_at,
+                first_seen_at: entry.first_seen_at,
+                hit_count: 0,
+            });
+        item.hit_count = item.hit_count.saturating_add(entry.hit_count);
+        item.first_seen_at = item.first_seen_at.min(entry.first_seen_at);
+    }
+    resolved.into_values().collect()
 }
 
 /// 消费新字节；返回 `None` 表示「没有新字节」，`Some(changed)` 表示已消费（changed = 有新条目）。
@@ -633,7 +669,9 @@ fn compact_if_needed(ctx: &IngestContext, state: &mut State, now: i64) -> bool {
 pub(crate) fn consume_pending() -> bool {
     let events = rate_limit_hook::events_path();
     let state_file = state_path();
-    let mut guard = STATE.lock().unwrap();
+    let mut guard = STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let state = guard.get_or_insert_with(|| load_state(&state_file));
     // 快速路径：一次 stat，没有新字节就直接返回（watcher 每秒走这里）。
     if !has_pending_bytes(&events, state.offset) {
@@ -648,15 +686,25 @@ pub(crate) fn consume_pending() -> bool {
 /// 查询路径也能拿到最新状态。
 pub(crate) fn hook_entries(now: i64) -> Vec<Resolved> {
     let _ = consume_pending();
-    let mut guard = STATE.lock().unwrap();
+    let mut guard = STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let state = guard.get_or_insert_with(|| load_state(&state_path()));
-    live_entries(state, now)
+    live_entries(state, now, None)
+}
+
+/// 轮换只读已落盘的台账快照，兼容桌面端与服务端之间接管轮换。
+/// 待处理事件仍由现有 watcher 入账并通知前端。
+pub(crate) fn saved_hook_entries(path: &Path, now: i64, source: HookSource) -> Vec<Resolved> {
+    live_entries(&mut load_state(path), now, Some(source))
 }
 
 /// 最近一次入账的 hook 限额事件时刻（诊断用）。
 pub fn last_event_at() -> Option<i64> {
     {
-        let guard = STATE.lock().unwrap();
+        let guard = STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(state) = guard.as_ref() {
             return state.last_event_at;
         }
@@ -1219,12 +1267,13 @@ mod tests {
         );
         assert_eq!(state.last_event_at, Some(T0 + 1_000));
         assert!(state.offset > 0);
-        assert_eq!(live_entries(&mut state, T0 + 1_100).len(), 1);
+        assert_eq!(live_entries(&mut state, T0 + 1_100, None).len(), 1);
 
         // 重复消费同一文件：偏移已推进 → 不重复入账。
         let mut reloaded = fixture.state();
         assert_eq!(consume_with(&ctx, &mut reloaded, T0 + 2_000), None);
         assert_eq!(reloaded.events.len(), 1);
+        assert_eq!(reloaded.events[0].source, HookSource::Cli);
 
         // 同一次事件的重复书写（重试轮）：hitCount 累加、不新增条目。
         fixture.append(&[stop_payload(
@@ -1695,6 +1744,10 @@ mod tests {
         let mut state = State::default();
         assert_eq!(consume_with(&ctx, &mut state, T0 + 1_000), Some(true));
         assert_eq!(state.events[0].account_id, "acc-wb");
+        assert_eq!(
+            fixture.state().events[0].source,
+            HookSource::WorkBuddy(WbVariant::Cn)
+        );
 
         // ② 登录态文件缺失 → 会话兜底；③ 兜底也拿不到 → 丢弃。
         std::fs::remove_file(fixture.auth_file()).expect("移除登录态文件");
@@ -1730,19 +1783,81 @@ mod tests {
             events: vec![StoredEntry {
                 account_id: "a".to_string(),
                 model: Some("hy3".to_string()),
+                source: HookSource::Cli,
                 reset_at: 1_500,
                 first_seen_at: 1_000,
                 hit_count: 1,
             }],
         };
         assert_eq!(
-            live_entries(&mut state, 1_400).len(),
+            live_entries(&mut state, 1_400, None).len(),
             1,
             "未到恢复时刻仍保留"
         );
         assert!(
-            live_entries(&mut state, 1_500).is_empty(),
+            live_entries(&mut state, 1_500, None).is_empty(),
             "到恢复时刻即清掉"
+        );
+    }
+
+    #[test]
+    fn malformed_reset_times_do_not_drop_valid_entries_or_the_offset() {
+        let fixture = Fixture::new();
+        let entry = |id: &str| json!({"accountId": id, "firstSeenAt": T0, "hitCount": 1});
+        let valid_reset = T0 + 10_000;
+        let mut events = vec![entry("missing")];
+        for reset in [json!(0), json!(-1), json!(null), json!("invalid")] {
+            let mut invalid = entry("invalid");
+            invalid["resetAt"] = reset;
+            events.push(invalid);
+        }
+        let mut valid = entry("legacy");
+        valid["resetAt"] = json!(valid_reset);
+        events.push(valid.clone());
+        valid["source"] = json!(HookSource::Cli);
+        events.push(valid);
+        std::fs::write(
+            fixture.state_file(),
+            json!({"offset": 123, "events": events}).to_string(),
+        )
+        .unwrap();
+
+        let mut state = fixture.state();
+        assert_eq!(state.offset, 123);
+        assert_eq!(state.events.len(), 2);
+        assert_eq!(state.events[0].source, HookSource::Unknown);
+        assert_eq!(live_entries(&mut state, T0, None)[0].hit_count, 2);
+        assert_eq!(
+            saved_hook_entries(&fixture.state_file(), T0, HookSource::Cli).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn deduplication_preserves_identical_events_from_different_clients() {
+        let cli = StoredEntry {
+            source: HookSource::Cli,
+            account_id: "shared".into(),
+            model: Some("hy3".into()),
+            reset_at: T0 + 10_000,
+            first_seen_at: T0,
+            hit_count: 1,
+        };
+        let mut state = State::default();
+        let wb = StoredEntry {
+            source: HookSource::WorkBuddy(WbVariant::Cn),
+            ..cli.clone()
+        };
+        merge_entry(&mut state.events, wb);
+        merge_entry(&mut state.events, cli.clone());
+        merge_entry(&mut state.events, cli);
+        assert_eq!(state.events.len(), 2);
+        assert_eq!(state.events[0].hit_count, 1);
+        assert_eq!(state.events[1].hit_count, 2);
+        assert_eq!(live_entries(&mut state, T0, None)[0].hit_count, 3);
+        assert_eq!(
+            live_entries(&mut state, T0, Some(HookSource::Cli))[0].hit_count,
+            2
         );
     }
 

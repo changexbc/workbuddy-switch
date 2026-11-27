@@ -1,9 +1,9 @@
-//! CodeBuddy CLI 账号自动轮换（防积分过期浪费）。
+//! CodeBuddy CLI 账号自动轮换（积分到期与模型限流）。
 //!
 //! 后台周期检查所有账号的积分到期情况，把 CodeBuddy CLI 切到"最紧迫"的账号
 //! （最早到期且仍有剩余积分），防止积分过期浪费。国内/国际是同一套 CLI，
 //! 候选不按档位过滤；切号时由 `switch_active_account` 同步区域环境变量。
-//! 只写 `~/.codebuddy-rotate/state.json`，不影响 WorkBuddy App。
+//! 仅切换 CodeBuddy CLI。当前账号遇到模型限流时，跳过积分紧迫度、到期差异和最小积分阈值。
 //!
 //! 防抖动约束（核心）：
 //! - 冷却期：切换后 cooldown_minutes 内不重复切；
@@ -16,28 +16,65 @@
 //!   旧版的「活跃保护」（按 transcript mtime 的 30 分钟窗口）已被它取代——那个判据
 //!   管不住"开着但闲置"的会话，还会全量扫 `~/.codebuddy/projects`。
 //! - 被门控拦下、但"除门控外本来会切换"时提示一次（受每日预算约束，见 `config`）。
+//! - 当前账号受限但没有候选目标，或仍处于冷却期时，也使用同一提示预算。
 
+use chrono::{Local, TimeZone};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::{
+    collections::HashSet,
+    fs,
+    path::Path,
+    sync::atomic::{AtomicI64, Ordering},
+};
 
 use crate::modules::account;
 use crate::modules::codebuddy_cli;
 use crate::modules::config::{
-    add_rotate_log, load_auto_rotate_config, load_rotate_logs, now_ms, try_consume_rotate_notify,
-    RunFlagGuard,
+    add_rotate_log, atomic_write, load_auto_rotate_config, load_rotate_logs, now_ms, store_dir,
+    try_consume_rotate_notify, RotateLimitNotice, RotateNotifyClaim,
 };
 use crate::modules::credits;
+use crate::modules::limits::Resolved;
+use crate::modules::rate_limit_events::{self, HookSource};
+use crate::modules::session_link::{try_lock_file, LockError};
 use crate::modules::variant::WbVariant;
 
-static ROTATE_RUNNING: AtomicBool = AtomicBool::new(false);
 static LAST_CHECK_AT: AtomicI64 = AtomicI64::new(0);
 static LAST_SWITCH_AT: AtomicI64 = AtomicI64::new(0);
+const LAST_SWITCH_FILE: &str = "rotate_last_switch.json";
+
+fn load_last_switch_at(path: &Path) -> Option<i64> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<i64>(&text).ok().filter(|&ts| ts > 0)
+}
+
+fn save_last_switch_at(path: &Path, timestamp: i64) -> std::io::Result<()> {
+    atomic_write(path, &timestamp.to_string())
+}
+
+fn last_switch_at(path: &Path) -> Option<i64> {
+    let local = LAST_SWITCH_AT.load(Ordering::SeqCst);
+    let saved = load_last_switch_at(path).or_else(|| {
+        // 升级后首次读取时沿用旧版轮换日志里的成功切换时间。
+        load_rotate_logs()
+            .iter()
+            .filter(|entry| entry["action"] == "switched")
+            .filter_map(|entry| entry["ts"].as_i64().filter(|&ts| ts > 0))
+            .max()
+    });
+    saved.max((local > 0).then_some(local))
+}
 
 /// 一天的毫秒数（新代码里用它代替裸写的 `24 * 3_600_000`）。
 const DAY_MS: i64 = 24 * 3_600_000;
 
 /// 存活门控跳过时的固定原因：轮换日志与"是否该提示"的判定都认这一条。
 const SKIP_LIVE_SESSION_REASON: &str = "有 CodeBuddy CLI 会话在运行，暂不切换";
+const SKIP_COOLDOWN_REASON: &str = "处于切换冷却期";
+const SKIP_ALL_AVAILABLE_RATE_LIMITED_REASON: &str =
+    "没有可用账号（有剩余积分的账号均处于模型限流）";
+const SKIP_NO_TARGET_WHILE_RATE_LIMITED_REASON: &str =
+    "当前账号模型限流，且没有可用账号（查询失败/已过期/无剩余积分）";
 
 /// 推迟提示的通知标题（返回体里的 `notify.title` 与宿主投递用的是同一个值）。
 const ROTATE_NOTIFY_TITLE: &str = "workbuddy-switch";
@@ -118,79 +155,81 @@ pub enum Decision {
     Switch(String),
 }
 
-/// 纯策略函数：在候选里选目标并判断是否切换（可单测）。
-///
-/// - `current_account_id`：当前 CLI 账号（可能不在候选中）。
-/// - `last_switch_at_ms`：上次切换时间，None 视为从未切换。
-/// - `min_urgency_ms`：紧迫度阈值——目标到期剩余超过该值则不切（都还早，无需切）。
-/// - `has_live_session`：是否存在心跳新鲜的 CLI 会话；true 则本次不切（存活门控）。
-/// - `min_remaining`：目标最小剩余积分，低于则不切（默认 0 关闭）。
-///
-/// 参数都是纯策略输入，调用方（轮换周期与用例）需要逐项显式传入，故刻意放行
-/// `too_many_arguments`；继续往这个签名里加参数前，先考虑是否该引入参数结构体。
-#[allow(clippy::too_many_arguments)]
-pub fn decide_target(
-    candidates: &[Candidate],
-    current_account_id: Option<&str>,
-    last_switch_at_ms: Option<i64>,
-    cooldown_ms: i64,
-    min_gap_ms: i64,
-    min_urgency_ms: i64,
-    has_live_session: bool,
-    min_remaining: f64,
-) -> Decision {
-    // 1) 有效候选（可被选为目标）
-    let mut valid: Vec<&Candidate> = candidates.iter().filter(|c| c.valid).collect();
-    if valid.is_empty() {
-        return Decision::Skip("没有可用账号（查询失败/已过期/无剩余积分）".to_string());
-    }
-    // 2) 目标 = 紧迫度最高（到期最早）
-    valid.sort_by_key(|c| c.urgency_key());
-    let target = valid[0];
-    // 3) 紧迫度检查：目标到期还早（> 阈值）→ 无需切换
-    if let Some(target_ts) = target.soonest_expire_at {
-        let remaining_ms = target_ts - now_ms();
-        if remaining_ms > min_urgency_ms {
+pub struct RotationInputs<'a> {
+    pub current_account_id: Option<&'a str>,
+    pub now_ms: i64,
+    pub last_switch_at_ms: Option<i64>,
+    pub cooldown_ms: i64,
+    pub min_gap_ms: i64,
+    pub min_urgency_ms: i64,
+    pub has_live_session: bool,
+    pub min_remaining: f64,
+    pub rate_limited: HashSet<&'a str>,
+}
+
+/// 用同一时刻评估候选、到期阈值和冷却期。限流时仍要求目标有剩余积分。
+pub fn decide_target(candidates: &[Candidate], inputs: &RotationInputs<'_>) -> Decision {
+    let current_rate_limited = inputs
+        .current_account_id
+        .is_some_and(|id| inputs.rate_limited.contains(id));
+    let target = candidates
+        .iter()
+        .filter(|c| c.valid && !inputs.rate_limited.contains(c.account_id.as_str()))
+        .min_by_key(|c| c.urgency_key());
+    let Some(target) = target else {
+        let reason = if candidates.iter().any(|c| c.valid) {
+            SKIP_ALL_AVAILABLE_RATE_LIMITED_REASON
+        } else if current_rate_limited {
+            SKIP_NO_TARGET_WHILE_RATE_LIMITED_REASON
+        } else {
+            "没有可用账号（查询失败/已过期/无剩余积分）"
+        };
+        return Decision::Skip(reason.to_string());
+    };
+
+    if let Some(target_ts) = target.soonest_expire_at.filter(|_| !current_rate_limited) {
+        let remaining_ms = target_ts - inputs.now_ms;
+        if remaining_ms > inputs.min_urgency_ms {
             return Decision::Skip(format!(
                 "所有账号到期都还早（最紧迫的还剩 {} 天），无需切换",
-                remaining_ms / (24 * 3_600_000)
+                remaining_ms / DAY_MS
             ));
         }
     }
-    // 4) 已是目标 → 不切
-    if current_account_id == Some(target.account_id.as_str()) {
+    if inputs.current_account_id == Some(target.account_id.as_str()) {
         return Decision::Skip("当前账号已是最紧迫账号".to_string());
     }
-    // 5) 冷却期
-    if let Some(ts) = last_switch_at_ms {
-        if ts + cooldown_ms > now_ms() {
-            return Decision::Skip("处于切换冷却期".to_string());
+    if let Some(ts) = inputs.last_switch_at_ms {
+        if ts.saturating_add(inputs.cooldown_ms) > inputs.now_ms {
+            return Decision::Skip(SKIP_COOLDOWN_REASON.to_string());
         }
     }
-    // 6) 存活门控：有 CLI 会话在跑 → 不切（活进程持旧 key，切了不生效还会破坏不变式）
-    if has_live_session {
+    // CLI 活进程持旧 key，切号会破坏「活进程 key == 当前账号」。
+    if inputs.has_live_session {
         return Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string());
     }
-    // 7) 价值过滤：目标剩余积分太少，切过去不值得
-    if min_remaining > 0.0 && target.total_remaining < min_remaining {
+    if current_rate_limited {
+        return Decision::Switch(target.account_id.clone());
+    }
+    // 只为节约积分而轮换时，目标须达到最低剩余积分和到期差异阈值。
+    if inputs.min_remaining > 0.0 && target.total_remaining < inputs.min_remaining {
         return Decision::Skip(format!(
             "目标账号剩余积分不足（{}，阈值 {}），不值得切换",
-            target.total_remaining, min_remaining
+            target.total_remaining, inputs.min_remaining
         ));
     }
-    // 8) 防抖动：目标比当前早到期，但差异 < 阈值 → 不切
-    if let Some(current) = candidates
-        .iter()
-        .find(|c| c.account_id == current_account_id.unwrap_or(""))
+    if let Some(current) = inputs
+        .current_account_id
+        .and_then(|id| candidates.iter().find(|c| c.account_id == id))
     {
         if let (Some(cur_ts), Some(target_ts)) =
             (current.soonest_expire_at, target.soonest_expire_at)
         {
-            if cur_ts > 0 && target_ts < cur_ts && cur_ts - target_ts < min_gap_ms {
+            if cur_ts > 0 && target_ts < cur_ts && cur_ts - target_ts < inputs.min_gap_ms {
                 return Decision::Skip(format!(
                     "目标到期仅早 {} 小时，未达切换阈值（{} 小时）",
                     (cur_ts - target_ts) / 3_600_000,
-                    min_gap_ms / 3_600_000
+                    inputs.min_gap_ms / 3_600_000
                 ));
             }
         }
@@ -204,21 +243,14 @@ fn remaining_days_until(expire_at: i64, now: i64) -> i64 {
     ((remaining + DAY_MS - 1) / DAY_MS).max(1)
 }
 
-/// 轮换推迟提示的通知内容（**唯一**构造点：标题与正文都在这里，措辞改动只应发生在此处）。
-///
-/// 口径说明：会话可能是"开着但闲置"，所以只说"检测到有会话在运行"，
-/// 不能写"CLI 正在使用中"。
-fn rotate_deferred_notify(target_name: &str, remaining_days: Option<i64>) -> Value {
-    let expiry = match remaining_days {
-        Some(days) => format!("的积分 {days} 天后到期"),
-        None => "的积分即将到期".to_string(),
-    };
-    json!({
-        "title": ROTATE_NOTIFY_TITLE,
-        "body": format!(
-            "「{target_name}」{expiry}，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。"
-        ),
-    })
+fn rate_limit_notice_body(current_name: &str, limit: &Resolved, detail: &str) -> String {
+    let model = limit.model.as_deref().unwrap_or("未知模型");
+    let reset = Local
+        .timestamp_millis_opt(limit.reset_at)
+        .single()
+        .map(|date| date.format("%Y-%m-%d %H:%M:%S %:z").to_string())
+        .unwrap_or_else(|| format!("Unix 毫秒 {}", limit.reset_at));
+    format!("账号「{current_name}」的模型「{model}」受限（恢复于 {reset}）{detail}")
 }
 
 /// 「要提示谁」的判定：只有**真实原因就是存活门控**、并且把门控强制放开后决策链给出
@@ -239,16 +271,77 @@ fn deferred_prompt_target(
     }
 }
 
+/// 限流时说明无法换号的原因。积分提示仍只在存活会话拦下本可执行的切换时发送。
+fn deferred_notice_body(
+    reason: &str,
+    candidates: &[Candidate],
+    inputs: &mut RotationInputs<'_>,
+    current_limit: Option<(&str, &Resolved)>,
+) -> Option<String> {
+    if let Some((name, limit)) = current_limit {
+        let detail = match reason {
+            SKIP_COOLDOWN_REASON => Some("。自动轮换仍在切换冷却期，暂缓换号。"),
+            SKIP_ALL_AVAILABLE_RATE_LIMITED_REASON | SKIP_NO_TARGET_WHILE_RATE_LIMITED_REASON => {
+                let all_rate_limited = !candidates.is_empty()
+                    && candidates.iter().all(|candidate| {
+                        inputs.rate_limited.contains(candidate.account_id.as_str())
+                    });
+                Some(if all_rate_limited {
+                    "。所有账号都在限流，暂无可切换目标。"
+                } else if reason == SKIP_ALL_AVAILABLE_RATE_LIMITED_REASON {
+                    "。有剩余积分的账号都在限流，暂无可切换目标。"
+                } else {
+                    "。暂无符合积分条件的可切换目标。"
+                })
+            }
+            _ => None,
+        };
+        if let Some(detail) = detail {
+            return Some(rate_limit_notice_body(name, limit, detail));
+        }
+    }
+
+    let target_id = deferred_prompt_target(reason, || {
+        let has_live_session = std::mem::replace(&mut inputs.has_live_session, false);
+        let decision = decide_target(candidates, inputs);
+        inputs.has_live_session = has_live_session;
+        decision
+    })?;
+    let target = candidates.iter().find(|c| c.account_id == target_id)?;
+    let target_name = if target.display_name.is_empty() {
+        &target_id
+    } else {
+        &target.display_name
+    };
+    if let Some((name, limit)) = current_limit {
+        let detail =
+            format!("，建议换到「{target_name}」。检测到有 CodeBuddy CLI 会话在运行，暂不切换。");
+        return Some(rate_limit_notice_body(name, limit, &detail));
+    }
+    let expiry = match target.soonest_expire_at {
+        Some(at) => format!(
+            "的积分 {} 天后到期",
+            remaining_days_until(at, inputs.now_ms)
+        ),
+        None => "的积分即将到期".to_string(),
+    };
+    Some(format!("「{target_name}」{expiry}，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。"))
+}
+
 /// 一次轮换周期（后台定时任务 / 手动触发共用）。
 pub async fn run_rotate_cycle() -> Value {
-    let Some(_guard) = RunFlagGuard::try_acquire(&ROTATE_RUNNING) else {
-        return json!({"status": "skipped", "reason": "already_running"});
-    };
-
     let cfg = load_auto_rotate_config();
     if cfg.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
         return json!({"status": "disabled"});
     }
+    // 手动触发和后台周期可以来自不同进程，共用冷却状态与这把锁。
+    let store = store_dir();
+    let _guard = match try_lock_file(&store.join("locks").join("rotate-cycle.lock")) {
+        Ok(guard) => guard,
+        Err(LockError::Busy) => return json!({"status": "skipped", "reason": "already_running"}),
+        Err(error) => return json!({"status": "error", "error": error.message("轮换操作")}),
+    };
+    let last_switch_path = store.join(LAST_SWITCH_FILE);
 
     let cooldown_minutes = cfg
         .get("cooldown_minutes")
@@ -281,31 +374,42 @@ pub async fn run_rotate_cycle() -> Value {
 
     // 当前 CLI 账号
     let cli_status = codebuddy_cli::status();
-    let current_id = cli_status
-        .get("activeAccountId")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let current_id = cli_status["activeAccountId"].as_str();
+    let current_name = cli_status["activeAccountName"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .or(current_id)
+        .unwrap_or_default();
 
     let now = now_ms();
-    let last_switch = LAST_SWITCH_AT.load(Ordering::SeqCst);
-    let last_switch_opt = (last_switch > 0).then_some(last_switch);
-    // 存活门控：读 `~/.codebuddy/sessions/*.json` 的心跳（单次检查只读这里与 state.json，
-    // 不再遍历 `~/.codebuddy/projects` 下的 transcript）。
-    let has_live_session = codebuddy_cli::has_live_session(now);
-    // 同一决策链跑两次：真实门控值 + 强制放开（只有"除门控外本会切换"时才提示）。
-    let decide = |has_live_session: bool| {
-        decide_target(
-            &candidates,
-            current_id.as_deref(),
-            last_switch_opt,
-            cooldown_minutes * 60_000,
-            min_gap_hours * 3_600_000,
-            min_urgency_hours * 3_600_000,
-            has_live_session,
-            min_remaining_credits,
-        )
+    let limits = rate_limit_events::saved_hook_entries(
+        &rate_limit_events::state_path(),
+        now,
+        HookSource::Cli,
+    );
+    // 下一个 CLI 进程使用的模型可能变化，因此保守地避开任一模型仍受限的账号。
+    // 多账号同模型全局限流可能导致反复换号，仍由持久化冷却期限制切换频率。
+    let rate_limited = limits
+        .iter()
+        .map(|entry| entry.account_id.as_str())
+        .collect();
+    // 多个模型受限时提示恢复最晚的一项，对应账号重新进入候选池的时间。
+    let current_limit = limits
+        .iter()
+        .filter(|entry| Some(entry.account_id.as_str()) == current_id)
+        .max_by_key(|entry| (entry.reset_at, entry.model.is_some()));
+    let mut inputs = RotationInputs {
+        current_account_id: current_id,
+        now_ms: now,
+        last_switch_at_ms: last_switch_at(&last_switch_path),
+        cooldown_ms: cooldown_minutes.saturating_mul(60_000),
+        min_gap_ms: min_gap_hours.saturating_mul(3_600_000),
+        min_urgency_ms: min_urgency_hours.saturating_mul(3_600_000),
+        has_live_session: codebuddy_cli::has_live_session(now),
+        min_remaining: min_remaining_credits,
+        rate_limited,
     };
-    let decision = decide(has_live_session);
+    let decision = decide_target(&candidates, &inputs);
 
     LAST_CHECK_AT.store(now, Ordering::SeqCst);
 
@@ -324,9 +428,10 @@ pub async fn run_rotate_cycle() -> Value {
             "remaining": c.total_remaining,
             "soonestExpireAt": c.soonest_expire_at,
             "valid": c.valid,
+            "rateLimited": inputs.rate_limited.contains(c.account_id.as_str()),
         }))
         .collect::<Vec<_>>());
-    if let Some(id) = &current_id {
+    if let Some(id) = current_id {
         log["from"] = json!({"id": id, "name": cli_status.get("activeAccountName").cloned().unwrap_or_default()});
     }
 
@@ -335,23 +440,37 @@ pub async fn run_rotate_cycle() -> Value {
         Decision::Skip(reason) => {
             log["action"] = json!("skipped");
             let mut reason = reason;
-            // 门控跳过时再问一句：把门控强制放开会不会切？会 → 说明只是被会话拦住，
-            // 值得提示一次（否则用户永远不知道积分快过期了）。
-            let deferred_target = deferred_prompt_target(&reason, || decide(false));
-            if let Some(target_id) = deferred_target {
-                if try_consume_rotate_notify(now) {
-                    let target = candidates.iter().find(|c| c.account_id == target_id);
-                    let name = target
-                        .map(|c| c.display_name.clone())
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or_else(|| target_id.clone());
-                    let days = target
-                        .and_then(|c| c.soonest_expire_at)
-                        .map(|expire_at| remaining_days_until(expire_at, now));
-                    notify = Some(rotate_deferred_notify(&name, days));
-                    reason = format!("{reason}（已提示）");
-                } else {
-                    reason = format!("{reason}（已达今日提示上限）");
+            if let Some(body) = deferred_notice_body(
+                &reason,
+                &candidates,
+                &mut inputs,
+                current_limit.map(|limit| (current_name, limit)),
+            ) {
+                let limit_event = current_limit.map(|entry| RotateLimitNotice {
+                    account_id: &entry.account_id,
+                    model: entry.model.as_deref(),
+                    first_seen_at: entry.first_seen_at,
+                    reset_at: entry.reset_at,
+                });
+                match try_consume_rotate_notify(now, limit_event) {
+                    RotateNotifyClaim::Granted => {
+                        notify = Some(json!({"title": ROTATE_NOTIFY_TITLE, "body": body}));
+                        reason = if current_limit.is_some() {
+                            // HTTP 服务的后台任务没有推送通道，轮换日志也保留提示内容。
+                            body
+                        } else {
+                            format!("{reason}（已提示）")
+                        };
+                    }
+                    RotateNotifyClaim::AlreadyNotified => {
+                        reason = format!("{reason}（该模型限流已提示）")
+                    }
+                    RotateNotifyClaim::DailyLimit => {
+                        reason = format!("{reason}（已达今日提示上限）")
+                    }
+                    RotateNotifyClaim::Unavailable => {
+                        reason = format!("{reason}（无法保存提示记录）")
+                    }
                 }
             }
             log["reason"] = json!(reason);
@@ -381,8 +500,16 @@ pub async fn run_rotate_cycle() -> Value {
             });
             match codebuddy_cli::switch_active_account(&target_id) {
                 Ok(res) => {
-                    LAST_SWITCH_AT.store(now, Ordering::SeqCst);
+                    let switched_at = now_ms();
+                    LAST_SWITCH_AT.store(switched_at, Ordering::SeqCst);
+                    if let Err(error) = save_last_switch_at(&last_switch_path, switched_at) {
+                        eprintln!("[轮换] 保存上次切换时间失败: {error}");
+                    }
+                    log["ts"] = json!(switched_at);
                     log["action"] = json!("switched");
+                    if current_limit.is_some() {
+                        log["reason"] = json!("模型限流");
+                    }
                     json!({"status": "switched", "to": target_id, "detail": res})
                 }
                 Err(e) => {
@@ -402,14 +529,14 @@ pub fn rotate_status() -> Value {
     let cfg = load_auto_rotate_config();
     let cli_status = codebuddy_cli::status();
     let last_check = LAST_CHECK_AT.load(Ordering::SeqCst);
-    let last_switch = LAST_SWITCH_AT.load(Ordering::SeqCst);
+    let last_switch = last_switch_at(&store_dir().join(LAST_SWITCH_FILE));
     json!({
         "config": cfg,
         "cliConfigured": cli_status.get("configured").cloned().unwrap_or(json!(false)),
         "activeAccountId": cli_status.get("activeAccountId").cloned().unwrap_or_default(),
         "activeAccountName": cli_status.get("activeAccountName").cloned().unwrap_or_default(),
         "lastCheckAt": (last_check > 0).then_some(last_check),
-        "lastSwitchAt": (last_switch > 0).then_some(last_switch),
+        "lastSwitchAt": last_switch,
     })
 }
 
@@ -428,6 +555,32 @@ mod tests {
     const URG: i64 = 72 * 3_600_000; // 紧迫度阈值
     const HOUR_MS: i64 = 3_600_000;
 
+    #[test]
+    fn persisted_switch_time_blocks_rotation_after_takeover() {
+        let store = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir(&store).unwrap();
+        let path = store.join(LAST_SWITCH_FILE);
+        let now = now_ms();
+        let candidates = [cand("next", Some(now + HOUR_MS), 100.0, true)];
+        let decide = || {
+            decide_target(
+                &candidates,
+                &RotationInputs {
+                    last_switch_at_ms: load_last_switch_at(&path),
+                    cooldown_ms: HOUR_MS,
+                    ..inputs(Some("current"), now)
+                },
+            )
+        };
+
+        assert_eq!(decide(), Decision::Switch("next".to_string()));
+        save_last_switch_at(&path, now).unwrap();
+        assert_eq!(decide(), Decision::Skip("处于切换冷却期".to_string()));
+        save_last_switch_at(&path, now - 2 * HOUR_MS).unwrap();
+        assert_eq!(decide(), Decision::Switch("next".to_string()));
+        fs::remove_dir_all(store).unwrap();
+    }
+
     fn cand(id: &str, expire_at: Option<i64>, remaining: f64, valid: bool) -> Candidate {
         Candidate {
             account_id: id.to_string(),
@@ -439,9 +592,260 @@ mod tests {
         }
     }
 
-    /// 默认参数调用：无冷却、无存活会话、无价值过滤。
+    fn inputs(current_account_id: Option<&str>, now_ms: i64) -> RotationInputs<'_> {
+        RotationInputs {
+            current_account_id,
+            now_ms,
+            last_switch_at_ms: None,
+            cooldown_ms: 0,
+            min_gap_ms: GAP,
+            min_urgency_ms: URG,
+            has_live_session: false,
+            min_remaining: 0.0,
+            rate_limited: HashSet::new(),
+        }
+    }
+
     fn dt(candidates: &[Candidate], current: Option<&str>) -> Decision {
-        decide_target(candidates, current, None, 0, GAP, URG, false, 0.0)
+        decide_target(candidates, &inputs(current, now_ms()))
+    }
+
+    #[test]
+    fn rate_limited_account_is_excluded_even_when_most_urgent() {
+        let now = 1_800_000_000_000;
+        let candidates = [
+            cand("current", Some(now + 3 * DAY_MS), 100.0, true),
+            cand("limited", Some(now + HOUR_MS), 100.0, true),
+            cand("available", Some(now + DAY_MS), 10.0, true),
+        ];
+        let inputs = RotationInputs {
+            rate_limited: HashSet::from(["limited"]),
+            ..inputs(Some("current"), now)
+        };
+        assert_eq!(
+            decide_target(&candidates, &inputs),
+            Decision::Switch("available".into())
+        );
+    }
+
+    #[test]
+    fn current_rate_limit_bypasses_credit_thresholds_but_keeps_persisted_cooldown() {
+        let now = 1_800_000_000_000;
+        let candidates = [
+            cand("current", Some(now + 5 * DAY_MS), 100.0, true),
+            cand("empty", Some(now + HOUR_MS), 0.0, false),
+            cand("later", Some(now + 6 * DAY_MS), 100.0, true),
+            cand("available", Some(now + 5 * DAY_MS - HOUR_MS), 1.0, true),
+        ];
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join(LAST_SWITCH_FILE);
+        let mut inputs = RotationInputs {
+            rate_limited: HashSet::from(["current"]),
+            cooldown_ms: HOUR_MS,
+            min_remaining: 10.0,
+            ..inputs(Some("current"), now)
+        };
+        save_last_switch_at(&path, now - HOUR_MS + 1).unwrap();
+        inputs.last_switch_at_ms = load_last_switch_at(&path);
+        assert_eq!(
+            decide_target(&candidates, &inputs),
+            Decision::Skip("处于切换冷却期".into())
+        );
+
+        save_last_switch_at(&path, now - HOUR_MS).unwrap();
+        inputs.last_switch_at_ms = load_last_switch_at(&path);
+        assert_eq!(
+            decide_target(&candidates, &inputs),
+            Decision::Switch("available".into())
+        );
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn rate_limit_without_available_account_skips_with_reason() {
+        let now = 1_800_000_000_000;
+        let candidates = [
+            cand("current", None, 10.0, true),
+            cand("next", None, 10.0, true),
+        ];
+        let inputs = RotationInputs {
+            rate_limited: HashSet::from(["current", "next"]),
+            ..inputs(Some("current"), now)
+        };
+        assert_eq!(
+            decide_target(&candidates, &inputs),
+            Decision::Skip("没有可用账号（有剩余积分的账号均处于模型限流）".into())
+        );
+        assert_eq!(
+            decide_target(&[cand("current", None, 0.0, false)], &inputs),
+            Decision::Skip("当前账号模型限流，且没有可用账号（查询失败/已过期/无剩余积分）".into())
+        );
+    }
+
+    #[test]
+    fn live_session_defers_rate_limit_switch_and_recommends_the_target() {
+        let now = 1_800_000_000_000;
+        let candidates = [cand("next", Some(now + 5 * DAY_MS), 10.0, true)];
+        let mut inputs = RotationInputs {
+            rate_limited: HashSet::from(["current"]),
+            has_live_session: true,
+            ..inputs(Some("current"), now)
+        };
+        let Decision::Skip(reason) = decide_target(&candidates, &inputs) else {
+            panic!("存活会话必须阻止限流换号");
+        };
+        let entry = Resolved {
+            account_id: "current".into(),
+            model: Some("hy3".into()),
+            reset_at: now + HOUR_MS,
+            first_seen_at: now,
+            hit_count: 1,
+        };
+        let body =
+            deferred_notice_body(&reason, &candidates, &mut inputs, Some(("账号 A", &entry)))
+                .unwrap();
+        let reset = Local
+            .timestamp_millis_opt(entry.reset_at)
+            .single()
+            .unwrap()
+            .format("%Y-%m-%d %H:%M:%S %:z");
+        assert!(inputs.has_live_session);
+        assert_eq!(body, format!("账号「账号 A」的模型「hy3」受限（恢复于 {reset}），建议换到「next」。检测到有 CodeBuddy CLI 会话在运行，暂不切换。"));
+    }
+
+    #[test]
+    fn current_limit_notifies_when_all_accounts_are_limited_or_cooldown_blocks_switching() {
+        let now = 1_800_000_000_000;
+        let limit = Resolved {
+            account_id: "current".into(),
+            model: Some("hy3".into()),
+            reset_at: now + HOUR_MS,
+            first_seen_at: now,
+            hit_count: 1,
+        };
+        let candidates = [
+            cand("current", None, 10.0, true),
+            cand("next", None, 10.0, true),
+        ];
+        let mut inputs = RotationInputs {
+            has_live_session: true,
+            rate_limited: HashSet::from(["current", "next"]),
+            ..inputs(Some("current"), now)
+        };
+        let Decision::Skip(reason) = decide_target(&candidates, &inputs) else {
+            panic!("所有账号限流时应跳过");
+        };
+        let body =
+            deferred_notice_body(&reason, &candidates, &mut inputs, Some(("账号 A", &limit)))
+                .unwrap();
+        assert!(body.contains("所有账号都在限流，暂无可切换目标"));
+        assert!(body.contains("账号 A") && body.contains("hy3") && body.contains("恢复于"));
+
+        inputs.has_live_session = false;
+        inputs.rate_limited.remove("next");
+        inputs.last_switch_at_ms = Some(now);
+        inputs.cooldown_ms = HOUR_MS;
+        let Decision::Skip(reason) = decide_target(&candidates, &inputs) else {
+            panic!("冷却期内应跳过");
+        };
+        let body =
+            deferred_notice_body(&reason, &candidates, &mut inputs, Some(("账号 A", &limit)))
+                .unwrap();
+        assert!(body.contains("切换冷却期，暂缓换号"));
+        assert!(deferred_notice_body(&reason, &candidates, &mut inputs, None).is_none());
+    }
+
+    #[test]
+    fn saved_ledger_restores_account_eligibility_at_reset_time() {
+        let now = 1_800_000_000_000;
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("rate_limit_state.json");
+        let state = json!({"events": [{
+            "accountId": "next",
+            "model": "hy3",
+            "source": HookSource::Cli,
+            "resetAt": now,
+            "firstSeenAt": now - HOUR_MS,
+            "hitCount": 1,
+        }]});
+        fs::write(&path, state.to_string()).unwrap();
+        let candidates = [cand("next", Some(now + HOUR_MS), 10.0, true)];
+        let decide_at = |at| {
+            let entries = rate_limit_events::saved_hook_entries(&path, at, HookSource::Cli);
+            decide_target(
+                &candidates,
+                &RotationInputs {
+                    rate_limited: entries
+                        .iter()
+                        .map(|entry| entry.account_id.as_str())
+                        .collect(),
+                    ..inputs(Some("current"), at)
+                },
+            )
+        };
+        assert_eq!(
+            decide_at(now - 1),
+            Decision::Skip("没有可用账号（有剩余积分的账号均处于模型限流）".into())
+        );
+        assert_eq!(decide_at(now), Decision::Switch("next".into()));
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn only_cli_limits_affect_rotation_with_shared_account_ids() {
+        let now = 1_800_000_000_000;
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("rate_limit_state.json");
+        let candidates = [
+            cand("current", Some(now + HOUR_MS), 10.0, true),
+            cand("next", Some(now + 5 * DAY_MS), 10.0, true),
+        ];
+        let entry = |id: &str, source: HookSource| {
+            json!({
+                "accountId": id,
+                "model": "hy3",
+                "source": source,
+                "resetAt": now + DAY_MS,
+                "firstSeenAt": now,
+                "hitCount": 1,
+            })
+        };
+        let mut events = vec![
+            entry("current", HookSource::WorkBuddy(WbVariant::Cn)),
+            entry("next", HookSource::WorkBuddy(WbVariant::Ai)),
+        ];
+        let decide = |events: &[Value]| {
+            fs::write(&path, json!({"events": events}).to_string()).unwrap();
+            let entries = rate_limit_events::saved_hook_entries(&path, now, HookSource::Cli);
+            decide_target(
+                &candidates,
+                &RotationInputs {
+                    rate_limited: entries
+                        .iter()
+                        .map(|entry| entry.account_id.as_str())
+                        .collect(),
+                    ..inputs(Some("current"), now)
+                },
+            )
+        };
+        assert_eq!(
+            decide(&events),
+            Decision::Skip("当前账号已是最紧迫账号".into())
+        );
+        events.push(entry("current", HookSource::Cli));
+        assert_eq!(decide(&events), Decision::Switch("next".into()));
+        events.push(entry("next", HookSource::Cli));
+        assert_eq!(
+            decide(&events),
+            Decision::Skip("没有可用账号（有剩余积分的账号均处于模型限流）".into())
+        );
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
     }
 
     /// 同一套 CLI：候选辅助仍可按档位切分，但轮换主路径不再只用国内账号。
@@ -531,13 +935,11 @@ mod tests {
         assert_eq!(
             decide_target(
                 &candidates,
-                Some("a"),
-                Some(now - 10 * 60_000),
-                30 * 60_000,
-                GAP,
-                URG,
-                false,
-                0.0
+                &RotationInputs {
+                    last_switch_at_ms: Some(now - 10 * 60_000),
+                    cooldown_ms: 30 * 60_000,
+                    ..inputs(Some("a"), now)
+                }
             ),
             Decision::Skip("处于切换冷却期".to_string())
         );
@@ -545,13 +947,11 @@ mod tests {
         assert_eq!(
             decide_target(
                 &candidates,
-                Some("a"),
-                Some(now - 40 * 60_000),
-                30 * 60_000,
-                GAP,
-                URG,
-                false,
-                0.0
+                &RotationInputs {
+                    last_switch_at_ms: Some(now - 40 * 60_000),
+                    cooldown_ms: 30 * 60_000,
+                    ..inputs(Some("a"), now)
+                }
             ),
             Decision::Switch("b".to_string())
         );
@@ -608,12 +1008,18 @@ mod tests {
             cand("b", Some(now + DAY_MS), 50.0, true),
         ];
         assert_eq!(
-            decide_target(&candidates, Some("a"), None, 0, GAP, URG, true, 0.0),
+            decide_target(
+                &candidates,
+                &RotationInputs {
+                    has_live_session: true,
+                    ..inputs(Some("a"), now)
+                }
+            ),
             Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string()),
             "门控命中时 reason 必须固定，提示判定依赖它"
         );
         assert_eq!(
-            decide_target(&candidates, Some("a"), None, 0, GAP, URG, false, 0.0),
+            decide_target(&candidates, &inputs(Some("a"), now)),
             Decision::Switch("b".to_string()),
             "放开门控后其余条件满足 → 会切"
         );
@@ -623,18 +1029,22 @@ mod tests {
     #[test]
     fn gate_skip_without_a_real_target_does_not_prompt() {
         let now = now_ms();
+        let live = RotationInputs {
+            has_live_session: true,
+            ..inputs(Some("a"), now)
+        };
         // ① 两个账号到期差 < min_gap_hours：放开也只会 Skip（防抖动）。
         let close_expiry = vec![
             cand("a", Some(now + DAY_MS), 50.0, true),
             cand("b", Some(now + 21 * HOUR_MS), 70.0, true),
         ];
         assert_eq!(
-            decide_target(&close_expiry, Some("a"), None, 0, GAP, URG, true, 0.0),
+            decide_target(&close_expiry, &live),
             Decision::Skip(SKIP_LIVE_SESSION_REASON.to_string())
         );
         assert!(
             !matches!(
-                decide_target(&close_expiry, Some("a"), None, 0, GAP, URG, false, 0.0),
+                decide_target(&close_expiry, &inputs(Some("a"), now)),
                 Decision::Switch(_)
             ),
             "差异未达阈值 → 不该提示"
@@ -646,12 +1056,12 @@ mod tests {
             cand("b", Some(now + 30 * DAY_MS), 100.0, true),
         ];
         assert_eq!(
-            decide_target(&already_target, Some("a"), None, 0, GAP, URG, true, 0.0),
+            decide_target(&already_target, &live),
             Decision::Skip("当前账号已是最紧迫账号".to_string()),
             "已是目标时不会走到门控，也就不会按门控文案提示"
         );
         assert_eq!(
-            decide_target(&already_target, Some("a"), None, 0, GAP, URG, false, 0.0),
+            decide_target(&already_target, &inputs(Some("a"), now)),
             Decision::Skip("当前账号已是最紧迫账号".to_string())
         );
     }
@@ -661,7 +1071,13 @@ mod tests {
     fn prompt_only_when_releasing_the_gate_would_switch() {
         let now = now_ms();
         let run = |candidates: &[Candidate], gated: bool| {
-            decide_target(candidates, Some("a"), None, 0, GAP, URG, gated, 0.0)
+            decide_target(
+                candidates,
+                &RotationInputs {
+                    has_live_session: gated,
+                    ..inputs(Some("a"), now)
+                },
+            )
         };
 
         // 当前账号 3 天后到期、另一账号 1 天后到期 + 有存活会话 → 提示目标 b。
@@ -709,20 +1125,27 @@ mod tests {
     /// 提示文案：唯一构造点，标题固定，且不得写成"正在使用中"（会话可能是闲置但存活）。
     #[test]
     fn deferred_notify_text_is_built_in_one_place() {
-        let notify = rotate_deferred_notify("账号B", Some(1));
-        assert_eq!(notify["title"], json!("workbuddy-switch"));
+        let now = 1_800_000_000_000;
+        let mut inputs = RotationInputs {
+            has_live_session: true,
+            ..inputs(Some("a"), now)
+        };
+        let make_body = |candidates: &[Candidate], inputs: &mut RotationInputs<'_>| {
+            deferred_notice_body(SKIP_LIVE_SESSION_REASON, candidates, inputs, None).unwrap()
+        };
+        let body = make_body(
+            &[cand("账号B", Some(now + DAY_MS), 10.0, true)],
+            &mut inputs,
+        );
         assert_eq!(
-            notify["body"],
-            json!("「账号B」的积分 1 天后到期，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。")
+            body,
+            "「账号B」的积分 1 天后到期，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。"
         );
-        assert!(
-            !notify["body"].as_str().unwrap().contains("正在使用中"),
-            "会话可能是闲置但存活"
-        );
+        assert!(!body.contains("正在使用中"), "会话可能是闲置但存活");
         // 到期时刻未知（目标没有 soonestExpireAt）时不谎报天数。
         assert_eq!(
-            rotate_deferred_notify("B", None)["body"],
-            json!("「B」的积分即将到期，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。")
+            make_body(&[cand("B", None, 10.0, true)], &mut inputs),
+            "「B」的积分即将到期，但检测到有 CodeBuddy CLI 会话在运行；重启 CLI 后新账号才会生效。"
         );
     }
 
@@ -748,12 +1171,24 @@ mod tests {
         ];
         // 目标剩余 10 < 阈值 30 → 不值得切
         assert_eq!(
-            decide_target(&candidates, Some("a"), None, 0, GAP, URG, false, 30.0),
+            decide_target(
+                &candidates,
+                &RotationInputs {
+                    min_remaining: 30.0,
+                    ..inputs(Some("a"), now)
+                }
+            ),
             Decision::Skip("目标账号剩余积分不足（10，阈值 30），不值得切换".to_string())
         );
         // 阈值 5：目标剩余 10 达标 → 切
         assert_eq!(
-            decide_target(&candidates, Some("a"), None, 0, GAP, URG, false, 5.0),
+            decide_target(
+                &candidates,
+                &RotationInputs {
+                    min_remaining: 5.0,
+                    ..inputs(Some("a"), now)
+                }
+            ),
             Decision::Switch("b".to_string())
         );
     }
