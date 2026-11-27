@@ -190,20 +190,22 @@ fn apply_refresh_tokens(account: &mut Value, data: &Value) {
     .or_else(|| norm_ts(account.get("refreshExpiresAt")).filter(|&expiry| expiry > 0))
     .or_else(|| {
         let raw = account.get("auth_raw")?;
-        norm_ts(raw.get("refreshExpiresAt"))
-            .filter(|&expiry| expiry > 0)
-            .or_else(|| norm_ts(raw.get("auth")?.get("refreshExpiresAt")))
+        let positive_expiry =
+            |auth: &Value| norm_ts(auth.get("refreshExpiresAt")).filter(|&ts| ts > 0);
+        positive_expiry(raw).or_else(|| positive_expiry(raw.get("auth")?))
     });
     if let Some(expiry) = refresh_expiry {
         account["refreshExpiresAt"] = json!(expiry);
         // 切换账号会从 auth_raw 取过期时间，导入的认证文件也可能把 auth 包在里面。
         let raw = &mut account["auth_raw"];
-        if !raw.is_object() {
+        if raw.is_null() {
             *raw = json!({});
         }
-        raw["refreshExpiresAt"] = json!(expiry);
-        if let Some(auth) = raw.get_mut("auth").and_then(Value::as_object_mut) {
-            auth.insert("refreshExpiresAt".to_string(), json!(expiry));
+        if let Some(raw) = raw.as_object_mut() {
+            raw.insert("refreshExpiresAt".to_string(), json!(expiry));
+            if let Some(auth) = raw.get_mut("auth").and_then(Value::as_object_mut) {
+                auth.insert("refreshExpiresAt".to_string(), json!(expiry));
+            }
         }
     }
     account["refreshedAt"] = json!(now);
@@ -616,6 +618,33 @@ mod tests {
         assert_eq!(account["refreshExpiresAt"], expiry);
         assert_eq!(account["auth_raw"]["refreshExpiresAt"], expiry);
         assert_eq!(account["auth_raw"]["auth"]["refreshExpiresAt"], expiry);
+    }
+
+    #[test]
+    fn refresh_without_expiry_ignores_nonpositive_nested_expiry() {
+        for expiry in [0, -1] {
+            let mut account = test_account();
+            let raw = json!({"auth": {"refreshExpiresAt": expiry}});
+            account["auth_raw"] = raw.clone();
+            apply_refresh_tokens(&mut account, &json!({"accessToken": "new-at"}));
+            assert!(account.get("refreshExpiresAt").is_none());
+            assert_eq!(account["auth_raw"], raw);
+        }
+    }
+
+    #[test]
+    fn refresh_preserves_non_object_raw_auth() {
+        let expiry = 1_900_000_000_000_i64;
+        for raw in [json!("legacy"), json!([1]), json!(true), json!(42)] {
+            let mut account = test_account();
+            account["auth_raw"] = raw.clone();
+            apply_refresh_tokens(
+                &mut account,
+                &json!({"accessToken": "new-at", "refreshExpiresAt": expiry}),
+            );
+            assert_eq!(account["refreshExpiresAt"], expiry);
+            assert_eq!(account["auth_raw"], raw);
+        }
     }
 
     #[tokio::test]
