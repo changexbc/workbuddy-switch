@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{LazyLock, Mutex};
 use tokio::sync::watch;
@@ -26,14 +26,24 @@ type FlightReceiver = watch::Receiver<Option<RefreshResult>>;
 static REFRESH_IN_FLIGHT: LazyLock<Mutex<HashMap<RefreshKey, FlightReceiver>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-struct RefreshFlight(RefreshKey);
+struct RefreshFlight {
+    key: RefreshKey,
+    sender: watch::Sender<Option<RefreshResult>>,
+}
+
+impl RefreshFlight {
+    fn publish(&self, result: RefreshResult) {
+        // 发布完成后再由 Drop 移除条目，期间加入的调用仍可复用结果。
+        let _ = self.sender.send(Some(result));
+    }
+}
 
 impl Drop for RefreshFlight {
     fn drop(&mut self) {
         REFRESH_IN_FLIGHT
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.0);
+            .remove(&self.key);
     }
 }
 
@@ -76,10 +86,7 @@ impl AccountIdentity {
     fn matches(&self, account: &Value) -> bool {
         match self {
             Self::Id(id) => account::get_str(account, "id").as_ref() == Some(id),
-            Self::LegacyUid(uid) => {
-                account::get_str(account, "id").is_none()
-                    && account::get_str(account, "uid").as_ref() == Some(uid)
-            }
+            Self::LegacyUid(uid) => account::get_str(account, "uid").as_ref() == Some(uid),
         }
     }
 }
@@ -102,6 +109,13 @@ fn response_token<'a>(data: &'a Value, camel: &str, snake: &str) -> Option<&'a s
         .into_iter()
         .filter_map(|key| data.get(key).and_then(Value::as_str))
         .find(|token| !token.trim().is_empty())
+}
+
+fn plain_refresh_token(account: &Value) -> Option<&str> {
+    account
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.trim().is_empty())
 }
 
 fn parse_refresh_response(status: u16, response: Value) -> Result<RefreshUpdate, String> {
@@ -217,14 +231,13 @@ async fn refresh_stored_account<Fut: Future<Output = (u16, Value)>>(
         return Ok(account);
     }
 
-    let refresh_token =
-        response_token(&account, "refresh_token", "refresh_token").ok_or_else(|| {
-            if account::is_envelope(&account, "refresh_token") {
-                "加密的 refresh token 无法用于刷新，请重新登录"
-            } else {
-                "缺少 refresh token，无法刷新"
-            }
-        })?;
+    let refresh_token = plain_refresh_token(&account).ok_or_else(|| {
+        if account::is_envelope(&account, "refresh_token") {
+            "加密的 refresh token 无法用于刷新，请重新登录"
+        } else {
+            "缺少 refresh token，无法刷新"
+        }
+    })?;
     let (status, response) = request(
         refresh_url(&account),
         refresh_headers(&account, refresh_token),
@@ -245,7 +258,7 @@ async fn refresh_stored_account<Fut: Future<Output = (u16, Value)>>(
             match update {
                 RefreshUpdate::Tokens(data) => {
                     apply_refresh_tokens(latest, &data);
-                    if matches!(identity, AccountIdentity::LegacyUid(_)) {
+                    if account::get_str(latest, "id").is_none() {
                         latest["id"] = json!(uuid::Uuid::new_v4().to_string());
                     }
                 }
@@ -288,16 +301,15 @@ where
         } else {
             let (sender, receiver) = watch::channel(None);
             in_flight.insert(key.clone(), receiver.clone());
-            (receiver, Some((RefreshFlight(key), sender)))
+            (receiver, Some(RefreshFlight { key, sender }))
         }
     };
 
-    if let Some((flight, sender)) = leader {
+    if let Some(flight) = leader {
         // 刷新由独立任务收尾，最先发起调用的一方取消时，其他等待者仍能收到结果。
         tokio::spawn(async move {
             let result = refresh_stored_account(path, identity, snapshot, request).await;
-            drop(flight);
-            let _ = sender.send(Some(result));
+            flight.publish(result);
         });
     }
     let result = receiver
@@ -330,15 +342,38 @@ pub async fn ensure_fresh_token(mut account: Value, cfg: &Value) -> Value {
         Some(e) => now_ms() >= e || e - now_ms() < lazy_h * 3600 * 1000,
         None => true,
     };
-    let has_rt = !account
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .is_empty();
+    let has_rt = plain_refresh_token(&account).is_some();
     if stale && has_rt {
         account = refresh_account_token(account).await;
     }
     account
+}
+
+fn mark_missing_keepalive_token(path: &Path, snapshot: &Value) -> io::Result<()> {
+    let identity =
+        AccountIdentity::of(snapshot).ok_or_else(|| io::Error::other("账号缺少 id 和 uid"))?;
+    account::mutate_at(path, |accounts| {
+        let Some(latest) = accounts
+            .iter_mut()
+            .find(|account| identity.matches(account))
+        else {
+            return Ok(AccountChange::Unchanged(()));
+        };
+        if !same_credentials(snapshot, latest) || plain_refresh_token(latest).is_some() {
+            return Ok(AccountChange::Unchanged(()));
+        }
+        let reason = if account::is_envelope(latest, "refresh_token") {
+            "加密的 refresh token 无法用于保活，请重新登录"
+        } else {
+            "缺少 refresh token，无法保活，需重新登录"
+        };
+        if latest["needs_relogin"] == true && latest["needs_relogin_reason"] == reason {
+            return Ok(AccountChange::Unchanged(()));
+        }
+        latest["needs_relogin"] = json!(true);
+        latest["needs_relogin_reason"] = json!(reason);
+        Ok(AccountChange::Write(()))
+    })
 }
 
 /// 保活检查：每天由后台循环调用一次，默认（keepalive_days <= 0）无条件刷新
@@ -356,7 +391,11 @@ pub async fn run_keepalive_cycle() -> Value {
         .get("keepalive_days")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let accounts = crate::modules::account::load_accounts();
+    run_keepalive_cycle_at(accounts_file(), keep_days).await
+}
+
+async fn run_keepalive_cycle_at(path: PathBuf, keep_days: i64) -> Value {
+    let accounts = account::load_accounts_at(&path);
     let total = accounts.len();
     let mut results: Vec<Value> = Vec::new();
     for acc in accounts {
@@ -369,20 +408,21 @@ pub async fn run_keepalive_cycle() -> Value {
         if !stale {
             continue;
         }
-        if acc
-            .get("refresh_token")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .is_empty()
-        {
-            results.push(json!({
-                "email": crate::modules::account::account_display_name(&acc),
-                "status": "missing_rt",
-            }));
+        let email = account::account_display_name(&acc);
+        if plain_refresh_token(&acc).is_none() {
+            let store = path.clone();
+            let result =
+                tokio::task::spawn_blocking(move || mark_missing_keepalive_token(&store, &acc))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|result| result.map_err(|e| e.to_string()));
+            results.push(match result {
+                Ok(()) => json!({"email": email, "status": "missing_rt"}),
+                Err(error) => json!({"email": email, "status": "failed", "error": error}),
+            });
             continue;
         }
-        let email = account::account_display_name(&acc);
-        let fresh = match try_refresh_account_token(acc).await {
+        let fresh = match refresh_account_token_at(path.clone(), acc, request_refresh).await {
             Ok(fresh) => fresh,
             Err(error) => {
                 results.push(json!({"email": email, "status": "failed", "error": error}));
@@ -430,6 +470,48 @@ mod tests {
                 "expiresAt": 1_900_000_000_000_i64, "refreshExpiresIn": 3600
             }}),
         )
+    }
+
+    #[tokio::test]
+    async fn legacy_snapshot_finds_account_after_first_refresh_assigns_id() {
+        let mut snapshot = test_account();
+        snapshot.as_object_mut().unwrap().remove("id");
+        let path = store_account(&snapshot);
+        let first = refresh_account_token_at(path.clone(), snapshot.clone(), |_, _| async {
+            successful_response()
+        })
+        .await
+        .unwrap();
+        let id = account::get_str(&first, "id").expect("首次刷新应补齐 id");
+        let latest = refresh_account_token_at(path.clone(), snapshot, |_, _| async {
+            panic!("旧快照应直接拿到已刷新的凭据");
+        })
+        .await
+        .unwrap();
+        assert_eq!(latest, first);
+        assert_eq!(latest["access_token"], "new-at");
+
+        let mut snapshot = latest;
+        snapshot.as_object_mut().unwrap().remove("id");
+        let edit_path = path.clone();
+        let latest = refresh_account_token_at(path.clone(), snapshot, move |_, _| async move {
+            account::mutate_at(&edit_path, |accounts| {
+                accounts[0]["nickname"] = json!("Edited");
+                Ok(AccountChange::Write(()))
+            })
+            .unwrap();
+            (200, json!({"code": 0, "data": {"accessToken": "next-at"}}))
+        })
+        .await
+        .unwrap();
+        assert_eq!(latest["id"], id);
+        assert_eq!(latest["nickname"], "Edited");
+        assert_eq!(latest["access_token"], "next-at");
+        assert_eq!(
+            account::load_accounts_from_path(&path).unwrap(),
+            vec![latest]
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]
@@ -572,6 +654,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn keepalive_persists_missing_token_relogin_marker() {
+        let snapshot = json!({"uid": "user", "nickname": "Nick", "access_token": "at"});
+        let path = store_account(&snapshot);
+        let result = run_keepalive_cycle_at(path.clone(), 0).await;
+        assert_eq!(result["refreshed"][0]["status"], "missing_rt");
+        let mut expected = snapshot;
+        expected["needs_relogin"] = json!(true);
+        expected["needs_relogin_reason"] = json!("缺少 refresh token，无法保活，需重新登录");
+        assert_eq!(
+            account::load_accounts_from_path(&path).unwrap(),
+            vec![expected]
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn missing_token_marker_preserves_concurrent_edits_and_skips_restored_token() {
+        let snapshot = json!({"id": "account", "nickname": "Old"});
+        let path = store_account(&snapshot);
+        account::mutate_at(&path, |accounts| {
+            accounts[0]["nickname"] = json!("Edited");
+            Ok(AccountChange::Write(()))
+        })
+        .unwrap();
+        mark_missing_keepalive_token(&path, &snapshot).unwrap();
+        let stored = account::load_accounts_from_path(&path).unwrap();
+        assert_eq!(stored[0]["nickname"], "Edited");
+        assert_eq!(stored[0]["needs_relogin"], true);
+
+        account::mutate_at(&path, |accounts| {
+            accounts[0]["refresh_token"] = json!("restored-rt");
+            let latest = accounts[0].as_object_mut().unwrap();
+            latest.remove("needs_relogin");
+            latest.remove("needs_relogin_reason");
+            Ok(AccountChange::Write(()))
+        })
+        .unwrap();
+        let original = std::fs::read(&path).unwrap();
+        mark_missing_keepalive_token(&path, &snapshot).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn published_result_stays_available_until_flight_is_removed() {
+        let key = (
+            PathBuf::from(uuid::Uuid::new_v4().to_string()),
+            AccountIdentity::Id("account".to_string()),
+        );
+        let (sender, receiver) = watch::channel(None);
+        REFRESH_IN_FLIGHT
+            .lock()
+            .unwrap()
+            .insert(key.clone(), receiver);
+        let flight = RefreshFlight {
+            key: key.clone(),
+            sender,
+        };
+        let result = Err("temporary failure".to_string());
+
+        flight.publish(result.clone());
+        let joined = REFRESH_IN_FLIGHT.lock().unwrap().get(&key).unwrap().clone();
+        assert_eq!(*joined.borrow(), Some(result));
+        drop(flight);
+        assert!(!REFRESH_IN_FLIGHT.lock().unwrap().contains_key(&key));
+    }
+
+    #[tokio::test]
     async fn concurrent_refreshes_share_one_request_and_allow_retry() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -621,15 +771,31 @@ mod tests {
             },
         ));
         pending.await.unwrap();
+        let unexpected_request = |_, _| async { panic!("等待方不得再次发送刷新请求") };
+        let mut second = std::pin::pin!(refresh_account_token_at(
+            path.clone(),
+            snapshot.clone(),
+            unexpected_request,
+        ));
+        let mut third = std::pin::pin!(refresh_account_token_at(
+            path.clone(),
+            snapshot,
+            unexpected_request,
+        ));
+        // 先轮询两个等待者，确保取消时两者都已经加入同一次刷新。
+        tokio::select! {
+            biased;
+            _ = &mut second => panic!("刷新完成前第二个调用不应返回"),
+            _ = &mut third => panic!("刷新完成前第三个调用不应返回"),
+            _ = std::future::ready(()) => {}
+        }
         first.abort();
         assert!(first.await.unwrap_err().is_cancelled());
         complete.send(()).unwrap();
 
-        let fresh = refresh_account_token_at(path.clone(), snapshot, |_, _| async {
-            panic!("等待方不得再次发送刷新请求")
-        })
-        .await
-        .unwrap();
+        let (second, third) = tokio::join!(second, third);
+        let fresh = second.unwrap();
+        assert_eq!(third.unwrap(), fresh);
         assert_eq!(fresh["access_token"], "new-at");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
