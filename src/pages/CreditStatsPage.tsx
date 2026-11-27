@@ -37,6 +37,7 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import * as api from "@/lib/api";
 import { creditResourceName } from "@/lib/credit-package-names";
+import { creditsFormatter } from "@/lib/format";
 import { getStackedSegmentVisualLayout } from "@/lib/stacked-bar-visuals";
 import type {
   CreditExpiry,
@@ -111,7 +112,7 @@ function dateDaysAgo(days: number): string {
 
 function formatCredits(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
+  return creditsFormatter.format(value);
 }
 
 function formatDateTime(ts: number | null | undefined): string {
@@ -423,37 +424,6 @@ function rangeUsage(
   }
 }
 
-/* 最近事件卡片隐藏后 checkinLabel 一并停用。恢复时取消本注释。
-function checkinLabel(result: string | null | undefined): string {
-  switch (result) {
-    case "success":
-      return "签到成功";
-    case "already":
-      return "已签到";
-    case "error":
-      return "签到失败";
-    default:
-      return "暂无记录";
-  }
-}
-*/
-
-/* 仅账号积分明细表使用，表隐藏期间一并注释。
-function checkinBadgeVariant(
-  result: string | null | undefined,
-): "success" | "warning" | "destructive" | "outline" {
-  switch (result) {
-    case "success":
-    case "already":
-      return "success";
-    case "error":
-      return "destructive";
-    default:
-      return "outline";
-  }
-}
-*/
-
 function StatMetric({
   icon: Icon,
   label,
@@ -762,109 +732,6 @@ function TrendChart({
     </section>
   );
 }
-
-/* 与下方「积分明细」重复，先隐藏。恢复时取消本注释，并恢复页面中的 <AccountTable />。
-function AccountTable({
-  stats,
-  officialUsage,
-  selectedId,
-  onSelect,
-}: {
-  stats: CreditStatistics;
-  officialUsage?: CreditOfficialUsage;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  const official = isOfficialUsageAvailable(officialUsage) ? officialUsage : undefined;
-
-  return (
-    <section className="min-w-0 space-y-2.5" aria-labelledby="account-table-title">
-      <div className="px-1">
-        <h2 id="account-table-title" className="text-[13px] font-medium leading-5">账号积分明细</h2>
-      </div>
-      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-        <CardHeader className="border-b px-4 py-3 sm:px-5">
-          <CardDescription className="text-xs">
-            账号 ID 是统计关联键，名称只用于展示；官方用量优先，点击一行查看积分明细和事件。
-          </CardDescription>
-        </CardHeader>
-        {stats.accounts.length === 0 ? (
-        <div className="px-4 py-10 text-center text-sm text-muted-foreground">暂无账号统计。</div>
-      ) : (
-        <div className="min-w-0 overflow-x-auto">
-          <table className="w-full min-w-[760px] text-left text-xs">
-            <thead className="bg-muted/45 text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3 font-medium sm:px-5">账号</th>
-                <th className="px-3 py-3 text-right font-medium">当前剩余</th>
-                <th className="px-3 py-3 text-right font-medium">今日消耗</th>
-                <th className="px-3 py-3 text-right font-medium">近 7 天</th>
-                <th className="px-3 py-3 text-right font-medium">本月</th>
-                <th className="px-4 py-3 text-right font-medium sm:px-5">今日签到</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.accounts.map((account) => {
-                const selected = account.accountId === selectedId;
-                const officialAccount = officialAccountFor(official, account.accountId);
-                const usageToday = official ? officialAccount?.usageToday : account.usageToday;
-                const usage7Days = official ? officialAccount?.usage7Days : account.usage7Days;
-                const usageThisMonth = official ? officialAccount?.usageThisMonth : account.usageThisMonth;
-                return (
-                  <tr
-                    key={account.accountId}
-                    className={`border-t border-border/60 transition-colors ${selected ? "bg-primary/[0.06]" : "hover:bg-muted/35"}`}
-                  >
-                    <td className="max-w-[240px] px-4 py-3 sm:px-5">
-                      <button
-                        type="button"
-                        className="min-w-0 max-w-full cursor-pointer text-left outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring"
-                        onClick={() => onSelect(account.accountId)}
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span className="min-w-0 truncate font-medium">{accountLabel(account)}</span>
-                          {!account.isCurrent && (
-                            <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
-                              历史
-                            </Badge>
-                          )}
-                          {official && account.isCurrent && (
-                            <Badge
-                              variant={officialAccount?.ok ? "success" : "warning"}
-                              className="shrink-0 px-1.5 py-0 text-[10px]"
-                            >
-                              {officialAccount?.ok ? "官方" : "不可用"}
-                            </Badge>
-                          )}
-                        </span>
-                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                          {account.accountId}
-                        </span>
-                      </button>
-                    </td>
-                    <td className="px-3 py-3 text-right font-medium">
-                      {formatCredits(account.currentRemaining)}
-                    </td>
-                    <td className="px-3 py-3 text-right">{formatCredits(usageToday)}</td>
-                    <td className="px-3 py-3 text-right">{formatCredits(usage7Days)}</td>
-                    <td className="px-3 py-3 text-right">{formatCredits(usageThisMonth)}</td>
-                    <td className="px-4 py-3 text-right sm:px-5">
-                      <Badge variant={checkinBadgeVariant(account.checkinStatusToday)}>
-                        {checkinLabel(account.checkinStatusToday)}
-                      </Badge>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-      </Card>
-    </section>
-  );
-}
-*/
 
 function ResourceBreakdown({ credit, loading }: { credit?: CreditExpiry; loading?: boolean }) {
   if (loading) {
@@ -1467,52 +1334,6 @@ function OfficialUsageBreakdown({
   );
 }
 
-/* 最近事件卡片已隐藏，EventRow 一并停用。恢复时取消本注释。
-function EventRow({ event }: { event: CreditStatsEvent }) {
-  if (event.kind === "usage") {
-    return (
-      <div className="flex min-w-0 items-start gap-3 border-b border-border/60 py-3 last:border-b-0">
-        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <TrendingDown className="size-3.5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs">
-            <span className="font-medium">观察到积分消耗</span>
-            <span className="font-medium text-primary">-{formatCredits(event.amount)}</span>
-          </div>
-          <div className="mt-1 truncate text-[11px] text-muted-foreground">
-            {event.accountName} · {formatDateTime(event.ts)}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const isError = event.result === "error";
-  const isAlready = event.result === "already";
-  return (
-    <div className="flex min-w-0 items-start gap-3 border-b border-border/60 py-3 last:border-b-0">
-      <span
-        className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full ${
-          isError ? "bg-destructive/10 text-destructive" : isAlready ? "bg-amber-500/10 text-amber-700" : "bg-emerald-500/10 text-emerald-700"
-        }`}
-      >
-        {isError ? <XCircle className="size-3.5" /> : <CircleCheck className="size-3.5" />}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs">
-          <span className="font-medium">{checkinLabel(event.result)}</span>
-          <span className="text-muted-foreground">{formatDateTime(event.ts)}</span>
-        </div>
-        <div className="mt-1 truncate text-[11px] text-muted-foreground">
-          {event.accountName}{event.error ? ` · ${event.error}` : ""}
-        </div>
-      </div>
-    </div>
-  );
-}
-*/
-
 function ResourcesByAccount({
   accounts,
   creditMap,
@@ -1660,28 +1481,6 @@ function SelectedAccountDetails({
     </div>
   );
 }
-
-/* 积分明细默认展示全部账号后不再单独使用。
-function UnselectedRecentEvents({ events }: { events: CreditStatsEvent[] }) {
-  return (
-    <section className="min-w-0 space-y-2.5" aria-labelledby="all-events-title">
-      <div className="px-1">
-        <h2 id="all-events-title" className="text-[13px] font-medium leading-5">最近事件</h2>
-      </div>
-      <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
-        <CardHeader className="border-b px-4 py-3 sm:px-5">
-          <CardDescription className="text-xs">签到与积分观察分开记录，签到不会计入消耗。</CardDescription>
-        </CardHeader>
-        <CardContent className="max-h-[340px] min-w-0 overflow-y-auto px-4 py-1 sm:px-5">
-          {events.slice(0, 50).map((event, index) => (
-            <EventRow key={`${event.kind}-${event.ts}-${index}`} event={event} />
-          ))}
-        </CardContent>
-      </Card>
-    </section>
-  );
-}
-*/
 
 /** 当前会话内共用一份统计数据；只有「刷新统计」才会重新采集。 */
 let cachedStatistics: CreditStatistics | null = null;
@@ -1952,10 +1751,6 @@ export default function CreditStatsPage() {
                   officialUsage={official}
                 />
               )}
-
-              {/* 与下方「积分明细」重复，先隐藏。
-              <AccountTable stats={stats} officialUsage={officialUsage} selectedId={selectedId} onSelect={setSelectedId} />
-              */}
 
               <SelectedAccountDetails
                 stats={filteredStats}
