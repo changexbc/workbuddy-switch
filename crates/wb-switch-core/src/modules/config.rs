@@ -812,55 +812,78 @@ fn local_date(at_ms: i64) -> String {
         .unwrap_or_default()
 }
 
-/// 读当日已用次数：文件缺失 / 损坏 / 日期不是今天（跨日）一律按 0 计。
-fn rotate_notify_count_at(path: &Path, today: &str) -> u32 {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return 0;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return 0;
-    };
-    if value.get("date").and_then(Value::as_str) != Some(today) {
-        return 0;
-    }
-    value
-        .get("count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        .min(u32::MAX as u64) as u32
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RotateNotifyClaim {
+    Granted,
+    AlreadyNotified,
+    DailyLimit,
+    Unavailable,
 }
 
-/// 领取一次「轮换推迟提示」配额：`true` = 可以投递（并且已经计数）。
+/// 领取一次「轮换推迟提示」配额，成功时一并保存已提示的限流事件（若有）。
 ///
-/// 同自然日上限 [`ROTATE_NOTIFY_DAILY_LIMIT`]，跨日按本地日期清零；读取失败/损坏视为 0，
-/// 不阻塞轮换。预算文件写不进去时不投递——宁可少一条通知，也不要每轮都弹。
-pub fn try_consume_rotate_notify(at_ms: i64) -> bool {
+/// 每日次数按本地日期清零；限流事件的去重保留到官方恢复时刻，跨日也有效。
+/// 读取失败或损坏视为无记录，写入失败时不投递。
+pub(crate) fn try_consume_rotate_notify(
+    at_ms: i64,
+    limit_event: Option<(String, i64)>,
+) -> RotateNotifyClaim {
     let _guard = ROTATE_NOTIFY_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let path = auto_rotate_notify_file();
-    try_consume_rotate_notify_at(&path, &local_date(at_ms))
+    try_consume_rotate_notify_at(
+        &auto_rotate_notify_file(),
+        &local_date(at_ms),
+        at_ms,
+        limit_event,
+    )
 }
 
-fn try_consume_rotate_notify_at(path: &Path, today: &str) -> bool {
+fn try_consume_rotate_notify_at(
+    path: &Path,
+    today: &str,
+    now: i64,
+    limit_event: Option<(String, i64)>,
+) -> RotateNotifyClaim {
     if today.is_empty() {
-        return false;
+        return RotateNotifyClaim::Unavailable;
     }
-    let used = rotate_notify_count_at(path, today);
-    if used >= ROTATE_NOTIFY_DAILY_LIMIT {
-        return false;
+    let saved = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or_default();
+    let mut notified: std::collections::BTreeMap<String, i64> =
+        serde_json::from_value(saved["rateLimits"].clone()).unwrap_or_default();
+    notified.retain(|_, reset_at| *reset_at > now);
+    if let Some((key, reset_at)) = limit_event {
+        if notified.contains_key(&key) {
+            return RotateNotifyClaim::AlreadyNotified;
+        }
+        notified.insert(key, reset_at);
+    }
+    let used = if saved["date"].as_str() == Some(today) {
+        saved["count"].as_u64().unwrap_or(0)
+    } else {
+        0
+    };
+    if used >= u64::from(ROTATE_NOTIFY_DAILY_LIMIT) {
+        return RotateNotifyClaim::DailyLimit;
     }
     if let Some(parent) = path.parent() {
         if std::fs::create_dir_all(parent).is_err() {
-            return false;
+            return RotateNotifyClaim::Unavailable;
         }
     }
     let content = serde_json::to_string_pretty(&json!({
         "date": today,
         "count": used + 1,
+        "rateLimits": notified,
     }))
     .unwrap_or_default();
-    atomic_write(path, &content).is_ok()
+    match atomic_write(path, &content) {
+        Ok(()) => RotateNotifyClaim::Granted,
+        Err(_) => RotateNotifyClaim::Unavailable,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1989,8 +2012,9 @@ mod tests {
 
         // 文件不存在 → 从 0 开始，前 5 次都放行。
         for expected_count in 1..=ROTATE_NOTIFY_DAILY_LIMIT {
-            assert!(
-                try_consume_rotate_notify_at(&path, today),
+            assert_eq!(
+                try_consume_rotate_notify_at(&path, today, 0, None),
+                RotateNotifyClaim::Granted,
                 "第 {expected_count} 次应放行"
             );
             let saved: Value =
@@ -1999,12 +2023,18 @@ mod tests {
             assert_eq!(saved["date"], json!(today));
         }
         // 第 6 次：拒绝，且预算文件不再被改写（仍停在 5）。
-        assert!(!try_consume_rotate_notify_at(&path, today));
+        assert_eq!(
+            try_consume_rotate_notify_at(&path, today, 0, None),
+            RotateNotifyClaim::DailyLimit
+        );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["count"], json!(ROTATE_NOTIFY_DAILY_LIMIT));
 
         // 跨日：日期变化即清零，重新放行。
-        assert!(try_consume_rotate_notify_at(&path, "2026-09-19"));
+        assert_eq!(
+            try_consume_rotate_notify_at(&path, "2026-09-19", 0, None),
+            RotateNotifyClaim::Granted
+        );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["date"], json!("2026-09-19"));
         assert_eq!(saved["count"], json!(1));
@@ -2017,8 +2047,9 @@ mod tests {
             "[]",
         ] {
             std::fs::write(&path, broken).unwrap();
-            assert!(
-                try_consume_rotate_notify_at(&path, today),
+            assert_eq!(
+                try_consume_rotate_notify_at(&path, today, 0, None),
+                RotateNotifyClaim::Granted,
                 "损坏内容应按 0 计: {broken}"
             );
             let saved: Value =
@@ -2029,9 +2060,54 @@ mod tests {
 
         // 空日期视为不可用（不写坏文件）。
         std::fs::remove_file(&path).unwrap();
-        assert!(!try_consume_rotate_notify_at(&path, ""));
+        assert_eq!(
+            try_consume_rotate_notify_at(&path, "", 0, None),
+            RotateNotifyClaim::Unavailable
+        );
         assert!(!path.exists());
         assert!(auto_rotate_notify_file().ends_with(ROTATE_NOTIFY_FILE_NAME));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rate_limit_notice_shares_budget_and_deduplicates_across_days() {
+        let dir =
+            std::env::temp_dir().join(format!("wb-switch-rotate-notify-{}", uuid::Uuid::new_v4()));
+        let path = dir.join(ROTATE_NOTIFY_FILE_NAME);
+        let today = "2026-09-18";
+        let tomorrow = "2026-09-19";
+        let event = |key: &str, reset_at| Some((key.to_string(), reset_at));
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, json!({"date": today, "count": 4}).to_string()).unwrap();
+        let claim = |date, now, limit| try_consume_rotate_notify_at(&path, date, now, limit);
+        assert_eq!(
+            claim(today, 10, event("a/model/30", 30)),
+            RotateNotifyClaim::Granted
+        );
+        assert_eq!(claim(today, 10, None), RotateNotifyClaim::DailyLimit);
+        assert_eq!(
+            claim(today, 11, event("b/model/40", 40)),
+            RotateNotifyClaim::DailyLimit
+        );
+        assert_eq!(
+            claim(tomorrow, 20, event("a/model/30", 30)),
+            RotateNotifyClaim::AlreadyNotified
+        );
+        assert_eq!(
+            claim(tomorrow, 20, event("b/model/40", 40)),
+            RotateNotifyClaim::Granted
+        );
+        assert_eq!(
+            claim(tomorrow, 30, event("a/model/50", 50)),
+            RotateNotifyClaim::Granted
+        );
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["count"], 2);
+        assert_eq!(
+            saved["rateLimits"],
+            json!({"a/model/50": 50, "b/model/40": 40})
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -28,7 +28,7 @@ use crate::modules::account;
 use crate::modules::codebuddy_cli;
 use crate::modules::config::{
     add_rotate_log, atomic_write, load_auto_rotate_config, load_rotate_logs, now_ms, store_dir,
-    try_consume_rotate_notify,
+    try_consume_rotate_notify, RotateNotifyClaim,
 };
 use crate::modules::credits;
 use crate::modules::session_link::{try_lock_file, LockError};
@@ -369,7 +369,7 @@ pub async fn run_rotate_cycle() -> Value {
             // 值得提示一次（否则用户永远不知道积分快过期了）。
             let deferred_target = deferred_prompt_target(&reason, || decide(false));
             if let Some(target_id) = deferred_target {
-                if try_consume_rotate_notify(now) {
+                if try_consume_rotate_notify(now, None) == RotateNotifyClaim::Granted {
                     let target = candidates.iter().find(|c| c.account_id == target_id);
                     let name = target
                         .map(|c| c.display_name.clone())
