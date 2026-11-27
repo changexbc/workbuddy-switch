@@ -6,17 +6,17 @@
   "scripts": {
     "dev": "vite",
     "dev:desktop": "node scripts/prepare-agent-companion.mjs dev && vite",
-    "dev:demo": "node scripts/prepare-companion-demo.mjs dev && VITE_DEMO_MODE=1 vite",
-    "dev:screenshot": "node scripts/prepare-companion-demo.mjs dev && VITE_DEMO_MODE=1 vite",
-    "tauri:dev:screenshot": "WB_SWITCH_SCREENSHOT_DEMO=1 VITE_DEMO_MODE=1 tauri dev",
+    "dev:demo": "node scripts/prepare-companion-demo.mjs dev && cross-env VITE_DEMO_MODE=1 vite",
+    "dev:screenshot": "node scripts/prepare-companion-demo.mjs dev && cross-env VITE_DEMO_MODE=1 vite",
+    "tauri:dev:screenshot": "cross-env WB_SWITCH_SCREENSHOT_DEMO=1 VITE_DEMO_MODE=1 tauri dev",
     "build": "node scripts/prepare-companion-demo.mjs clean && tsc && vite build",
     "build:desktop": "node scripts/prepare-agent-companion.mjs build && npm run build && node scripts/prepare-agent-companion.mjs copy",
-    "build:demo": "node scripts/prepare-companion-demo.mjs build && tsc && VITE_DEMO_MODE=1 VITE_PAGES_DEMO=1 vite build && node scripts/prepare-companion-demo.mjs copy",
+    "build:demo": "node scripts/prepare-companion-demo.mjs build && tsc && cross-env VITE_DEMO_MODE=1 VITE_PAGES_DEMO=1 vite build && node scripts/prepare-companion-demo.mjs copy",
     "test": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:app": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build -- --debug --bundles app; sh scripts/fix-app.sh",
-    "build:app:release": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build -- --bundles app; sh scripts/fix-app.sh"
+    "build:app": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" npm run tauri build -- --debug --bundles app && sh scripts/fix-app.sh",
+    "build:app:release": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" npm run tauri build -- --bundles app && sh scripts/fix-app.sh"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
@@ -59,6 +59,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "cross-env": "^10.1.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",

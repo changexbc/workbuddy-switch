@@ -55,3 +55,9 @@ npm/platform/*/bin/
 .grok/
 /.workbuddy/
 /AGENTS.md
+
+# 构建产物 / 本地密钥
+*.dmg
+dist-bin/
+.npmrc
+.env
